@@ -32,8 +32,8 @@
                     <ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <Button Grid.Column="0" Content="Вибрати всі" Command="{Binding SelectAllCommand}" ToolTip="Ctrl+A — усі видимі" />
-                <Button Grid.Column="1" Content="Зняти вибір" Command="{Binding ClearSelectionCommand}" />
+                <Button Grid.Column="0" Content="Вибрати всі видимі" Command="{Binding SelectAllCommand}" ToolTip="Ctrl+A — тільки видимі після фільтра" />
+                <Button Grid.Column="1" Content="Зняти весь вибір" Command="{Binding ClearSelectionCommand}" ToolTip="Усі чеки, включно з прихованими" />
                 <TextBlock Grid.Column="2" Text="{Binding SelectionText}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="12,0" />
                 <Button Grid.Column="3" Content="Перегляд" Command="{Binding PreviewCommand}" />
                 <StackPanel Grid.Column="4" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -41,7 +41,8 @@
                     <TextBlock Text="{Binding ProgressText}" Margin="10,0" VerticalAlignment="Center" />
                 </StackPanel>
                 <StackPanel Grid.Column="5" Orientation="Horizontal">
-                    <Button Content="Повторити невдалі" Command="{Binding RetryFailedCommand}" />
+                    <Button Content="Зупинити пакет" Command="{Binding StopBatchCommand}" Background="#B42318" Foreground="White" />
+                    <Button Content="Повторити безпечні невдалі" Command="{Binding RetryFailedCommand}" ToolTip="Лише помилки до створення Windows print job" />
                     <Button Content="Надрукувати вибрані" Command="{Binding PrintSelectedCommand}" FontWeight="Bold"
                             Background="#1769AA" Foreground="White" ToolTip="Ctrl+P" Padding="18,7" />
                 </StackPanel>
@@ -63,6 +64,8 @@
                             <DataTrigger Binding="{Binding RawType}" Value="SERVICE_IN"><Setter Property="Background" Value="#EEF6FF" /></DataTrigger>
                             <DataTrigger Binding="{Binding RawType}" Value="SERVICE_OUT"><Setter Property="Background" Value="#EEF6FF" /></DataTrigger>
                             <DataTrigger Binding="{Binding PrintStatus}" Value="Error"><Setter Property="ToolTip" Value="{Binding PrintError}" /></DataTrigger>
+                            <DataTrigger Binding="{Binding PrintStatus}" Value="ResultNotConfirmed"><Setter Property="Background" Value="#FFF7E8" /><Setter Property="ToolTip" Value="{Binding PrintError}" /></DataTrigger>
+                            <DataTrigger Binding="{Binding PrintStatus}" Value="Paused"><Setter Property="Background" Value="#FFF7E8" /><Setter Property="ToolTip" Value="{Binding PrintError}" /></DataTrigger>
                         </Style.Triggers>
                     </Style>
                 </DataGrid.RowStyle>
@@ -77,7 +80,8 @@
                     <DataGridTextColumn Header="Оплата" Binding="{Binding Payment}" Width="160" IsReadOnly="True" />
                     <DataGridTextColumn Header="Статус" Binding="{Binding Status}" Width="105" IsReadOnly="True" />
                     <DataGridTextColumn Header="Каса" Binding="{Binding CashRegister}" Width="150" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Друк" Binding="{Binding PrintStatusText}" Width="110" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Друк" Binding="{Binding PrintStatusText}" Width="190" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Windows job ID" Binding="{Binding WindowsJobDisplay}" Width="105" IsReadOnly="True" />
                     <DataGridTemplateColumn Header="" Width="90" CanUserSort="False">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate><Button Content="Перегляд" Padding="6,2" Command="{Binding DataContext.PreviewCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" /></DataTemplate>

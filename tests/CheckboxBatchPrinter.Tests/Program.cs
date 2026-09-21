@@ -17,6 +17,15 @@ internal static class Program
         ("image scaling", TestImageScalingAsync),
         ("printable size", TestPrintableSizeAsync),
         ("print queue continues after error", TestBatchQueueAsync),
+        ("submitted is not physically printed", TestSubmittedIsNotPrintedAsync),
+        ("unconfirmed result requires explicit repeat", TestUnconfirmedRetryPolicyAsync),
+        ("batch cancellation stops later submissions", TestReliableBatchCancellationAsync),
+        ("print order follows current sort", TestPrintOrderAsync),
+        ("hidden selection is counted and excluded", TestHiddenSelectionAsync),
+        ("unsupported page size is rejected", TestUnsupportedPageSizeAsync),
+        ("short narrow and custom pages", TestShortNarrowAndCustomPagesAsync),
+        ("long receipt validation", TestLongReceiptAsync),
+        ("one submission error keeps remaining items", TestReliableBatchContinuesAsync),
         ("retry", TestRetryAsync),
         ("API errors", TestApiErrorAsync)
     ];
@@ -136,6 +145,111 @@ internal static class Program
         Equal(1, result.ErrorCount);
     }
 
+    private static Task TestSubmittedIsNotPrintedAsync()
+    {
+        var submission = FakeSubmission(17);
+        Equal(WindowsPrintJobState.Queued, submission.InitialObservation.State);
+        True(submission.InitialObservation.State != WindowsPrintJobState.CompletedBySpooler);
+        True(!submission.InitialObservation.IsTerminalForMonitoring);
+        return Task.CompletedTask;
+    }
+
+    private static Task TestUnconfirmedRetryPolicyAsync()
+    {
+        True(PrintRetryPolicy.RequiresExplicitConfirmation(PrintItemStatus.ResultNotConfirmed, true));
+        True(!PrintRetryPolicy.CanRetryWithoutWarning(PrintItemStatus.ResultNotConfirmed, true));
+        True(!PrintRetryPolicy.CanRetryWithoutWarning(PrintItemStatus.Error, true));
+        True(PrintRetryPolicy.CanRetryWithoutWarning(PrintItemStatus.Error, false));
+        return Task.CompletedTask;
+    }
+
+    private static async Task TestReliableBatchCancellationAsync()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var backend = new FakePrinterBackend();
+        var result = await ReliableBatchRunner.RunAsync(new[] { 1, 2, 3 }, async (item, token) =>
+        {
+            var submission = await backend.SubmitAsync(item, token);
+            cancellation.Cancel();
+            return submission;
+        }, cancellation.Token);
+        SequenceEqual(new[] { 1 }, backend.Submitted);
+        Equal(1, result.SubmittedCount);
+        Equal(2, result.CancelledCount);
+    }
+
+    private static Task TestPrintOrderAsync()
+    {
+        var all = new[]
+        {
+            new SelectionItem("A", true), new SelectionItem("B", true), new SelectionItem("C", false)
+        };
+        var sortedVisible = new[] { all[1], all[2], all[0] };
+        var snapshot = PrintSelectionPlanner.CreateSnapshot(all, sortedVisible, x => x.Selected);
+        SequenceEqual(new[] { "B", "A" }, snapshot.Items.Select(x => x.Id));
+        return Task.CompletedTask;
+    }
+
+    private static Task TestHiddenSelectionAsync()
+    {
+        var all = new[]
+        {
+            new SelectionItem("visible-1", true), new SelectionItem("hidden", true), new SelectionItem("visible-2", true)
+        };
+        var snapshot = PrintSelectionPlanner.CreateSnapshot(all, new[] { all[2], all[0] }, x => x.Selected);
+        SequenceEqual(new[] { "visible-2", "visible-1" }, snapshot.Items.Select(x => x.Id));
+        Equal(1, snapshot.HiddenSelectedCount);
+        return Task.CompletedTask;
+    }
+
+    private static Task TestUnsupportedPageSizeAsync()
+    {
+        var request = new RequestedPageLayout(Mm(58), Mm(180), Mm(54), Mm(170), Mm(1));
+        var substituted = new DriverPageMetrics(Mm(80), Mm(297), 0, 0, Mm(76), Mm(287), 5, true);
+        Throws<UnsupportedPrinterPageException>(() => PrinterPageValidator.Validate(request, substituted));
+
+        var tooNarrow = new DriverPageMetrics(Mm(58), Mm(180), Mm(3), Mm(2), Mm(48), Mm(176), 3, false);
+        Throws<UnsupportedPrinterPageException>(() => PrinterPageValidator.Validate(request, tooNarrow));
+        return Task.CompletedTask;
+    }
+
+    private static Task TestLongReceiptAsync()
+    {
+        var geometry = PrintGeometry.Calculate(400, 8000, 54, 58, 1);
+        var request = new RequestedPageLayout(Mm(58), geometry.HeightDip + Mm(4), geometry.WidthDip, geometry.HeightDip, geometry.MarginDip);
+        var supported = new DriverPageMetrics(Mm(58), request.PageHeightDip, Mm(2), Mm(1), Mm(54), request.PageHeightDip - Mm(2), 2, false);
+        var result = PrinterPageValidator.Validate(request, supported);
+        NearlyEqual(geometry.HeightDip, result.ImageHeightDip);
+
+        var clamped = supported with { AcceptedHeightDip = Mm(300), ImageableHeightDip = Mm(298) };
+        Throws<UnsupportedPrinterPageException>(() => PrinterPageValidator.Validate(request, clamped));
+        return Task.CompletedTask;
+    }
+
+    private static Task TestShortNarrowAndCustomPagesAsync()
+    {
+        var narrow = new RequestedPageLayout(Mm(50), Mm(65), Mm(46), Mm(60), Mm(1));
+        var narrowDriver = new DriverPageMetrics(Mm(50), Mm(65), Mm(2), Mm(1), Mm(46), Mm(63), 2, false);
+        var narrowResult = PrinterPageValidator.Validate(narrow, narrowDriver);
+        NearlyEqual(Mm(46), narrowResult.ImageWidthDip);
+
+        var custom = new RequestedPageLayout(Mm(63), Mm(92), Mm(59), Mm(87), Mm(1));
+        var customDriver = new DriverPageMetrics(Mm(63), Mm(92), Mm(2), Mm(1), Mm(59), Mm(90), 0, false);
+        var customResult = PrinterPageValidator.Validate(custom, customDriver);
+        NearlyEqual(Mm(63), customResult.PageWidthDip);
+        return Task.CompletedTask;
+    }
+
+    private static async Task TestReliableBatchContinuesAsync()
+    {
+        var backend = new FakePrinterBackend { FailItem = 2 };
+        var result = await ReliableBatchRunner.RunAsync(new[] { 1, 2, 3 }, backend.SubmitAsync);
+        SequenceEqual(new[] { 1, 2, 3 }, backend.Attempted);
+        SequenceEqual(new[] { 1, 3 }, backend.Submitted);
+        Equal(2, result.SubmittedCount);
+        Equal(1, result.ErrorCount);
+    }
+
     private static async Task TestRetryAsync()
     {
         var calls = 0;
@@ -178,10 +292,37 @@ internal static class Program
     }
     private static void True(bool value) { if (!value) throw new Exception("Condition is false."); }
     private static void NearlyEqual(double expected, double actual) { if (Math.Abs(expected - actual) > 0.0001) throw new Exception($"Expected {expected}, got {actual}."); }
+    private static double Mm(double value) => value * PrintGeometry.DipPerMillimeter;
     private static void SequenceEqual<T>(IEnumerable<T> expected, IEnumerable<T> actual) { if (!expected.SequenceEqual(actual)) throw new Exception("Sequences differ."); }
     private static void Throws<T>(Action action) where T : Exception { try { action(); } catch (T) { return; } throw new Exception($"{typeof(T).Name} was not thrown."); }
 
     private sealed class Selectable { public bool Selected { get; set; } }
+    private sealed record SelectionItem(string Id, bool Selected);
+
+    private sealed class FakePrinterBackend
+    {
+        public List<int> Attempted { get; } = [];
+        public List<int> Submitted { get; } = [];
+        public int? FailItem { get; init; }
+
+        public Task<PrintSubmissionResult> SubmitAsync(int item, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Attempted.Add(item);
+            if (FailItem == item) throw new InvalidOperationException("fake driver error");
+            Submitted.Add(item);
+            return Task.FromResult(FakeSubmission(100 + item));
+        }
+    }
+
+    private static PrintSubmissionResult FakeSubmission(int jobId)
+    {
+        var validation = new PrinterPageValidation(Mm(58), Mm(100), Mm(58), Mm(100),
+            Mm(2), Mm(1), Mm(54), Mm(98), 3, false);
+        return new PrintSubmissionResult(jobId, $"job-{jobId}", "Fake printer", validation,
+            new WindowsPrintJobObservation(jobId, WindowsPrintJobState.Queued,
+                "accepted by fake Windows queue", false));
+    }
 
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> handler) : HttpMessageHandler
     {

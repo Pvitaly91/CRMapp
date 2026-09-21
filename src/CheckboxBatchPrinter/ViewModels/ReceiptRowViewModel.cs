@@ -8,6 +8,7 @@ public sealed class ReceiptRowViewModel : ObservableObject
     private bool _isSelected;
     private PrintItemStatus _printStatus = PrintItemStatus.Waiting;
     private string _printError = string.Empty;
+    private int? _windowsJobId;
 
     public ReceiptRowViewModel(ReceiptRecord model) => Model = model;
 
@@ -24,6 +25,20 @@ public sealed class ReceiptRowViewModel : ObservableObject
     public decimal Total => Model.TotalSum;
     public string Payment => Model.PaymentDisplay;
     public string CashRegister => string.IsNullOrWhiteSpace(Model.CashRegisterFiscalNumber) ? "—" : Model.CashRegisterFiscalNumber;
+    public int? WindowsJobId
+    {
+        get => _windowsJobId;
+        set
+        {
+            if (!SetProperty(ref _windowsJobId, value)) return;
+            OnPropertyChanged(nameof(WindowsJobDisplay));
+            OnPropertyChanged(nameof(HasBeenSubmitted));
+            OnPropertyChanged(nameof(CanRetryWithoutWarning));
+        }
+    }
+    public bool HasBeenSubmitted => WindowsJobId.HasValue;
+    public bool CanRetryWithoutWarning => PrintRetryPolicy.CanRetryWithoutWarning(PrintStatus, HasBeenSubmitted);
+    public string WindowsJobDisplay => WindowsJobId is { } id ? id.ToString() : "—";
 
     public bool IsSelected
     {
@@ -38,7 +53,12 @@ public sealed class ReceiptRowViewModel : ObservableObject
     public PrintItemStatus PrintStatus
     {
         get => _printStatus;
-        set { if (SetProperty(ref _printStatus, value)) OnPropertyChanged(nameof(PrintStatusText)); }
+        set
+        {
+            if (!SetProperty(ref _printStatus, value)) return;
+            OnPropertyChanged(nameof(PrintStatusText));
+            OnPropertyChanged(nameof(CanRetryWithoutWarning));
+        }
     }
 
     public string PrintError
@@ -51,9 +71,12 @@ public sealed class ReceiptRowViewModel : ObservableObject
     {
         PrintItemStatus.Waiting => "Очікує",
         PrintItemStatus.Downloading => "Завантаження",
-        PrintItemStatus.Printing => "Друкується",
-        PrintItemStatus.Done => "Готово",
+        PrintItemStatus.Preparing => "Підготовка",
+        PrintItemStatus.SubmittedToWindowsQueue => "Передано Windows",
+        PrintItemStatus.Paused => "Призупинено",
+        PrintItemStatus.ResultNotConfirmed => "Результат не підтверджено",
         PrintItemStatus.Error => "Помилка",
+        PrintItemStatus.Cancelled => "Зупинено",
         _ => "—"
     };
 }

@@ -125,8 +125,13 @@ public sealed class SettingsViewModel : ObservableObject
         try
         {
             ApplyToSettings();
-            await _printService.PrintTestAsync(_settings);
-            DiagnosticStatus = "Тестове завдання надіслано на принтер";
+            var submission = await _printService.PrintTestAsync(_settings);
+            var page = submission.PageValidation;
+            DiagnosticStatus = $"Тест передано в чергу Windows, job ID {submission.JobId}. " +
+                               $"Запитаний формат: {DipToMm(page.RequestedWidthDip):0.##}×{DipToMm(page.RequestedHeightDip):0.##} мм; " +
+                               $"прийнятий: {DipToMm(page.AcceptedWidthDip):0.##}×{DipToMm(page.AcceptedHeightDip):0.##} мм; " +
+                               $"доступна область: {DipToMm(page.ImageableWidthDip):0.##}×{DipToMm(page.ImageableHeightDip):0.##} мм; " +
+                               $"драйвер оголосив форматів: {page.AdvertisedMediaSizeCount}. Фізичний результат не підтверджено.";
         }
         finally { IsBusy = false; }
     }
@@ -171,6 +176,8 @@ public sealed class SettingsViewModel : ObservableObject
         if (!string.IsNullOrWhiteSpace(SelectedPrinter) && !_printService.PrinterExists(SelectedPrinter))
             throw new InvalidOperationException("Обраний принтер зараз недоступний.");
     }
+
+    private static double DipToMm(double dip) => dip / PrintGeometry.DipPerMillimeter;
 }
 
 public sealed record PaperWidthOption(PaperWidth Value, string Display)

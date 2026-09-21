@@ -13,6 +13,7 @@ public partial class App : Application
 {
     private HttpClient? _httpClient;
     private IAppLogger? _logger;
+    private IPrintService? _printService;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -33,6 +34,7 @@ public partial class App : Application
             var receiptService = new ReceiptService(apiClient, settingsService);
             var imageService = new ReceiptImageService(apiClient, settingsService, Path.Combine(localData, "Cache"), _logger);
             var printService = new WindowsPrintService();
+            _printService = printService;
             var dialogs = new UiDialogService(settingsService, authentication, imageService, printService, _logger);
             _logger.Info("app.viewmodel.create");
             var viewModel = new MainViewModel(receiptService, imageService, settingsService, authentication, printService, dialogs, _logger);
@@ -54,6 +56,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _printService?.Dispose();
         _httpClient?.Dispose();
         base.OnExit(e);
     }
