@@ -1,0 +1,72 @@
+<Window x:Class="CheckboxBatchPrinter.Views.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Налаштування" Height="590" Width="650" MinHeight="540" MinWidth="600"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip">
+    <DockPanel Margin="12">
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button Content="Скасувати" IsCancel="True" />
+            <Button Content="Зберегти" Click="Save_Click" IsDefault="True" Background="#1769AA" Foreground="White" />
+        </StackPanel>
+        <TabControl>
+            <TabItem Header="Checkbox">
+                <Grid Margin="16">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="170" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="Read-only доступ до вже існуючих чеків. Програма не створює та не фіскалізує чеки."
+                               TextWrapping="Wrap" Padding="10" Background="#EDF6FF" Margin="0,0,0,14" />
+                    <TextBlock Grid.Row="1" Text="Login" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Login, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Grid.Row="2" Text="Password" VerticalAlignment="Center" />
+                    <PasswordBox x:Name="PasswordInput" Grid.Row="2" Grid.Column="1" PasswordChanged="PasswordInput_PasswordChanged" Margin="3" Padding="6,4" />
+                    <TextBlock Grid.Row="3" Grid.Column="1" Text="Залиште порожнім, щоб не змінювати збережений DPAPI-пароль."
+                               Foreground="#667085" FontSize="11" Margin="5,0,0,8" />
+                    <Button Grid.Row="4" Grid.Column="1" Content="Перевірити підключення" HorizontalAlignment="Left" Click="TestApi_Click" />
+                </Grid>
+            </TabItem>
+            <TabItem Header="Друк">
+                <Grid Margin="16">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="210" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="Принтер чеків" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{Binding Printers}" SelectedItem="{Binding SelectedPrinter}" />
+                    <TextBlock Grid.Row="1" Text="Ширина паперу" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding PaperWidths}" SelectedValuePath="Value" SelectedValue="{Binding PaperWidth}" />
+                    <TextBlock Grid.Row="2" Text="Custom, мм" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding CustomPaperWidthMm}" IsEnabled="{Binding IsCustomPaperWidth}" />
+                    <TextBlock Grid.Row="3" Text="Ширина області друку, мм" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding PrintableWidthMm}" />
+                    <CheckBox Grid.Row="4" Grid.ColumnSpan="2" IsChecked="{Binding SeparatePrintJobPerReceipt}" Margin="3,12"
+                              Content="Окреме завдання друку для кожного чека (рекомендовано для автообрізання)" />
+                    <Button Grid.Row="5" Grid.Column="1" Content="Надрукувати тест" HorizontalAlignment="Left" Click="TestPrint_Click" />
+                </Grid>
+            </TabItem>
+            <TabItem Header="Діагностика">
+                <StackPanel Margin="16">
+                    <TextBlock Text="Версія програми" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding AppVersion}" Margin="0,2,0,12" />
+                    <TextBlock Text="Версія API" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding ApiVersion}" Margin="0,2,0,12" />
+                    <TextBlock Text="Папка логів" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding LogDirectory}" TextWrapping="Wrap" Margin="0,2,0,8" />
+                    <WrapPanel>
+                        <Button Content="Перевірити Checkbox API" Click="TestApi_Click" />
+                        <Button Content="Перевірити принтер / тест" Click="TestPrint_Click" />
+                        <Button Content="Очистити кеш" Click="ClearCache_Click" />
+                        <Button Content="Відкрити папку логів" Click="OpenLogs_Click" />
+                    </WrapPanel>
+                    <Border Background="#F2F4F7" Padding="10" Margin="3,14">
+                        <TextBlock Text="{Binding DiagnosticStatus}" TextWrapping="Wrap" />
+                    </Border>
+                    <ProgressBar Height="12" IsIndeterminate="True" Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}" />
+                </StackPanel>
+            </TabItem>
+        </TabControl>
+    </DockPanel>
+</Window>

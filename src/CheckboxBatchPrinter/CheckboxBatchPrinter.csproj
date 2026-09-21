@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Platforms>x64</Platforms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>CheckboxBatchPrinter</AssemblyName>
+    <RootNamespace>CheckboxBatchPrinter</RootNamespace>
+    <Version>1.0.0</Version>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\CheckboxBatchPrinter.Core\CheckboxBatchPrinter.Core.csproj" />
+  </ItemGroup>
+</Project>

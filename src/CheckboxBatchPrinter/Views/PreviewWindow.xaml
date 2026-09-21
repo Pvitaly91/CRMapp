@@ -1,0 +1,19 @@
+<Window x:Class="CheckboxBatchPrinter.Views.PreviewWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Перегляд чека" Width="620" Height="820" MinWidth="400" MinHeight="500"
+        WindowStartupLocation="CenterOwner" Background="#E5E7EB" KeyDown="Window_KeyDown">
+    <DockPanel>
+        <Border DockPanel.Dock="Top" Background="White" Padding="10" BorderBrush="#D1D5DB" BorderThickness="0,0,0,1">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="Офіційне PNG-представлення Checkbox" FontWeight="SemiBold" VerticalAlignment="Center" />
+                <TextBlock x:Name="ReceiptInfo" Margin="16,0,0,0" Foreground="#667085" VerticalAlignment="Center" />
+            </StackPanel>
+        </Border>
+        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" Padding="18">
+            <Border Background="White" Padding="4" HorizontalAlignment="Center" VerticalAlignment="Top">
+                <Image x:Name="ReceiptImage" Stretch="None" />
+            </Border>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

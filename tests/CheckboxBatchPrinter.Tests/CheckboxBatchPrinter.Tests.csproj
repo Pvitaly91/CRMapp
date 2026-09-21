@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <AssemblyName>CheckboxBatchPrinter.Tests</AssemblyName>
+    <RootNamespace>CheckboxBatchPrinter.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CheckboxBatchPrinter.Core\CheckboxBatchPrinter.Core.csproj" />
+  </ItemGroup>
+</Project>

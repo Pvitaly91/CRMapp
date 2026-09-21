@@ -1,0 +1,31 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CheckboxBatchPrinter.Core", "src\CheckboxBatchPrinter.Core\CheckboxBatchPrinter.Core.csproj", "{5233464B-E2FC-44D0-A476-FB9B37B28D42}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CheckboxBatchPrinter", "src\CheckboxBatchPrinter\CheckboxBatchPrinter.csproj", "{7835CC3D-C93B-487F-BE2C-EF9DAEB7636A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CheckboxBatchPrinter.Tests", "tests\CheckboxBatchPrinter.Tests\CheckboxBatchPrinter.Tests.csproj", "{3BA75535-D214-4DE2-A39F-89CDF42F93B0}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5233464B-E2FC-44D0-A476-FB9B37B28D42}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5233464B-E2FC-44D0-A476-FB9B37B28D42}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5233464B-E2FC-44D0-A476-FB9B37B28D42}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5233464B-E2FC-44D0-A476-FB9B37B28D42}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7835CC3D-C93B-487F-BE2C-EF9DAEB7636A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7835CC3D-C93B-487F-BE2C-EF9DAEB7636A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7835CC3D-C93B-487F-BE2C-EF9DAEB7636A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7835CC3D-C93B-487F-BE2C-EF9DAEB7636A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3BA75535-D214-4DE2-A39F-89CDF42F93B0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3BA75535-D214-4DE2-A39F-89CDF42F93B0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3BA75535-D214-4DE2-A39F-89CDF42F93B0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3BA75535-D214-4DE2-A39F-89CDF42F93B0}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
