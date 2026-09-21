@@ -20,7 +20,7 @@ dotnet run --project tests/CheckboxBatchPrinter.Tests -c Release
 dotnet publish src/CheckboxBatchPrinter/CheckboxBatchPrinter.csproj -c Release -r win-x64 --self-contained true -o artifacts/win-x64
 ```
 
-Пароль зберігається у `%LOCALAPPDATA%\CheckboxBatchPrinter\credential.bin` через Windows DPAPI. Налаштування, кеш і логи також залишаються лише в `%LOCALAPPDATA%\CheckboxBatchPrinter`.
+Пароль зберігається у `%LOCALAPPDATA%\CheckboxBatchPrinter\credential.bin` через Windows DPAPI. Налаштування, кеш, логи та обмежений 30 днями журнал спроб друку також залишаються лише в `%LOCALAPPDATA%\CheckboxBatchPrinter`. Журнал не містить PNG, паролів, токенів, повного вмісту чека або даних покупця; обліковий контекст зберігається як SHA-256.
 
 ## Фізична перевірка
 

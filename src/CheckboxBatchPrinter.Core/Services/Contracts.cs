@@ -42,3 +42,9 @@ public interface IReceiptImageService
     Task<int> ClearCacheAsync(CancellationToken cancellationToken = default);
     Task CleanupAsync(CancellationToken cancellationToken = default);
 }
+
+public interface IPrintAttemptStore
+{
+    IReadOnlyList<PrintAttemptRecord> Load(string accountContext);
+    void UpsertMany(IReadOnlyList<PrintAttemptRecord> attempts);
+}

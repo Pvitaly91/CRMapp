@@ -7,8 +7,17 @@ public interface IPrintService : IDisposable
 {
     IReadOnlyList<string> GetInstalledPrinters();
     bool PrinterExists(string printerName);
-    Task<PrintSubmissionResult> PrintReceiptAsync(byte[] png, string receiptId, AppSettings settings, CancellationToken cancellationToken = default);
-    Task<PrintSubmissionResult> PrintReceiptsAsSingleJobAsync(IReadOnlyList<(byte[] Png, string ReceiptId)> receipts, AppSettings settings,
+    Task<PrintSubmissionResult> PrintReceiptAsync(
+        byte[] png,
+        AppSettings settings,
+        PrintAttemptDescriptor attempt,
+        Action<PrintAttemptDescriptor> markSubmissionStarted,
+        CancellationToken cancellationToken = default);
+    Task<PrintSubmissionResult> PrintReceiptsAsSingleJobAsync(
+        IReadOnlyList<(byte[] Png, string ReceiptId)> receipts,
+        AppSettings settings,
+        PrintAttemptDescriptor attempt,
+        Action<PrintAttemptDescriptor> markSubmissionStarted,
         CancellationToken cancellationToken = default);
     Task<PrintSubmissionResult> PrintTestAsync(AppSettings settings, CancellationToken cancellationToken = default);
     Task<WindowsPrintJobObservation> GetJobStatusAsync(PrintSubmissionResult submission, CancellationToken cancellationToken = default);

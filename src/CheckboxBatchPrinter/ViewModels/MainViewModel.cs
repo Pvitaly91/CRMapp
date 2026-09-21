@@ -16,6 +16,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly ISettingsService _settingsService;
     private readonly IAuthenticationService _authentication;
     private readonly IPrintService _printService;
+    private readonly IPrintAttemptStore _printAttemptStore;
     private readonly IUiDialogService _dialogs;
     private readonly IAppLogger _logger;
     private CancellationTokenSource? _refreshCancellation;
@@ -28,6 +29,7 @@ public sealed class MainViewModel : ObservableObject
     private string _progressText = string.Empty;
     private bool _isBusy;
     private bool _isPrinting;
+    private string? _loadedAccountContext;
 
     public MainViewModel(
         IReceiptService receiptService,
@@ -35,6 +37,7 @@ public sealed class MainViewModel : ObservableObject
         ISettingsService settingsService,
         IAuthenticationService authentication,
         IPrintService printService,
+        IPrintAttemptStore printAttemptStore,
         IUiDialogService dialogs,
         IAppLogger logger)
     {
@@ -43,6 +46,7 @@ public sealed class MainViewModel : ObservableObject
         _settingsService = settingsService;
         _authentication = authentication;
         _printService = printService;
+        _printAttemptStore = printAttemptStore;
         _dialogs = dialogs;
         _logger = logger;
 
@@ -164,16 +168,27 @@ public sealed class MainViewModel : ObservableObject
         ProgressText = string.Empty;
         try
         {
+            var settings = await _settingsService.LoadAsync(_refreshCancellation.Token);
+            var accountContext = PrintAccountContext.Create(settings);
             var items = await _receiptService.GetReceiptsAsync(
                 DateOnly.FromDateTime(DateFrom.Value), DateOnly.FromDateTime(DateTo.Value), _refreshCancellation.Token);
+            // The journal is bounded and small; loading it synchronously keeps the
+            // refresh state transition atomic on the UI thread.
+            var attempts = _printAttemptStore.Load(accountContext);
+            var attemptsByReceipt = attempts
+                .GroupBy(x => x.ReceiptId, StringComparer.Ordinal)
+                .ToDictionary(x => x.Key, x => (IReadOnlyList<PrintAttemptRecord>)x.ToArray(), StringComparer.Ordinal);
             foreach (var old in Receipts) old.SelectionChanged -= OnSelectionChanged;
             Receipts.Clear();
             foreach (var model in items)
             {
                 var row = new ReceiptRowViewModel(model);
+                if (attemptsByReceipt.TryGetValue(model.Id, out var receiptAttempts))
+                    RestoreAttemptHistory(row, receiptAttempts);
                 row.SelectionChanged += OnSelectionChanged;
                 Receipts.Add(row);
             }
+            _loadedAccountContext = accountContext;
             StatusText = items.Count == 0 ? "Чеків за обраний період не знайдено" : $"Завантажено чеків: {items.Count}";
             NotifySelectionMetrics();
         }
@@ -230,13 +245,19 @@ public sealed class MainViewModel : ObservableObject
             _dialogs.ShowError("Оберіть доступний принтер у Налаштуваннях → Друк.");
             return;
         }
+        var accountContext = PrintAccountContext.Create(settings);
+        if (!string.Equals(_loadedAccountContext, accountContext, StringComparison.Ordinal))
+        {
+            _dialogs.ShowError("Обліковий контекст Checkbox змінився. Оновіть список чеків перед друком.");
+            return;
+        }
 
         var confirmation = new PrintBatchConfirmation(
             snapshot.Items.Count,
             snapshot.HiddenSelectedCount,
             settings.PrinterName,
             snapshot.Items.Select(x => $"чек №{x.Serial}, {x.LocalDate:dd.MM.yyyy} {x.LocalTime}").ToArray(),
-            snapshot.Items.Any(x => PrintRetryPolicy.RequiresExplicitConfirmation(x.PrintStatus, x.HasBeenSubmitted)));
+            snapshot.Items.Any(x => PrintRetryPolicy.RequiresExplicitConfirmation(x.PrintStatus, x.HasSubmissionRisk)));
         if (!_dialogs.ConfirmPrint(confirmation)) return;
 
         // Immutable ordered snapshot: later filter/sort changes cannot alter this batch.
@@ -256,25 +277,28 @@ public sealed class MainViewModel : ObservableObject
 
         try
         {
-            var submitted = settings.SeparatePrintJobPerReceipt
-                ? await SubmitAsSeparateJobsAsync(orderedBatch, settings, _batchCancellation.Token)
-                : await SubmitAsSingleJobAsync(orderedBatch, settings, _batchCancellation.Token);
+            var result = settings.SeparatePrintJobPerReceipt
+                ? await SubmitAsSeparateJobsAsync(orderedBatch, settings, accountContext, _batchCancellation.Token)
+                : await SubmitAsSingleJobAsync(orderedBatch, settings, accountContext, _batchCancellation.Token);
 
-            if (submitted.Count > 0)
-                await ObserveSubmittedJobsAsync(submitted);
+            if (result.Submitted.Count > 0)
+                await ObserveSubmittedJobsAsync(result.Submitted, accountContext);
 
-            var submittedCount = submitted.Count;
+            var submittedCount = result.Submitted.Count;
+            var unknownCount = result.UnknownReceiptCount;
             var errorCount = orderedBatch.Count(x => x.PrintStatus == PrintItemStatus.Error);
             var cancelledCount = orderedBatch.Count(x => x.PrintStatus == PrintItemStatus.Cancelled);
             // Every submitted job remains physically unconfirmed, including jobs
             // for which Windows reports an error.
-            var unconfirmedCount = submitted.Count;
-            StatusText = $"Передано в чергу Windows: {submittedCount}. Помилки: {errorCount}. Зупинено: {cancelledCount}. " +
+            var unconfirmedCount = submittedCount + unknownCount;
+            StatusText = $"Передано в чергу Windows: {submittedCount}. Невизначено під час передавання: {unknownCount}. " +
+                         $"Помилки: {errorCount}. Зупинено: {cancelledCount}. " +
                          $"Фізично підтверджено: 0; непідтверджено: {unconfirmedCount}.";
             ProgressText = string.Empty;
             NotifyPrintMetrics();
             _dialogs.ShowInfo(
-                $"Передано в чергу Windows: {submittedCount}\nПомилки: {errorCount}\nЗупинено до передавання: {cancelledCount}\n\n" +
+                $"Передано в чергу Windows: {submittedCount}\nНевизначено під час передавання: {unknownCount}\n" +
+                $"Помилки: {errorCount}\nЗупинено до передавання: {cancelledCount}\n\n" +
                 "Windows-черга не підтверджує фізичний вихід чека. Перевірте папір, текст, QR-код і автообрізання на принтері.",
                 "Пакет оброблено");
         }
@@ -291,23 +315,39 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
-    private async Task<IReadOnlyList<(ReceiptRowViewModel Row, PrintSubmissionResult Submission)>> SubmitAsSeparateJobsAsync(
+    private async Task<BatchRunSummary> SubmitAsSeparateJobsAsync(
         IReadOnlyList<ReceiptRowViewModel> orderedBatch,
         AppSettings settings,
+        string accountContext,
         CancellationToken cancellationToken)
     {
         var current = 0;
+        var startedRows = new HashSet<ReceiptRowViewModel>();
+        var attempts = orderedBatch.ToDictionary(
+            row => row,
+            row => PrintAttemptFactory.CreateReceipt(row.Id, settings.PrinterName));
         var result = await ReliableBatchRunner.RunAsync(orderedBatch, async (row, token) =>
         {
             current++;
+            var attempt = attempts[row];
+            RecordRequired(accountContext, attempt, [row], PrintSubmissionState.NotSubmitted, PrintItemStatus.Preparing);
+            startedRows.Add(row);
             ProgressText = $"Підготовка {current} із {orderedBatch.Count}";
             row.PrintStatus = PrintItemStatus.Downloading;
             var png = await _imageService.GetPngAsync(row.Id, (int)Math.Round(settings.EffectivePaperWidthMm), token);
             row.PrintStatus = PrintItemStatus.Preparing;
-            var submission = await _printService.PrintReceiptAsync(png, row.Id, settings, token);
+            var submission = await _printService.PrintReceiptAsync(
+                png,
+                settings,
+                attempt,
+                started => RecordRequired(
+                    accountContext, started, [row], PrintSubmissionState.SubmissionUnknown, PrintItemStatus.ResultNotConfirmed),
+                token);
             row.WindowsJobId = submission.JobId;
-            row.PrintStatus = PrintItemStatus.SubmittedToWindowsQueue;
-            row.PrintError = submission.InitialObservation.Details;
+            row.HasSubmissionRisk = true;
+            ApplyObservation(row, submission.InitialObservation);
+            TryRecord(accountContext, submission.Attempt, [row], PrintSubmissionState.Submitted,
+                row.PrintStatus, submission.JobId);
             _logger.Info("receipt.print.submitted", row.Id, printStatus: $"job_id={submission.JobId}");
             return submission;
         }, cancellationToken);
@@ -318,24 +358,44 @@ public sealed class MainViewModel : ObservableObject
             {
                 outcome.Item.PrintStatus = PrintItemStatus.Cancelled;
                 outcome.Item.PrintError = "Пакет зупинено до передавання цього чека у Windows.";
+                if (startedRows.Contains(outcome.Item))
+                    TryRecord(accountContext, attempts[outcome.Item], [outcome.Item], PrintSubmissionState.NotSubmitted,
+                        PrintItemStatus.Cancelled);
+            }
+            else if (outcome.SubmissionState == PrintSubmissionState.SubmissionUnknown &&
+                     outcome.Error is PrintSubmissionUnknownException unknown)
+            {
+                outcome.Item.HasSubmissionRisk = true;
+                outcome.Item.PrintStatus = PrintItemStatus.ResultNotConfirmed;
+                outcome.Item.PrintError =
+                    $"Передавання почалося, але результат невідомий. Принтер: {unknown.Attempt.PrinterName}; " +
+                    $"ім'я job: {unknown.Attempt.UniqueJobName}. Повтор може створити дублікат.";
+                _logger.Error("receipt.print.submission_unknown", unknown, outcome.Item.Id,
+                    printStatus: $"submission_unknown;job_name={unknown.Attempt.UniqueJobName}");
             }
             else if (outcome.Error is { } exception)
             {
                 outcome.Item.PrintStatus = PrintItemStatus.Error;
                 outcome.Item.PrintError = exception.Message;
+                TryRecord(accountContext, attempts[outcome.Item], [outcome.Item], PrintSubmissionState.NotSubmitted,
+                    PrintItemStatus.Error);
                 _logger.Error("receipt.print.before_submission", exception, outcome.Item.Id, printStatus: "not_submitted");
             }
         }
 
-        return result.Items.Where(x => x.Submission is not null)
+        var submitted = result.Items.Where(x => x.Submission is not null)
             .Select(x => (x.Item, x.Submission!)).ToArray();
+        return new BatchRunSummary(submitted, result.UnknownCount);
     }
 
-    private async Task<IReadOnlyList<(ReceiptRowViewModel Row, PrintSubmissionResult Submission)>> SubmitAsSingleJobAsync(
+    private async Task<BatchRunSummary> SubmitAsSingleJobAsync(
         IReadOnlyList<ReceiptRowViewModel> orderedBatch,
         AppSettings settings,
+        string accountContext,
         CancellationToken cancellationToken)
     {
+        var attempt = PrintAttemptFactory.CreateBatch(orderedBatch.Count, settings.PrinterName);
+        RecordRequired(accountContext, attempt, orderedBatch, PrintSubmissionState.NotSubmitted, PrintItemStatus.Preparing);
         var loaded = new List<(byte[] Png, string ReceiptId, ReceiptRowViewModel Row)>();
         for (var index = 0; index < orderedBatch.Count; index++)
         {
@@ -352,7 +412,10 @@ public sealed class MainViewModel : ObservableObject
                     prepared.Row.PrintStatus = PrintItemStatus.Cancelled;
                     prepared.Row.PrintError = "Спільне завдання не передано через зупинку пакета.";
                 }
-                return [];
+                var cancelledRows = loaded.Select(x => x.Row).Concat(orderedBatch.Skip(index)).ToArray();
+                TryRecord(accountContext, attempt, cancelledRows,
+                    PrintSubmissionState.NotSubmitted, PrintItemStatus.Cancelled);
+                return BatchRunSummary.Empty;
             }
 
             ProgressText = $"Завантаження {index + 1} із {orderedBatch.Count}";
@@ -372,22 +435,48 @@ public sealed class MainViewModel : ObservableObject
             {
                 row.PrintStatus = PrintItemStatus.Error;
                 row.PrintError = exception.Message;
+                TryRecord(accountContext, attempt, [row], PrintSubmissionState.NotSubmitted, PrintItemStatus.Error);
                 _logger.Error("receipt.print.before_submission", exception, row.Id, printStatus: "not_submitted");
             }
         }
 
-        if (loaded.Count == 0) return [];
+        if (loaded.Count == 0) return BatchRunSummary.Empty;
         try
         {
             var submission = await _printService.PrintReceiptsAsSingleJobAsync(
-                loaded.Select(x => (x.Png, x.ReceiptId)).ToArray(), settings, cancellationToken);
+                loaded.Select(x => (x.Png, x.ReceiptId)).ToArray(),
+                settings,
+                attempt,
+                started => RecordRequired(
+                    accountContext,
+                    started,
+                    loaded.Select(x => x.Row).ToArray(),
+                    PrintSubmissionState.SubmissionUnknown,
+                    PrintItemStatus.ResultNotConfirmed),
+                cancellationToken);
             foreach (var item in loaded)
             {
                 item.Row.WindowsJobId = submission.JobId;
-                item.Row.PrintStatus = PrintItemStatus.SubmittedToWindowsQueue;
-                item.Row.PrintError = submission.InitialObservation.Details;
+                item.Row.HasSubmissionRisk = true;
+                ApplyObservation(item.Row, submission.InitialObservation);
             }
-            return loaded.Select(x => (x.Row, submission)).ToArray();
+            TryRecord(accountContext, submission.Attempt, loaded.Select(x => x.Row).ToArray(),
+                PrintSubmissionState.Submitted, loaded[0].Row.PrintStatus, submission.JobId);
+            return new BatchRunSummary(loaded.Select(x => (x.Row, submission)).ToArray(), 0);
+        }
+        catch (PrintSubmissionUnknownException exception)
+        {
+            foreach (var item in loaded)
+            {
+                item.Row.HasSubmissionRisk = true;
+                item.Row.PrintStatus = PrintItemStatus.ResultNotConfirmed;
+                item.Row.PrintError =
+                    $"Передавання спільного job почалося, але результат невідомий. Принтер: {exception.Attempt.PrinterName}; " +
+                    $"ім'я job: {exception.Attempt.UniqueJobName}. Повтор може створити дублікати всієї пачки.";
+            }
+            _logger.Error("batch.single_job.submission_unknown", exception,
+                printStatus: $"submission_unknown;job_name={exception.Attempt.UniqueJobName}");
+            return new BatchRunSummary([], loaded.Count);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -396,7 +485,9 @@ public sealed class MainViewModel : ObservableObject
                 item.Row.PrintStatus = PrintItemStatus.Cancelled;
                 item.Row.PrintError = "Спільне завдання не передано через зупинку пакета.";
             }
-            return [];
+            TryRecord(accountContext, attempt, loaded.Select(x => x.Row).ToArray(),
+                PrintSubmissionState.NotSubmitted, PrintItemStatus.Cancelled);
+            return BatchRunSummary.Empty;
         }
         catch (Exception exception)
         {
@@ -405,13 +496,16 @@ public sealed class MainViewModel : ObservableObject
                 item.Row.PrintStatus = PrintItemStatus.Error;
                 item.Row.PrintError = exception.Message;
             }
+            TryRecord(accountContext, attempt, loaded.Select(x => x.Row).ToArray(),
+                PrintSubmissionState.NotSubmitted, PrintItemStatus.Error);
             _logger.Error("batch.single_job.before_submission", exception, printStatus: "not_submitted");
-            return [];
+            return BatchRunSummary.Empty;
         }
     }
 
     private async Task ObserveSubmittedJobsAsync(
-        IReadOnlyList<(ReceiptRowViewModel Row, PrintSubmissionResult Submission)> submitted)
+        IReadOnlyList<(ReceiptRowViewModel Row, PrintSubmissionResult Submission)> submitted,
+        string accountContext)
     {
         var groups = submitted.GroupBy(x => x.Submission.JobId)
             .ToDictionary(x => x.Key, x => x.ToArray());
@@ -427,6 +521,12 @@ public sealed class MainViewModel : ObservableObject
                 {
                     var observation = await _printService.GetJobStatusAsync(items[0].Submission);
                     foreach (var item in items) ApplyObservation(item.Row, observation);
+                    if (observation.IsTerminalForMonitoring ||
+                        observation.State is WindowsPrintJobState.Paused or WindowsPrintJobState.Error)
+                    {
+                        TryRecord(accountContext, items[0].Submission.Attempt, items.Select(x => x.Row).ToArray(),
+                            PrintSubmissionState.Submitted, items[0].Row.PrintStatus, observation.JobId);
+                    }
                     if (observation.IsTerminalForMonitoring) pending.Remove(jobId);
                 }
                 catch (Exception exception)
@@ -436,6 +536,8 @@ public sealed class MainViewModel : ObservableObject
                         item.Row.PrintStatus = PrintItemStatus.ResultNotConfirmed;
                         item.Row.PrintError = $"Не вдалося прочитати стан job ID {jobId}: {exception.Message}";
                     }
+                    TryRecord(accountContext, items[0].Submission.Attempt, items.Select(x => x.Row).ToArray(),
+                        PrintSubmissionState.Submitted, PrintItemStatus.ResultNotConfirmed, jobId);
                     pending.Remove(jobId);
                     _logger.Error("print.job.observe", exception, printStatus: $"job_id={jobId}");
                 }
@@ -451,6 +553,11 @@ public sealed class MainViewModel : ObservableObject
                 item.Row.PrintStatus = PrintItemStatus.ResultNotConfirmed;
                 item.Row.PrintError = $"Job ID {jobId} залишився у черзі після завершення періоду спостереження.";
             }
+            var persistedStatus = groups[jobId][0].Row.PrintStatus == PrintItemStatus.Paused
+                ? PrintItemStatus.Paused
+                : PrintItemStatus.ResultNotConfirmed;
+            TryRecord(accountContext, groups[jobId][0].Submission.Attempt, groups[jobId].Select(x => x.Row).ToArray(),
+                PrintSubmissionState.Submitted, persistedStatus, jobId);
         }
     }
 
@@ -464,6 +571,85 @@ public sealed class MainViewModel : ObservableObject
             WindowsPrintJobState.CompletedBySpooler or WindowsPrintJobState.Disappeared => PrintItemStatus.ResultNotConfirmed,
             _ => PrintItemStatus.SubmittedToWindowsQueue
         };
+    }
+
+    private static void RestoreAttemptHistory(
+        ReceiptRowViewModel row,
+        IReadOnlyList<PrintAttemptRecord> attempts)
+    {
+        if (attempts.Count == 0) return;
+        var ordered = attempts.OrderBy(x => x.UpdatedAtUtc).ToArray();
+        var latest = ordered[^1];
+        var risky = ordered.Any(x => x.SubmissionState is
+            PrintSubmissionState.SubmissionUnknown or PrintSubmissionState.Submitted);
+        var latestKnownJob = ordered.LastOrDefault(x => x.JobId.HasValue)?.JobId;
+
+        row.HasSubmissionRisk = risky;
+        row.WindowsJobId = latestKnownJob;
+        row.PrintStatus = latest.SubmissionState switch
+        {
+            PrintSubmissionState.SubmissionUnknown => PrintItemStatus.ResultNotConfirmed,
+            PrintSubmissionState.Submitted when latest.ItemStatus is PrintItemStatus.SubmittedToWindowsQueue or
+                PrintItemStatus.Paused or PrintItemStatus.ResultNotConfirmed or PrintItemStatus.Error => latest.ItemStatus,
+            PrintSubmissionState.Submitted => PrintItemStatus.ResultNotConfirmed,
+            _ when latest.ItemStatus == PrintItemStatus.Cancelled => PrintItemStatus.Cancelled,
+            _ => PrintItemStatus.Error
+        };
+
+        var localTime = latest.UpdatedAtUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm:ss");
+        row.PrintError = latest.SubmissionState switch
+        {
+            PrintSubmissionState.SubmissionUnknown =>
+                $"{localTime}: передавання job «{latest.UniqueJobName}» почалося, але результат невідомий. Повтор може створити дублікат.",
+            PrintSubmissionState.Submitted =>
+                $"{localTime}: Windows job ID {latest.JobId?.ToString() ?? "—"} був створений; фізичний друк не підтверджено.",
+            _ when risky =>
+                $"{localTime}: остання спроба не була передана, але в історії є раніша непідтверджена спроба. Повтор може створити дублікат.",
+            _ => $"{localTime}: попередня спроба не дійшла до передавання у Windows."
+        };
+    }
+
+    private void RecordRequired(
+        string accountContext,
+        PrintAttemptDescriptor attempt,
+        IReadOnlyList<ReceiptRowViewModel> rows,
+        PrintSubmissionState submissionState,
+        PrintItemStatus itemStatus,
+        int? jobId = null)
+    {
+        var updatedAt = DateTimeOffset.UtcNow;
+        _printAttemptStore.UpsertMany(rows.Select(row => new PrintAttemptRecord(
+            attempt.AttemptId,
+            accountContext,
+            row.Id,
+            attempt.PrinterName,
+            attempt.UniqueJobName,
+            jobId,
+            attempt.StartedAtUtc,
+            updatedAt,
+            submissionState,
+            itemStatus)).ToArray());
+    }
+
+    private void TryRecord(
+        string accountContext,
+        PrintAttemptDescriptor attempt,
+        IReadOnlyList<ReceiptRowViewModel> rows,
+        PrintSubmissionState submissionState,
+        PrintItemStatus itemStatus,
+        int? jobId = null)
+    {
+        try
+        {
+            RecordRequired(accountContext, attempt, rows, submissionState, itemStatus, jobId);
+        }
+        catch (Exception exception)
+        {
+            // SubmissionUnknown was already persisted at the boundary. A failure to
+            // enrich that record must never reclassify a submitted job as safe.
+            _logger.Error("print.attempt_journal.update", exception,
+                printStatus: submissionState.ToString());
+        }
     }
 
     private void StopBatch()
@@ -540,5 +726,13 @@ public sealed class MainViewModel : ObservableObject
             if (command is RelayCommand relay) relay.RaiseCanExecuteChanged();
             if (command is AsyncRelayCommand asyncRelay) asyncRelay.RaiseCanExecuteChanged();
         }
+    }
+
+    private sealed record BatchRunSummary(
+        IReadOnlyList<(ReceiptRowViewModel Row, PrintSubmissionResult Submission)> Submitted,
+        int UnknownReceiptCount)
+    {
+        public static BatchRunSummary Empty { get; } = new(
+            Array.Empty<(ReceiptRowViewModel Row, PrintSubmissionResult Submission)>(), 0);
     }
 }

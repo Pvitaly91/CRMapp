@@ -9,6 +9,7 @@ public sealed class ReceiptRowViewModel : ObservableObject
     private PrintItemStatus _printStatus = PrintItemStatus.Waiting;
     private string _printError = string.Empty;
     private int? _windowsJobId;
+    private bool _hasSubmissionRisk;
 
     public ReceiptRowViewModel(ReceiptRecord model) => Model = model;
 
@@ -32,12 +33,20 @@ public sealed class ReceiptRowViewModel : ObservableObject
         {
             if (!SetProperty(ref _windowsJobId, value)) return;
             OnPropertyChanged(nameof(WindowsJobDisplay));
-            OnPropertyChanged(nameof(HasBeenSubmitted));
+            if (value.HasValue) HasSubmissionRisk = true;
             OnPropertyChanged(nameof(CanRetryWithoutWarning));
         }
     }
-    public bool HasBeenSubmitted => WindowsJobId.HasValue;
-    public bool CanRetryWithoutWarning => PrintRetryPolicy.CanRetryWithoutWarning(PrintStatus, HasBeenSubmitted);
+    public bool HasSubmissionRisk
+    {
+        get => _hasSubmissionRisk;
+        set
+        {
+            if (!SetProperty(ref _hasSubmissionRisk, value)) return;
+            OnPropertyChanged(nameof(CanRetryWithoutWarning));
+        }
+    }
+    public bool CanRetryWithoutWarning => PrintRetryPolicy.CanRetryWithoutWarning(PrintStatus, HasSubmissionRisk);
     public string WindowsJobDisplay => WindowsJobId is { } id ? id.ToString() : "—";
 
     public bool IsSelected

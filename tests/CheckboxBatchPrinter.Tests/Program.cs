@@ -1,8 +1,15 @@
+using System.IO;
 using System.Net;
+using System.Net.Http;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using CheckboxBatchPrinter.Core.Models;
 using CheckboxBatchPrinter.Core.Services;
+using CheckboxBatchPrinter.Services;
+using CheckboxBatchPrinter.ViewModels;
 
 namespace CheckboxBatchPrinter.Tests;
 
@@ -26,6 +33,14 @@ internal static class Program
         ("short narrow and custom pages", TestShortNarrowAndCustomPagesAsync),
         ("long receipt validation", TestLongReceiptAsync),
         ("one submission error keeps remaining items", TestReliableBatchContinuesAsync),
+        ("submitted receipt survives F5 and warns on repeat", TestRefreshPreservesSubmittedAttemptAsync),
+        ("date range roundtrip preserves print history", TestDateRangeRoundtripAsync),
+        ("restart restores unknown submission", TestRestartRestoresUnknownAttemptAsync),
+        ("print history is account scoped and retained for a bounded period", TestJournalScopeAndRetentionAsync),
+        ("backend throw after registration is submission unknown", TestBoundaryUnknownAsync),
+        ("preparation failure is not submitted", TestPreparationFailureAsync),
+        ("unknown shared job marks the full batch", TestUnknownSharedJobAsync),
+        ("test bitmap keeps content and edge marks at multiple DPI", TestBitmapDpiAsync),
         ("retry", TestRetryAsync),
         ("API errors", TestApiErrorAsync)
     ];
@@ -250,6 +265,252 @@ internal static class Program
         Equal(1, result.ErrorCount);
     }
 
+    private static Task TestRefreshPreservesSubmittedAttemptAsync()
+    {
+        RunOnSta(() =>
+        {
+            var receipt = TestReceipt("receipt-refresh", DateTime.Today);
+            var settings = TestSettings(separateJobs: true);
+            var dialogs = new RecordingDialogs();
+            var store = new MemoryPrintAttemptStore();
+            using var printer = new ScenarioPrintService();
+            var viewModel = CreateViewModel(new ScenarioReceiptService((_, _) => [receipt]), settings, printer, store, dialogs);
+
+            viewModel.InitializeAsync().GetAwaiter().GetResult();
+            viewModel.Receipts.Single().IsSelected = true;
+            viewModel.PrintSelectedCommand.Execute(null);
+            Equal(1, dialogs.Confirmations.Count);
+            True(!dialogs.Confirmations[0].ContainsPreviouslySubmittedReceipts);
+
+            viewModel.RefreshCommand.Execute(null); // F5 uses the same command.
+            var restored = viewModel.Receipts.Single();
+            True(restored.HasSubmissionRisk);
+            Equal(101, restored.WindowsJobId);
+            restored.IsSelected = true;
+            viewModel.PrintSelectedCommand.Execute(null);
+            Equal(2, dialogs.Confirmations.Count);
+            True(dialogs.Confirmations[1].ContainsPreviouslySubmittedReceipts);
+        });
+        return Task.CompletedTask;
+    }
+
+    private static Task TestDateRangeRoundtripAsync()
+    {
+        RunOnSta(() =>
+        {
+            var originalDate = DateTime.Today;
+            var receipt = TestReceipt("receipt-date", originalDate);
+            var settings = TestSettings(separateJobs: true);
+            var store = new MemoryPrintAttemptStore();
+            using var printer = new ScenarioPrintService();
+            var viewModel = CreateViewModel(
+                new ScenarioReceiptService((from, to) => from == DateOnly.FromDateTime(originalDate) && to == from ? [receipt] : []),
+                settings, printer, store, new RecordingDialogs());
+
+            viewModel.InitializeAsync().GetAwaiter().GetResult();
+            viewModel.Receipts.Single().IsSelected = true;
+            viewModel.PrintSelectedCommand.Execute(null);
+
+            viewModel.DateFrom = originalDate.AddDays(-1);
+            viewModel.DateTo = originalDate.AddDays(-1);
+            viewModel.RefreshCommand.Execute(null);
+            Equal(0, viewModel.Receipts.Count);
+
+            viewModel.DateFrom = originalDate;
+            viewModel.DateTo = originalDate;
+            viewModel.RefreshCommand.Execute(null);
+            var restored = viewModel.Receipts.Single();
+            True(restored.HasSubmissionRisk);
+            Equal(101, restored.WindowsJobId);
+        });
+        return Task.CompletedTask;
+    }
+
+    private static Task TestRestartRestoresUnknownAttemptAsync()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"checkbox-attempt-test-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "attempts.json");
+        try
+        {
+            var settings = TestSettings(separateJobs: true);
+            var context = PrintAccountContext.Create(settings);
+            var attempt = PrintAttemptFactory.CreateReceipt("receipt-restart", settings.PrinterName);
+            var firstStore = new JsonPrintAttemptStore(path);
+            firstStore.UpsertMany([
+                new PrintAttemptRecord(attempt.AttemptId, context, "receipt-restart", attempt.PrinterName,
+                    attempt.UniqueJobName, null, attempt.StartedAtUtc, DateTimeOffset.UtcNow,
+                    PrintSubmissionState.SubmissionUnknown, PrintItemStatus.ResultNotConfirmed)
+            ]);
+
+            RunOnSta(() =>
+            {
+                using var printer = new ScenarioPrintService();
+                var restartedStore = new JsonPrintAttemptStore(path);
+                var viewModel = CreateViewModel(
+                    new ScenarioReceiptService((_, _) => [TestReceipt("receipt-restart", DateTime.Today)]),
+                    settings, printer, restartedStore, new RecordingDialogs());
+                viewModel.InitializeAsync().GetAwaiter().GetResult();
+                var restored = viewModel.Receipts.Single();
+                True(restored.HasSubmissionRisk);
+                Equal(PrintItemStatus.ResultNotConfirmed, restored.PrintStatus);
+                True(!restored.CanRetryWithoutWarning);
+            });
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, true);
+        }
+        return Task.CompletedTask;
+    }
+
+    private static Task TestJournalScopeAndRetentionAsync()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"checkbox-attempt-scope-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "attempts.json");
+        try
+        {
+            var settingsA = TestSettings(separateJobs: true);
+            settingsA.Login = "account-a@example.invalid";
+            var settingsB = TestSettings(separateJobs: true);
+            settingsB.Login = "account-b@example.invalid";
+            var contextA = PrintAccountContext.Create(settingsA);
+            var contextB = PrintAccountContext.Create(settingsB);
+            var now = DateTimeOffset.UtcNow;
+            var currentA = PrintAttemptFactory.CreateReceipt("same-receipt", settingsA.PrinterName,
+                startedAtUtc: now.AddMinutes(-2));
+            var expiredA = PrintAttemptFactory.CreateReceipt("expired", settingsA.PrinterName,
+                startedAtUtc: now.AddDays(-31));
+            var currentB = PrintAttemptFactory.CreateReceipt("same-receipt", settingsB.PrinterName,
+                startedAtUtc: now.AddMinutes(-1));
+            var store = new JsonPrintAttemptStore(path);
+            store.UpsertMany([
+                AttemptRecord(currentA, contextA, "same-receipt", PrintSubmissionState.Submitted,
+                    PrintItemStatus.ResultNotConfirmed, now.AddMinutes(-2), 10),
+                AttemptRecord(expiredA, contextA, "expired", PrintSubmissionState.Submitted,
+                    PrintItemStatus.ResultNotConfirmed, now.AddDays(-31), 11),
+                AttemptRecord(currentB, contextB, "same-receipt", PrintSubmissionState.SubmissionUnknown,
+                    PrintItemStatus.ResultNotConfirmed, now.AddMinutes(-1), null)
+            ]);
+
+            var loadedA = store.Load(contextA);
+            var loadedB = store.Load(contextB);
+            Equal(1, loadedA.Count);
+            Equal(10, loadedA.Single().JobId);
+            Equal(1, loadedB.Count);
+            Equal(PrintSubmissionState.SubmissionUnknown, loadedB.Single().SubmissionState);
+            var json = File.ReadAllText(path);
+            True(!json.Contains(settingsA.Login, StringComparison.OrdinalIgnoreCase));
+            True(!json.Contains(settingsB.Login, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, true);
+        }
+        return Task.CompletedTask;
+    }
+
+    private static async Task TestBoundaryUnknownAsync()
+    {
+        var registered = false;
+        var attempt = PrintAttemptFactory.CreateReceipt("receipt-boundary", "Fake printer");
+        var result = await ReliableBatchRunner.RunAsync(new[] { 1 }, (_, _) =>
+        {
+            var submission = PrintSubmissionBoundary.Execute<PrintSubmissionResult>(
+                attempt,
+                _ => { },
+                () =>
+                {
+                    registered = true;
+                    throw new InvalidOperationException("backend threw after registration");
+                },
+                () => null);
+            return Task.FromResult(submission);
+        });
+
+        True(registered);
+        Equal(PrintSubmissionState.SubmissionUnknown, result.Items.Single().SubmissionState);
+        True(result.Items.Single().Error is PrintSubmissionUnknownException);
+        True(!PrintRetryPolicy.CanRetryWithoutWarning(PrintItemStatus.ResultNotConfirmed, true));
+    }
+
+    private static Task TestPreparationFailureAsync()
+    {
+        RunOnSta(() =>
+        {
+            var settings = TestSettings(separateJobs: true);
+            var store = new MemoryPrintAttemptStore();
+            using var printer = new ScenarioPrintService();
+            var imageService = new FakeImageService { FailDownloads = true };
+            var viewModel = CreateViewModel(
+                new ScenarioReceiptService((_, _) => [TestReceipt("prepare-failure", DateTime.Today)]),
+                settings, printer, store, new RecordingDialogs(), imageService);
+            viewModel.InitializeAsync().GetAwaiter().GetResult();
+            viewModel.Receipts.Single().IsSelected = true;
+            viewModel.PrintSelectedCommand.Execute(null);
+
+            var row = viewModel.Receipts.Single();
+            Equal(PrintItemStatus.Error, row.PrintStatus);
+            True(!row.HasSubmissionRisk);
+            True(row.CanRetryWithoutWarning);
+            Equal(0, printer.ReceiptSubmissionCalls);
+            var attempt = store.Load(PrintAccountContext.Create(settings)).Single();
+            Equal(PrintSubmissionState.NotSubmitted, attempt.SubmissionState);
+            Equal(PrintItemStatus.Error, attempt.ItemStatus);
+        });
+        return Task.CompletedTask;
+    }
+
+    private static Task TestUnknownSharedJobAsync()
+    {
+        RunOnSta(() =>
+        {
+            var settings = TestSettings(separateJobs: false);
+            var store = new MemoryPrintAttemptStore();
+            var dialogs = new RecordingDialogs();
+            using var printer = new ScenarioPrintService { SharedSubmissionUnknown = true };
+            var receipts = new[]
+            {
+                TestReceipt("shared-a", DateTime.Today),
+                TestReceipt("shared-b", DateTime.Today)
+            };
+            var viewModel = CreateViewModel(new ScenarioReceiptService((_, _) => receipts),
+                settings, printer, store, dialogs);
+            viewModel.InitializeAsync().GetAwaiter().GetResult();
+            foreach (var row in viewModel.Receipts) row.IsSelected = true;
+            viewModel.PrintSelectedCommand.Execute(null);
+
+            True(viewModel.Receipts.All(x => x.HasSubmissionRisk));
+            True(viewModel.Receipts.All(x => x.PrintStatus == PrintItemStatus.ResultNotConfirmed));
+            var context = PrintAccountContext.Create(settings);
+            var unknown = store.Load(context)
+                .Where(x => x.SubmissionState == PrintSubmissionState.SubmissionUnknown)
+                .ToArray();
+            Equal(2, unknown.Length);
+            Equal(1, unknown.Select(x => x.AttemptId).Distinct().Count());
+
+            foreach (var row in viewModel.Receipts) row.IsSelected = true;
+            viewModel.PrintSelectedCommand.Execute(null);
+            True(dialogs.Confirmations.Last().ContainsPreviouslySubmittedReceipts);
+        });
+        return Task.CompletedTask;
+    }
+
+    private static Task TestBitmapDpiAsync()
+    {
+        RunOnSta(() =>
+        {
+            var settings = TestSettings(separateJobs: true);
+            foreach (var dpi in new[] { 96d, 203d, 300d })
+            {
+                var rendered = TestReceiptBitmapRenderer.Render(settings, dpi);
+                Equal((int)Math.Ceiling(rendered.WidthDip * dpi / 96d), rendered.Bitmap.PixelWidth);
+                Equal((int)Math.Ceiling(rendered.HeightDip * dpi / 96d), rendered.Bitmap.PixelHeight);
+                AssertTestBitmapContentAndEdges(rendered.Bitmap, dpi);
+            }
+        });
+        return Task.CompletedTask;
+    }
+
     private static async Task TestRetryAsync()
     {
         var calls = 0;
@@ -286,6 +547,116 @@ internal static class Program
         Content = new StringContent(JsonSerializer.Serialize(value), Encoding.UTF8, "application/json")
     };
 
+    private static AppSettings TestSettings(bool separateJobs) => new()
+    {
+        ApiBaseUrl = AppSettings.DefaultApiBaseUrl,
+        Login = "tests@example.invalid",
+        PrinterName = "Fake printer",
+        PaperWidth = PaperWidth.Mm58,
+        PrintableWidthMm = 54,
+        SeparatePrintJobPerReceipt = separateJobs
+    };
+
+    private static PrintAttemptRecord AttemptRecord(
+        PrintAttemptDescriptor attempt,
+        string accountContext,
+        string receiptId,
+        PrintSubmissionState state,
+        PrintItemStatus itemStatus,
+        DateTimeOffset updatedAtUtc,
+        int? jobId) =>
+        new(attempt.AttemptId, accountContext, receiptId, attempt.PrinterName,
+            attempt.UniqueJobName, jobId, attempt.StartedAtUtc, updatedAtUtc, state, itemStatus);
+
+    private static ReceiptRecord TestReceipt(string id, DateTime date) => new()
+    {
+        Id = id,
+        Type = ReceiptTypes.Sell,
+        Status = "DONE",
+        Serial = Math.Abs(id.GetHashCode()),
+        FiscalCode = $"F-{id}",
+        FiscalDate = new DateTimeOffset(date.Date.AddHours(12), TimeZoneInfo.Local.GetUtcOffset(date)),
+        TotalSumMinor = 100
+    };
+
+    private static MainViewModel CreateViewModel(
+        IReceiptService receiptService,
+        AppSettings settings,
+        IPrintService printer,
+        IPrintAttemptStore store,
+        IUiDialogService dialogs,
+        IReceiptImageService? imageService = null) =>
+        new(receiptService, imageService ?? new FakeImageService(), new MemorySettingsService(settings),
+            new StaticAuthentication(), printer, store, dialogs, new NullLogger());
+
+    private static void RunOnSta(Action action)
+    {
+        ExceptionDispatchInfo? failure = null;
+        var thread = new Thread(() =>
+        {
+            try { action(); }
+            catch (Exception exception) { failure = ExceptionDispatchInfo.Capture(exception); }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        if (!thread.Join(TimeSpan.FromSeconds(30))) throw new TimeoutException("STA test did not finish.");
+        failure?.Throw();
+    }
+
+    private static void AssertTestBitmapContentAndEdges(BitmapSource bitmap, double dpi)
+    {
+        Equal(PixelFormats.Pbgra32, bitmap.Format);
+        var stride = bitmap.PixelWidth * 4;
+        var pixels = new byte[stride * bitmap.PixelHeight];
+        bitmap.CopyPixels(pixels, stride, 0);
+        var band = Math.Max(4, (int)Math.Ceiling(6 * dpi / 96d));
+
+        True(IsWhite(pixels, stride, 0, 0));
+        True(HasDarkPixel(pixels, stride, bitmap.PixelWidth, bitmap.PixelHeight,
+            0, bitmap.PixelWidth, 0, band));
+        True(HasDarkPixel(pixels, stride, bitmap.PixelWidth, bitmap.PixelHeight,
+            0, bitmap.PixelWidth, bitmap.PixelHeight - band, bitmap.PixelHeight));
+        True(HasDarkPixel(pixels, stride, bitmap.PixelWidth, bitmap.PixelHeight,
+            0, band, 0, bitmap.PixelHeight));
+        True(HasDarkPixel(pixels, stride, bitmap.PixelWidth, bitmap.PixelHeight,
+            bitmap.PixelWidth - band, bitmap.PixelWidth, 0, bitmap.PixelHeight));
+        True(HasDarkPixel(pixels, stride, bitmap.PixelWidth, bitmap.PixelHeight,
+            band, bitmap.PixelWidth - band, band, bitmap.PixelHeight - band));
+        True(HasDarkPixel(pixels, stride, bitmap.PixelWidth, bitmap.PixelHeight,
+            band, bitmap.PixelWidth - band,
+            Math.Max(band, bitmap.PixelHeight - band * 5), bitmap.PixelHeight - band));
+    }
+
+    private static bool HasDarkPixel(
+        byte[] pixels,
+        int stride,
+        int width,
+        int height,
+        int x0,
+        int x1,
+        int y0,
+        int y1)
+    {
+        x0 = Math.Clamp(x0, 0, width);
+        x1 = Math.Clamp(x1, 0, width);
+        y0 = Math.Clamp(y0, 0, height);
+        y1 = Math.Clamp(y1, 0, height);
+        for (var y = y0; y < y1; y++)
+        for (var x = x0; x < x1; x++)
+        {
+            var offset = y * stride + x * 4;
+            if (pixels[offset] < 80 && pixels[offset + 1] < 80 && pixels[offset + 2] < 80 && pixels[offset + 3] > 0)
+                return true;
+        }
+        return false;
+    }
+
+    private static bool IsWhite(byte[] pixels, int stride, int x, int y)
+    {
+        var offset = y * stride + x * 4;
+        return pixels[offset] > 240 && pixels[offset + 1] > 240 && pixels[offset + 2] > 240 && pixels[offset + 3] > 0;
+    }
+
     private static void Equal<T>(T expected, T actual)
     {
         if (!EqualityComparer<T>.Default.Equals(expected, actual)) throw new Exception($"Expected {expected}, got {actual}.");
@@ -315,11 +686,12 @@ internal static class Program
         }
     }
 
-    private static PrintSubmissionResult FakeSubmission(int jobId)
+    private static PrintSubmissionResult FakeSubmission(int jobId, PrintAttemptDescriptor? attempt = null)
     {
         var validation = new PrinterPageValidation(Mm(58), Mm(100), Mm(58), Mm(100),
             Mm(2), Mm(1), Mm(54), Mm(98), 3, false);
-        return new PrintSubmissionResult(jobId, $"job-{jobId}", "Fake printer", validation,
+        attempt ??= new PrintAttemptDescriptor(Guid.NewGuid(), "Fake printer", $"job-{jobId}", DateTimeOffset.UtcNow);
+        return new PrintSubmissionResult(attempt, jobId, validation,
             new WindowsPrintJobObservation(jobId, WindowsPrintJobState.Queued,
                 "accepted by fake Windows queue", false));
     }
@@ -328,6 +700,123 @@ internal static class Program
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Task.FromResult(handler(request));
+    }
+
+    private sealed class ScenarioReceiptService(
+        Func<DateOnly, DateOnly, IReadOnlyList<ReceiptRecord>> load) : IReceiptService
+    {
+        public Task<IReadOnlyList<ReceiptRecord>> GetReceiptsAsync(
+            DateOnly from,
+            DateOnly to,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(load(from, to));
+        }
+    }
+
+    private sealed class FakeImageService : IReceiptImageService
+    {
+        public bool FailDownloads { get; init; }
+        public Task<byte[]> GetPngAsync(string receiptId, int paperWidthMm, CancellationToken cancellationToken = default) =>
+            FailDownloads
+                ? Task.FromException<byte[]>(new InvalidOperationException("preparation failed"))
+                : Task.FromResult(new byte[] { 1, 2, 3 });
+        public Task<int> ClearCacheAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
+        public Task CleanupAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private sealed class MemoryPrintAttemptStore : IPrintAttemptStore
+    {
+        private readonly List<PrintAttemptRecord> _records = [];
+
+        public IReadOnlyList<PrintAttemptRecord> Load(string accountContext) =>
+            _records.Where(x => x.AccountContext == accountContext).OrderBy(x => x.UpdatedAtUtc).ToArray();
+
+        public void UpsertMany(IReadOnlyList<PrintAttemptRecord> attempts)
+        {
+            foreach (var attempt in attempts)
+            {
+                _records.RemoveAll(x => x.AttemptId == attempt.AttemptId &&
+                                        x.AccountContext == attempt.AccountContext &&
+                                        x.ReceiptId == attempt.ReceiptId);
+                _records.Add(attempt);
+            }
+        }
+    }
+
+    private sealed class RecordingDialogs : IUiDialogService
+    {
+        public List<PrintBatchConfirmation> Confirmations { get; } = [];
+        public List<string> Errors { get; } = [];
+
+        public bool ConfirmPrint(PrintBatchConfirmation confirmation)
+        {
+            Confirmations.Add(confirmation);
+            return true;
+        }
+
+        public void ShowInfo(string message, string title = "Checkbox Batch Printer") { }
+        public void ShowError(string message, string title = "Помилка") => Errors.Add(message);
+        public Task<bool> OpenSettingsAsync() => Task.FromResult(false);
+        public void ShowPreview(byte[] png, ReceiptRowViewModel receipt) { }
+    }
+
+    private sealed class ScenarioPrintService : IPrintService
+    {
+        private int _nextJobId = 100;
+        public bool SharedSubmissionUnknown { get; init; }
+        public int ReceiptSubmissionCalls { get; private set; }
+
+        public IReadOnlyList<string> GetInstalledPrinters() => ["Fake printer"];
+        public bool PrinterExists(string printerName) => printerName == "Fake printer";
+
+        public Task<PrintSubmissionResult> PrintReceiptAsync(
+            byte[] png,
+            AppSettings settings,
+            PrintAttemptDescriptor attempt,
+            Action<PrintAttemptDescriptor> markSubmissionStarted,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ReceiptSubmissionCalls++;
+            markSubmissionStarted(attempt);
+            return Task.FromResult(FakeSubmission(Interlocked.Increment(ref _nextJobId), attempt));
+        }
+
+        public Task<PrintSubmissionResult> PrintReceiptsAsSingleJobAsync(
+            IReadOnlyList<(byte[] Png, string ReceiptId)> receipts,
+            AppSettings settings,
+            PrintAttemptDescriptor attempt,
+            Action<PrintAttemptDescriptor> markSubmissionStarted,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            markSubmissionStarted(attempt);
+            if (SharedSubmissionUnknown)
+                throw new PrintSubmissionUnknownException(attempt,
+                    new InvalidOperationException("fake backend threw after the shared job was registered"));
+            return Task.FromResult(FakeSubmission(Interlocked.Increment(ref _nextJobId), attempt));
+        }
+
+        public Task<PrintSubmissionResult> PrintTestAsync(
+            AppSettings settings,
+            CancellationToken cancellationToken = default)
+        {
+            var attempt = PrintAttemptFactory.CreateReceipt("TEST", settings.PrinterName);
+            return Task.FromResult(FakeSubmission(Interlocked.Increment(ref _nextJobId), attempt));
+        }
+
+        public Task<WindowsPrintJobObservation> GetJobStatusAsync(
+            PrintSubmissionResult submission,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new WindowsPrintJobObservation(
+                submission.JobId,
+                WindowsPrintJobState.Disappeared,
+                "fake job left the queue; physical result unknown",
+                true));
+
+        public void Dispose() { }
     }
 
     private sealed class StaticAuthentication : IAuthenticationService

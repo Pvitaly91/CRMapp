@@ -24,6 +24,31 @@ public enum WindowsPrintJobState
     Unknown
 }
 
+public enum PrintSubmissionState
+{
+    NotSubmitted,
+    SubmissionUnknown,
+    Submitted
+}
+
+public sealed record PrintAttemptDescriptor(
+    Guid AttemptId,
+    string PrinterName,
+    string UniqueJobName,
+    DateTimeOffset StartedAtUtc);
+
+public sealed record PrintAttemptRecord(
+    Guid AttemptId,
+    string AccountContext,
+    string ReceiptId,
+    string PrinterName,
+    string UniqueJobName,
+    int? JobId,
+    DateTimeOffset StartedAtUtc,
+    DateTimeOffset UpdatedAtUtc,
+    PrintSubmissionState SubmissionState,
+    PrintItemStatus ItemStatus);
+
 public sealed record WindowsPrintJobObservation(
     int JobId,
     WindowsPrintJobState State,
@@ -43,11 +68,22 @@ public sealed record PrinterPageValidation(
     bool DriverResolvedConflict);
 
 public sealed record PrintSubmissionResult(
+    PrintAttemptDescriptor Attempt,
     int JobId,
-    string UniqueJobName,
-    string PrinterName,
     PrinterPageValidation PageValidation,
-    WindowsPrintJobObservation InitialObservation);
+    WindowsPrintJobObservation InitialObservation)
+{
+    public string UniqueJobName => Attempt.UniqueJobName;
+    public string PrinterName => Attempt.PrinterName;
+}
+
+public sealed class PrintSubmissionUnknownException(PrintAttemptDescriptor attempt, Exception innerException)
+    : Exception(
+        $"Передавання завдання «{attempt.UniqueJobName}» у чергу Windows почалося, але результат невідомий.",
+        innerException)
+{
+    public PrintAttemptDescriptor Attempt { get; } = attempt;
+}
 
 public sealed record PrintBatchSnapshot<T>(IReadOnlyList<T> Items, int HiddenSelectedCount);
 
@@ -61,6 +97,7 @@ public sealed record BatchResult<T>(IReadOnlyList<BatchItemResult<T>> Items)
 
 public sealed record BatchSubmissionOutcome<T>(
     T Item,
+    PrintSubmissionState SubmissionState,
     PrintSubmissionResult? Submission,
     Exception? Error,
     bool Cancelled);
@@ -68,6 +105,7 @@ public sealed record BatchSubmissionOutcome<T>(
 public sealed record BatchSubmissionResult<T>(IReadOnlyList<BatchSubmissionOutcome<T>> Items)
 {
     public int SubmittedCount => Items.Count(x => x.Submission is not null);
+    public int UnknownCount => Items.Count(x => x.SubmissionState == PrintSubmissionState.SubmissionUnknown);
     public int ErrorCount => Items.Count(x => x.Error is not null);
     public int CancelledCount => Items.Count(x => x.Cancelled);
 }
@@ -197,11 +235,44 @@ public static class PrintSelectionPlanner
 
 public static class PrintRetryPolicy
 {
-    public static bool CanRetryWithoutWarning(PrintItemStatus status, bool hasWindowsJobId) =>
-        status == PrintItemStatus.Error && !hasWindowsJobId;
+    public static bool CanRetryWithoutWarning(PrintItemStatus status, bool hasSubmissionRisk) =>
+        status == PrintItemStatus.Error && !hasSubmissionRisk;
 
-    public static bool RequiresExplicitConfirmation(PrintItemStatus status, bool hasWindowsJobId) =>
-        hasWindowsJobId || status is PrintItemStatus.SubmittedToWindowsQueue or PrintItemStatus.Paused or PrintItemStatus.ResultNotConfirmed;
+    public static bool RequiresExplicitConfirmation(PrintItemStatus status, bool hasSubmissionRisk) =>
+        hasSubmissionRisk || status is PrintItemStatus.SubmittedToWindowsQueue or PrintItemStatus.Paused or PrintItemStatus.ResultNotConfirmed;
+}
+
+public static class PrintSubmissionBoundary
+{
+    public static T Execute<T>(
+        PrintAttemptDescriptor attempt,
+        Action<PrintAttemptDescriptor> markSubmissionStarted,
+        Func<T> submit,
+        Func<T?> tryRecoverSubmittedJob)
+        where T : class
+    {
+        // This callback must persist SubmissionUnknown before the spooler call.
+        // If it fails, submit is never invoked and the attempt remains NotSubmitted.
+        markSubmissionStarted(attempt);
+        try
+        {
+            return submit();
+        }
+        catch (Exception exception)
+        {
+            try
+            {
+                var recovered = tryRecoverSubmittedJob();
+                if (recovered is not null) return recovered;
+            }
+            catch (Exception)
+            {
+                // Recovery is best-effort. Absence or lookup failure is never proof
+                // that the spooler did not accept the job.
+            }
+            throw new PrintSubmissionUnknownException(attempt, exception);
+        }
+    }
 }
 
 public static class ReliableBatchRunner
@@ -217,7 +288,7 @@ public static class ReliableBatchRunner
             if (cancellationToken.IsCancellationRequested)
             {
                 for (; index < items.Count; index++)
-                    outcomes.Add(new BatchSubmissionOutcome<T>(items[index], null, null, true));
+                    outcomes.Add(new BatchSubmissionOutcome<T>(items[index], PrintSubmissionState.NotSubmitted, null, null, true));
                 break;
             }
 
@@ -225,18 +296,22 @@ public static class ReliableBatchRunner
             try
             {
                 var submission = await submit(item, cancellationToken);
-                outcomes.Add(new BatchSubmissionOutcome<T>(item, submission, null, false));
+                outcomes.Add(new BatchSubmissionOutcome<T>(item, PrintSubmissionState.Submitted, submission, null, false));
+            }
+            catch (PrintSubmissionUnknownException exception)
+            {
+                outcomes.Add(new BatchSubmissionOutcome<T>(item, PrintSubmissionState.SubmissionUnknown, null, exception, false));
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                outcomes.Add(new BatchSubmissionOutcome<T>(item, null, null, true));
+                outcomes.Add(new BatchSubmissionOutcome<T>(item, PrintSubmissionState.NotSubmitted, null, null, true));
                 for (index++; index < items.Count; index++)
-                    outcomes.Add(new BatchSubmissionOutcome<T>(items[index], null, null, true));
+                    outcomes.Add(new BatchSubmissionOutcome<T>(items[index], PrintSubmissionState.NotSubmitted, null, null, true));
                 break;
             }
             catch (Exception exception)
             {
-                outcomes.Add(new BatchSubmissionOutcome<T>(item, null, exception, false));
+                outcomes.Add(new BatchSubmissionOutcome<T>(item, PrintSubmissionState.NotSubmitted, null, exception, false));
             }
         }
         return new BatchSubmissionResult<T>(outcomes);

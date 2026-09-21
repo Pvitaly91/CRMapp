@@ -11,6 +11,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Xps.Packaging;
 using CheckboxBatchPrinter.Core.Models;
+using CheckboxBatchPrinter.Core.Services;
 
 namespace CheckboxBatchPrinter.Services;
 
@@ -34,20 +35,23 @@ public sealed class WindowsPrintService : IPrintService
 
     public Task<PrintSubmissionResult> PrintReceiptAsync(
         byte[] png,
-        string receiptId,
         AppSettings settings,
+        PrintAttemptDescriptor attempt,
+        Action<PrintAttemptDescriptor> markSubmissionStarted,
         CancellationToken cancellationToken = default) =>
         _worker.InvokeAsync(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
             using var server = new LocalPrintServer();
             using var queue = FindQueue(server, settings.PrinterName);
-            return SubmitReceiptCore(queue, DecodeGrayscale(png), receiptId, settings, cancellationToken);
+            return SubmitReceiptCore(queue, DecodeGrayscale(png), settings, attempt, markSubmissionStarted, cancellationToken);
         }, cancellationToken);
 
     public Task<PrintSubmissionResult> PrintReceiptsAsSingleJobAsync(
         IReadOnlyList<(byte[] Png, string ReceiptId)> receipts,
         AppSettings settings,
+        PrintAttemptDescriptor attempt,
+        Action<PrintAttemptDescriptor> markSubmissionStarted,
         CancellationToken cancellationToken = default) =>
         _worker.InvokeAsync(() =>
         {
@@ -72,18 +76,19 @@ public sealed class WindowsPrintService : IPrintService
                 };
                 document.Pages.Add(ToPageContent(BuildPage(item.Source, pageLayout)));
             }
-            return SubmitDocument(queue, document, prepared.Ticket,
-                $"Checkbox batch {receipts.Count} {Guid.NewGuid():N}", prepared.Layout.Validation, cancellationToken);
+            return SubmitDocument(queue, document, prepared.Ticket, attempt, markSubmissionStarted,
+                prepared.Layout.Validation, cancellationToken);
         }, cancellationToken);
 
     public Task<PrintSubmissionResult> PrintTestAsync(AppSettings settings, CancellationToken cancellationToken = default) =>
         _worker.InvokeAsync(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var source = CreateTestBitmap(settings);
+            var source = TestReceiptBitmapRenderer.Render(settings, 203).Bitmap;
             using var server = new LocalPrintServer();
             using var queue = FindQueue(server, settings.PrinterName);
-            return SubmitReceiptCore(queue, source, "TEST", settings, cancellationToken);
+            var attempt = PrintAttemptFactory.CreateReceipt("TEST", settings.PrinterName);
+            return SubmitReceiptCore(queue, source, settings, attempt, _ => { }, cancellationToken);
         }, cancellationToken);
 
     public Task<WindowsPrintJobObservation> GetJobStatusAsync(
@@ -113,16 +118,16 @@ public sealed class WindowsPrintService : IPrintService
     private static PrintSubmissionResult SubmitReceiptCore(
         PrintQueue queue,
         BitmapSource source,
-        string receiptId,
         AppSettings settings,
+        PrintAttemptDescriptor attempt,
+        Action<PrintAttemptDescriptor> markSubmissionStarted,
         CancellationToken cancellationToken)
     {
         var prepared = PreparePage(queue, source, settings);
         var document = new FixedDocument();
         document.Pages.Add(ToPageContent(BuildPage(source, prepared.Layout)));
-        var safeReceiptId = string.Concat(receiptId.Take(24).Where(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_'));
-        return SubmitDocument(queue, document, prepared.Ticket,
-            $"Checkbox {safeReceiptId} {Guid.NewGuid():N}", prepared.Layout.Validation, cancellationToken);
+        return SubmitDocument(queue, document, prepared.Ticket, attempt, markSubmissionStarted,
+            prepared.Layout.Validation, cancellationToken);
     }
 
     private static PreparedPage PreparePage(PrintQueue queue, BitmapSource source, AppSettings settings)
@@ -170,7 +175,8 @@ public sealed class WindowsPrintService : IPrintService
         PrintQueue queue,
         FixedDocument document,
         PrintTicket ticket,
-        string uniqueJobName,
+        PrintAttemptDescriptor attempt,
+        Action<PrintAttemptDescriptor> markSubmissionStarted,
         PrinterPageValidation validation,
         CancellationToken cancellationToken)
     {
@@ -185,12 +191,19 @@ public sealed class WindowsPrintService : IPrintService
 
             // This is the last safe cancellation point. After AddJob returns, a physical copy may already print.
             cancellationToken.ThrowIfCancellationRequested();
-            var printerName = queue.FullName;
-            using var job = queue.AddJob(uniqueJobName, temporaryXps, false);
-            var jobId = job.JobIdentifier;
-            var observation = new WindowsPrintJobObservation(jobId, WindowsPrintJobState.Queued,
-                "Завдання прийнято чергою Windows; фізичний результат ще невідомий.", false);
-            return new PrintSubmissionResult(jobId, uniqueJobName, printerName, validation, observation);
+            var queuedAttempt = attempt with { PrinterName = queue.FullName };
+            return PrintSubmissionBoundary.Execute(
+                queuedAttempt,
+                markSubmissionStarted,
+                () =>
+                {
+                    using var job = queue.AddJob(queuedAttempt.UniqueJobName, temporaryXps, false);
+                    var jobId = job.JobIdentifier;
+                    var observation = new WindowsPrintJobObservation(jobId, WindowsPrintJobState.Queued,
+                        "Завдання прийнято чергою Windows; фізичний результат ще невідомий.", false);
+                    return new PrintSubmissionResult(queuedAttempt, jobId, validation, observation);
+                },
+                () => TryRecoverSubmittedJob(queue, queuedAttempt, validation));
         }
         finally
         {
@@ -219,6 +232,38 @@ public sealed class WindowsPrintService : IPrintService
         page.Arrange(new Rect(0, 0, layout.PageWidthDip, layout.PageHeightDip));
         page.UpdateLayout();
         return page;
+    }
+
+    private static PrintSubmissionResult? TryRecoverSubmittedJob(
+        PrintQueue queue,
+        PrintAttemptDescriptor attempt,
+        PrinterPageValidation validation)
+    {
+        for (var lookup = 0; lookup < 3; lookup++)
+        {
+            queue.Refresh();
+            var jobs = queue.GetPrintJobInfoCollection().ToArray();
+            try
+            {
+                var found = jobs.FirstOrDefault(x =>
+                    string.Equals(x.Name, attempt.UniqueJobName, StringComparison.Ordinal));
+                if (found is not null)
+                {
+                    found.Refresh();
+                    return new PrintSubmissionResult(
+                        attempt,
+                        found.JobIdentifier,
+                        validation,
+                        MapObservation(found.JobIdentifier, found.JobStatus));
+                }
+            }
+            finally
+            {
+                foreach (var job in jobs) job.Dispose();
+            }
+            if (lookup < 2) Thread.Sleep(100);
+        }
+        return null;
     }
 
     private static PageContent ToPageContent(FixedPage page)
@@ -272,31 +317,6 @@ public sealed class WindowsPrintService : IPrintService
         var grayscale = new FormatConvertedBitmap(frame, PixelFormats.Gray8, null, 0);
         grayscale.Freeze();
         return grayscale;
-    }
-
-    private static BitmapSource CreateTestBitmap(AppSettings settings)
-    {
-        var width = Math.Max(200, (int)Math.Round(settings.PrintableWidthMm / 25.4 * 203));
-        var panel = new StackPanel
-        {
-            Width = width,
-            Height = 310,
-            Background = Brushes.White,
-            Children =
-            {
-                new TextBlock { Text = "CHECKBOX BATCH PRINTER", FontSize = 24, FontWeight = FontWeights.Bold, TextAlignment = TextAlignment.Center, Margin = new Thickness(6, 12, 6, 5) },
-                new TextBlock { Text = "Тестовий друк", FontSize = 22, TextAlignment = TextAlignment.Center, Margin = new Thickness(6) },
-                new TextBlock { Text = DateTime.Now.ToString("dd.MM.yyyy HH:mm:ss"), FontSize = 18, TextAlignment = TextAlignment.Center, Margin = new Thickness(6) },
-                new TextBlock { Text = $"Папір: {settings.EffectivePaperWidthMm:0.#} мм\nОбласть: {settings.PrintableWidthMm:0.#} мм", FontSize = 16, TextAlignment = TextAlignment.Center, Margin = new Thickness(6) },
-                new TextBlock { Text = "Результат підтверджує користувач", FontSize = 14, TextAlignment = TextAlignment.Center, Margin = new Thickness(6) }
-            }
-        };
-        panel.Measure(new Size(width, 310));
-        panel.Arrange(new Rect(0, 0, width, 310));
-        var bitmap = new RenderTargetBitmap(width, 310, 203, 203, PixelFormats.Pbgra32);
-        bitmap.Render(panel);
-        bitmap.Freeze();
-        return bitmap;
     }
 
     private static double MillimetersToDip(double value) => value * PrintGeometry.DipPerMillimeter;
