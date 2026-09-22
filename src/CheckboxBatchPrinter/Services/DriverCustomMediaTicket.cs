@@ -38,27 +38,52 @@ internal static class DriverCustomMediaTicket
             var heightHundredths = checked((int)Math.Ceiling(heightMm / MmPerHundredthInch));
             if (heightHundredths <= 0 || heightHundredths > short.MaxValue) return false;
 
-            var pageSettings = (PageSettings)printer.DefaultPageSettings.Clone();
-            pageSettings.PaperSize = new PaperSize("Checkbox receipt", widthHundredths, heightHundredths);
-            var devMode = GetDevMode(printer, pageSettings);
             using var converter = new PrintTicketConverter(queue.FullName, 1);
-            var candidate = converter.ConvertDevModeToPrintTicket(devMode);
-            var merged = queue.MergeAndValidatePrintTicket(queue.DefaultPrintTicket ?? new PrintTicket(), candidate);
-            var ticket = merged.ValidatedPrintTicket;
-            var size = ticket.PageMediaSize;
-            if (size?.Width is not double acceptedWidth || size.Height is not double acceptedHeight)
-                return false;
+            var papers = new[] { new PaperSize("Checkbox receipt", widthHundredths, heightHundredths) }
+                .Concat(printer.PaperSizes.Cast<PaperSize>()
+                    .Where(paper => Math.Abs(paper.Width - widthHundredths) <= 2 &&
+                                    paper.Height >= heightHundredths &&
+                                    paper.Height * MmPerHundredthInch <= heightMm + 60)
+                    .OrderBy(paper => paper.Height));
+            foreach (var paper in papers)
+            {
+                try
+                {
+                    var pageSettings = (PageSettings)printer.DefaultPageSettings.Clone();
+                    pageSettings.PaperSize = paper;
+                    var devMode = GetDevMode(printer, pageSettings);
+                    var candidate = converter.ConvertDevModeToPrintTicket(devMode);
+                    var merged = queue.MergeAndValidatePrintTicket(queue.DefaultPrintTicket ?? new PrintTicket(), candidate);
+                    var ticket = merged.ValidatedPrintTicket;
+                    var size = ticket.PageMediaSize;
+                    if (size?.Width is not double acceptedWidth || size.Height is not double acceptedHeight)
+                        continue;
 
-            var area = queue.GetPrintCapabilities(ticket).PageImageableArea;
-            if (area is null) return false;
-            var metrics = new DriverPageMetrics(acceptedWidth, acceptedHeight,
-                area.OriginWidth, area.OriginHeight, area.ExtentWidth, area.ExtentHeight,
-                0, merged.ConflictStatus == ConflictStatus.ConflictResolved);
-            var request = new RequestedPageLayout(acceptedWidth, acceptedHeight,
-                geometry.WidthDip, geometry.HeightDip, geometry.MarginDip);
-            var layout = PrinterPageValidator.Validate(request, metrics);
-            prepared = new WindowsPrintService.PreparedPage(ticket, layout, devMode);
-            return true;
+                    var area = queue.GetPrintCapabilities(ticket).PageImageableArea;
+                    if (area is null) continue;
+                    var metrics = new DriverPageMetrics(acceptedWidth, acceptedHeight,
+                        area.OriginWidth, area.OriginHeight, area.ExtentWidth, area.ExtentHeight,
+                        0, merged.ConflictStatus == ConflictStatus.ConflictResolved);
+                    var request = new RequestedPageLayout(acceptedWidth, acceptedHeight,
+                        geometry.WidthDip, geometry.HeightDip, geometry.MarginDip);
+                    var layout = PrinterPageValidator.Validate(request, metrics);
+
+                    // PrintTicket validation alone is insufficient for v3 roll drivers:
+                    // RPP210 reports an 87 mm custom ticket but CreateDC uses its 2527 mm roll.
+                    var gdi = GdiReceiptPrinter.Probe(queue.FullName, devMode);
+                    if (Math.Abs(gdi.PhysicalWidthMm - acceptedWidth / PrintGeometry.DipPerMillimeter) > 2 ||
+                        Math.Abs(gdi.PhysicalHeightMm - acceptedHeight / PrintGeometry.DipPerMillimeter) > 2)
+                        continue;
+                    prepared = new WindowsPrintService.PreparedPage(ticket, layout, devMode);
+                    return true;
+                }
+                catch (Exception exception) when (exception is ArgumentException or OverflowException or
+                    InvalidOperationException or ExternalException or PrintSystemException or UnsupportedPrinterPageException)
+                {
+                    // Try the next short driver-advertised form.
+                }
+            }
+            return false;
         }
         catch (Exception exception) when (exception is ArgumentException or OverflowException or
             InvalidOperationException or ExternalException or PrintSystemException or UnsupportedPrinterPageException)

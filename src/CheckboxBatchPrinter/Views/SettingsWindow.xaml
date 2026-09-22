@@ -38,13 +38,19 @@
                     <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{Binding Printers}" SelectedItem="{Binding SelectedPrinter}" />
                     <TextBlock Grid.Row="1" Text="Ширина паперу" VerticalAlignment="Center" />
                     <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding PaperWidths}" SelectedValuePath="Value" SelectedValue="{Binding PaperWidth}" />
-                    <TextBlock Grid.Row="2" Text="Custom, мм" VerticalAlignment="Center" />
-                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding CustomPaperWidthMm}" IsEnabled="{Binding IsCustomPaperWidth}" />
+                    <TextBlock Grid.Row="2" Text="Довільна ширина, мм" VerticalAlignment="Center"
+                               Visibility="{Binding IsCustomPaperWidth, Converter={StaticResource BoolToVisibility}}" />
+                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding CustomPaperWidthMm}"
+                             Visibility="{Binding IsCustomPaperWidth, Converter={StaticResource BoolToVisibility}}" />
                     <TextBlock Grid.Row="3" Text="Ширина області друку, мм" VerticalAlignment="Center" />
                     <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding PrintableWidthMm}" />
                     <CheckBox Grid.Row="4" Grid.ColumnSpan="2" IsChecked="{Binding SeparatePrintJobPerReceipt}" Margin="3,12"
                               Content="Окреме завдання друку для кожного чека (рекомендовано для автообрізання)" />
-                    <Button Grid.Row="5" Grid.Column="1" Content="Надрукувати тест" HorizontalAlignment="Left" Click="TestPrint_Click" />
+                    <Button Grid.Row="5" Grid.Column="1" Content="Надрукувати тестовий чек"
+                            HorizontalAlignment="Left" Margin="3,12,0,0" Padding="14,7"
+                            Background="#1769AA" Foreground="White" Click="TestPrint_Click" />
+                    <TextBlock Grid.Row="6" Grid.ColumnSpan="2" Margin="3,14,3,0" TextWrapping="Wrap"
+                               Foreground="#667085" Text="Реальні чеки друкуються з головного вікна після завантаження списку Checkbox." />
                 </Grid>
             </TabItem>
             <TabItem Header="Діагностика">

@@ -50,15 +50,18 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
-        if (args is ["--physical-test-rongta"])
+        if (args.Length is 1 or 2 && args[0] == "--physical-test-rongta")
         {
+            var printableWidth = args.Length == 2
+                ? double.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture)
+                : 40;
             WindowsPrintService.DiagnosticTrace = step => Console.WriteLine($"TRACE {DateTimeOffset.Now:HH:mm:ss} {step}");
             using var printer = new WindowsPrintService();
             var settings = new AppSettings
             {
                 PrinterName = "RONGTA RPP210 Series Printer",
                 PaperWidth = PaperWidth.Mm50,
-                PrintableWidthMm = 40
+                PrintableWidthMm = printableWidth
             };
             var submission = await printer.PrintTestAsync(settings);
             Console.WriteLine($"Submitted job {submission.JobId} to {submission.PrinterName}; " +
@@ -293,6 +296,16 @@ internal static class Program
             if (page.ImageableWidthDip < prepared.Layout.ImageWidthDip ||
                 page.ImageableHeightDip < prepared.Layout.ImageHeightDip + Mm(1))
                 throw new Exception("The actual imageable area clips the test receipt.");
+
+            // The driver's arbitrary custom form below 100 mm silently becomes
+            // its 2527 mm roll, even though PrintTicket still reports the short size.
+            settings.PrintableWidthMm = 48;
+            var shortSource = TestReceiptBitmapRenderer.Render(settings, 203).Bitmap;
+            var shortPage = WindowsPrintService.PreparePage(queue, shortSource, settings);
+            var shortGdi = GdiReceiptPrinter.Probe(printerName, shortPage.DriverDevMode!);
+            if (shortGdi.PhysicalHeightMm is < 99 or > 101 ||
+                shortPage.Layout.Validation.AcceptedHeightDip > Mm(101))
+                throw new Exception("RONGTA did not select its 100 mm stock for the short test receipt.");
 
             settings.PaperWidth = PaperWidth.Mm58;
             settings.PrintableWidthMm = 54;
