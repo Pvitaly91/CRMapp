@@ -66,7 +66,8 @@ public sealed class WindowsPrintService : IPrintService
             foreach (var item in sources)
             {
                 var geometry = PrintGeometry.Calculate(item.Source.PixelWidth, item.Source.PixelHeight,
-                    settings.PrintableWidthMm, settings.EffectivePaperWidthMm);
+                    prepared.Layout.ImageWidthDip / PrintGeometry.DipPerMillimeter,
+                    prepared.Layout.PageWidthDip / PrintGeometry.DipPerMillimeter);
                 if (geometry.HeightDip + geometry.MarginDip * 2 > prepared.Layout.Validation.ImageableHeightDip)
                     throw new UnsupportedPrinterPageException("Один із чеків не вміщується у прийняту драйвером сторінку.");
                 var pageLayout = prepared.Layout with
@@ -130,7 +131,7 @@ public sealed class WindowsPrintService : IPrintService
             prepared.Layout.Validation, cancellationToken);
     }
 
-    private static PreparedPage PreparePage(PrintQueue queue, BitmapSource source, AppSettings settings)
+    internal static PreparedPage PreparePage(PrintQueue queue, BitmapSource source, AppSettings settings)
     {
         var geometry = PrintGeometry.Calculate(source.PixelWidth, source.PixelHeight,
             settings.PrintableWidthMm, settings.EffectivePaperWidthMm);
@@ -167,8 +168,20 @@ public sealed class WindowsPrintService : IPrintService
             area.OriginWidth, area.OriginHeight, area.ExtentWidth, area.ExtentHeight,
             acceptedCapabilities.PageMediaSizeCapability?.Count ?? 0,
             validationResult.ConflictStatus == ConflictStatus.ConflictResolved);
-        var layout = PrinterPageValidator.Validate(requested, metrics);
-        return new PreparedPage(acceptedTicket, layout);
+        try
+        {
+            var layout = PrinterPageValidator.Validate(requested, metrics);
+            return new PreparedPage(acceptedTicket, layout);
+        }
+        catch (UnsupportedPrinterPageException originalError)
+        {
+            // Some v3 roll drivers expose custom stock through DEVMODE, but ignore
+            // PageMediaSize set directly on a WPF PrintTicket (RPP210 does this).
+            if (DriverCustomMediaTicket.TryCreate(queue, settings, source, out var custom))
+                return custom;
+            throw new UnsupportedPrinterPageException(
+                $"{originalError.Message} Автоматичне налаштування формату через драйвер не вдалося.");
+        }
     }
 
     private static PrintSubmissionResult SubmitDocument(
@@ -197,7 +210,7 @@ public sealed class WindowsPrintService : IPrintService
                 markSubmissionStarted,
                 () =>
                 {
-                    using var job = queue.AddJob(queuedAttempt.UniqueJobName, temporaryXps, false);
+                    using var job = queue.AddJob(queuedAttempt.UniqueJobName, temporaryXps, false, ticket);
                     var jobId = job.JobIdentifier;
                     var observation = new WindowsPrintJobObservation(jobId, WindowsPrintJobState.Queued,
                         "Завдання прийнято чергою Windows; фізичний результат ще невідомий.", false);
@@ -344,7 +357,7 @@ public sealed class WindowsPrintService : IPrintService
         finally { Marshal.FreeHGlobal(buffer); }
     }
 
-    private sealed record PreparedPage(PrintTicket Ticket, ValidatedPageLayout Layout);
+    internal sealed record PreparedPage(PrintTicket Ticket, ValidatedPageLayout Layout);
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct PrinterInfo4

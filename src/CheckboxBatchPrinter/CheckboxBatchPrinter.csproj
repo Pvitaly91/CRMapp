@@ -3,14 +3,21 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <Platforms>x64</Platforms>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>CheckboxBatchPrinter</AssemblyName>
     <RootNamespace>CheckboxBatchPrinter</RootNamespace>
     <Version>1.0.0</Version>
     <DebugType>embedded</DebugType>
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
   </PropertyGroup>
   <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>CheckboxBatchPrinter.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
     <ProjectReference Include="..\CheckboxBatchPrinter.Core\CheckboxBatchPrinter.Core.csproj" />
   </ItemGroup>
 </Project>

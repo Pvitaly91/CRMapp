@@ -1,6 +1,7 @@
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Printing;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Json;
@@ -31,6 +32,7 @@ internal static class Program
         ("hidden selection is counted and excluded", TestHiddenSelectionAsync),
         ("unsupported page size is rejected", TestUnsupportedPageSizeAsync),
         ("short narrow and custom pages", TestShortNarrowAndCustomPagesAsync),
+        ("installed roll driver accepts a short custom page without submission", TestInstalledRollDriverCustomPageAsync),
         ("long receipt validation", TestLongReceiptAsync),
         ("one submission error keeps remaining items", TestReliableBatchContinuesAsync),
         ("submitted receipt survives F5 and warns on repeat", TestRefreshPreservesSubmittedAttemptAsync),
@@ -238,6 +240,48 @@ internal static class Program
 
         var clamped = supported with { AcceptedHeightDip = Mm(300), ImageableHeightDip = Mm(298) };
         Throws<UnsupportedPrinterPageException>(() => PrinterPageValidator.Validate(request, clamped));
+        return Task.CompletedTask;
+    }
+
+    private static Task TestInstalledRollDriverCustomPageAsync()
+    {
+        const string printerName = "RONGTA RPP210 Series Printer";
+        using var printService = new WindowsPrintService();
+        if (!printService.PrinterExists(printerName)) return Task.CompletedTask;
+
+        RunOnSta(() =>
+        {
+            using var server = new LocalPrintServer();
+            using var queue = new PrintQueue(server, printerName);
+            var settings = new AppSettings
+            {
+                PrinterName = printerName,
+                PaperWidth = PaperWidth.Mm50,
+                PrintableWidthMm = 40
+            };
+            var source = TestReceiptBitmapRenderer.Render(settings, 203).Bitmap;
+            var prepared = WindowsPrintService.PreparePage(queue, source, settings);
+            using var ticketReader = new StreamReader(prepared.Ticket.GetXmlStream());
+            if (!ticketReader.ReadToEnd().Contains("CustomMediaSize", StringComparison.Ordinal))
+                throw new Exception("RONGTA's GDI custom media option was not selected.");
+            var page = prepared.Layout.Validation;
+            if (page.AcceptedWidthDip < Mm(40) || page.AcceptedWidthDip > Mm(50.5))
+                throw new Exception("RONGTA did not accept a suitable short-page width.");
+            if (page.AcceptedHeightDip > Mm(300) || page.AcceptedHeightDip < page.RequestedHeightDip - Mm(0.5))
+                throw new Exception("RONGTA fell back to its 2527 mm roll form.");
+            if (page.ImageableWidthDip < prepared.Layout.ImageWidthDip ||
+                page.ImageableHeightDip < prepared.Layout.ImageHeightDip + Mm(1))
+                throw new Exception("The actual imageable area clips the test receipt.");
+
+            settings.PaperWidth = PaperWidth.Mm58;
+            settings.PrintableWidthMm = 54;
+            var wideSource = TestReceiptBitmapRenderer.Render(settings, 203).Bitmap;
+            var fitted = WindowsPrintService.PreparePage(queue, wideSource, settings);
+            if (fitted.Layout.ImageWidthDip > fitted.Layout.Validation.ImageableWidthDip ||
+                fitted.Layout.ImageWidthDip >= Mm(54) ||
+                fitted.Layout.Validation.AcceptedHeightDip > Mm(300))
+                throw new Exception("The default 58 mm settings were not fitted to the RONGTA stock.");
+        });
         return Task.CompletedTask;
     }
 
