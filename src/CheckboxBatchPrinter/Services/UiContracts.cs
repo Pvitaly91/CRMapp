@@ -6,6 +6,7 @@ namespace CheckboxBatchPrinter.Services;
 public interface IPrintService : IDisposable
 {
     IReadOnlyList<string> GetInstalledPrinters();
+    string? GetDefaultPrinterName();
     bool PrinterExists(string printerName);
     Task<PrintSubmissionResult> PrintReceiptAsync(
         byte[] png,

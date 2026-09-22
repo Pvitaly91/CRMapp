@@ -18,6 +18,7 @@ namespace CheckboxBatchPrinter.Services;
 public sealed class WindowsPrintService : IPrintService
 {
     private readonly StaPrintWorker _worker = new();
+    internal static Action<string>? DiagnosticTrace { get; set; }
 
     public IReadOnlyList<string> GetInstalledPrinters()
     {
@@ -32,6 +33,16 @@ public sealed class WindowsPrintService : IPrintService
 
     public bool PrinterExists(string printerName) =>
         GetInstalledPrinters().Contains(printerName, StringComparer.CurrentCultureIgnoreCase);
+
+    public string? GetDefaultPrinterName()
+    {
+        try
+        {
+            using var queue = LocalPrintServer.GetDefaultPrintQueue();
+            return queue.FullName;
+        }
+        catch (Exception exception) when (exception is SystemException or InvalidOperationException) { return null; }
+    }
 
     public Task<PrintSubmissionResult> PrintReceiptAsync(
         byte[] png,
@@ -62,6 +73,14 @@ public sealed class WindowsPrintService : IPrintService
             var sources = receipts.Select(x => (Source: DecodeGrayscale(x.Png), x.ReceiptId)).ToArray();
             var longest = sources.MaxBy(x => (double)x.Source.PixelHeight / x.Source.PixelWidth).Source;
             var prepared = PreparePage(queue, longest, settings);
+            if (prepared.DriverDevMode is { } driverDevMode)
+            {
+                var queuedAttempt = attempt with { PrinterName = queue.FullName };
+                return GdiReceiptPrinter.Submit(queue.FullName, sources.Select(x => x.Source).ToArray(),
+                    prepared.Layout, driverDevMode, queuedAttempt, markSubmissionStarted,
+                    () => TryRecoverSubmittedJob(queue, queuedAttempt, prepared.Layout.Validation),
+                    cancellationToken);
+            }
             var document = new FixedDocument();
             foreach (var item in sources)
             {
@@ -85,7 +104,9 @@ public sealed class WindowsPrintService : IPrintService
         _worker.InvokeAsync(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
+            DiagnosticTrace?.Invoke("render test bitmap");
             var source = TestReceiptBitmapRenderer.Render(settings, 203).Bitmap;
+            DiagnosticTrace?.Invoke("open printer queue");
             using var server = new LocalPrintServer();
             using var queue = FindQueue(server, settings.PrinterName);
             var attempt = PrintAttemptFactory.CreateReceipt("TEST", settings.PrinterName);
@@ -124,7 +145,17 @@ public sealed class WindowsPrintService : IPrintService
         Action<PrintAttemptDescriptor> markSubmissionStarted,
         CancellationToken cancellationToken)
     {
+        DiagnosticTrace?.Invoke("prepare page");
         var prepared = PreparePage(queue, source, settings);
+        if (prepared.DriverDevMode is { } driverDevMode)
+        {
+            var queuedAttempt = attempt with { PrinterName = queue.FullName };
+            return GdiReceiptPrinter.Submit(queue.FullName, [source], prepared.Layout,
+                driverDevMode, queuedAttempt, markSubmissionStarted,
+                () => TryRecoverSubmittedJob(queue, queuedAttempt, prepared.Layout.Validation),
+                cancellationToken);
+        }
+        DiagnosticTrace?.Invoke("build fixed document");
         var document = new FixedDocument();
         document.Pages.Add(ToPageContent(BuildPage(source, prepared.Layout)));
         return SubmitDocument(queue, document, prepared.Ticket, attempt, markSubmissionStarted,
@@ -196,11 +227,13 @@ public sealed class WindowsPrintService : IPrintService
         var temporaryXps = Path.Combine(Path.GetTempPath(), $"checkbox-print-{Guid.NewGuid():N}.xps");
         try
         {
+            DiagnosticTrace?.Invoke("write XPS");
             using (var xps = new XpsDocument(temporaryXps, FileAccess.ReadWrite, CompressionOption.Maximum))
             {
                 var writer = XpsDocument.CreateXpsDocumentWriter(xps);
                 writer.Write(document, ticket);
             }
+            DiagnosticTrace?.Invoke("XPS ready");
 
             // This is the last safe cancellation point. After AddJob returns, a physical copy may already print.
             cancellationToken.ThrowIfCancellationRequested();
@@ -210,7 +243,9 @@ public sealed class WindowsPrintService : IPrintService
                 markSubmissionStarted,
                 () =>
                 {
-                    using var job = queue.AddJob(queuedAttempt.UniqueJobName, temporaryXps, false, ticket);
+                    DiagnosticTrace?.Invoke("AddJob start");
+                    using var job = queue.AddJob(queuedAttempt.UniqueJobName, temporaryXps, false);
+                    DiagnosticTrace?.Invoke("AddJob returned");
                     var jobId = job.JobIdentifier;
                     var observation = new WindowsPrintJobObservation(jobId, WindowsPrintJobState.Queued,
                         "Завдання прийнято чергою Windows; фізичний результат ще невідомий.", false);
@@ -357,7 +392,7 @@ public sealed class WindowsPrintService : IPrintService
         finally { Marshal.FreeHGlobal(buffer); }
     }
 
-    internal sealed record PreparedPage(PrintTicket Ticket, ValidatedPageLayout Layout);
+    internal sealed record PreparedPage(PrintTicket Ticket, ValidatedPageLayout Layout, byte[]? DriverDevMode = null);
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct PrinterInfo4

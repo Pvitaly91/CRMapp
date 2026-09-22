@@ -32,7 +32,13 @@ public partial class SettingsWindow : Window
     private async void TestPrint_Click(object sender, RoutedEventArgs e)
     {
         if (DataContext is not SettingsViewModel viewModel) return;
-        try { await viewModel.TestPrintAsync(); MessageBox.Show(this, "Тестове завдання надіслано на принтер.", "Діагностика", MessageBoxButton.OK, MessageBoxImage.Information); }
+        try
+        {
+            var submission = await viewModel.TestPrintAsync();
+            MessageBox.Show(this,
+                $"Тестове завдання передано до черги Windows «{submission.PrinterName}», job ID {submission.JobId}. Перевірте паперовий чек.",
+                "Діагностика", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
         catch (Exception ex) { ShowError(ex.Message); }
     }
 

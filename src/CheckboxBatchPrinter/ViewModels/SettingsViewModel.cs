@@ -70,6 +70,15 @@ public sealed class SettingsViewModel : ObservableObject
         SeparatePrintJobPerReceipt = _settings.SeparatePrintJobPerReceipt;
         Printers.Clear();
         foreach (var printer in _printService.GetInstalledPrinters()) Printers.Add(printer);
+        if (string.IsNullOrWhiteSpace(SelectedPrinter) ||
+            string.Equals(SelectedPrinter, "Fax", StringComparison.OrdinalIgnoreCase) ||
+            !Printers.Contains(SelectedPrinter, StringComparer.CurrentCultureIgnoreCase))
+        {
+            var defaultPrinter = _printService.GetDefaultPrinterName();
+            if (!string.IsNullOrWhiteSpace(defaultPrinter) &&
+                Printers.Contains(defaultPrinter, StringComparer.CurrentCultureIgnoreCase))
+                SelectedPrinter = defaultPrinter;
+        }
         if (string.IsNullOrWhiteSpace(SelectedPrinter) && Printers.Count > 0) SelectedPrinter = Printers[0];
     }
 
@@ -117,21 +126,29 @@ public sealed class SettingsViewModel : ObservableObject
         finally { IsBusy = false; }
     }
 
-    public async Task TestPrintAsync()
+    public async Task<PrintSubmissionResult> TestPrintAsync()
     {
         ValidatePrintSettings();
         IsBusy = true;
         DiagnosticStatus = "Тестовий друк…";
         try
         {
-            ApplyToSettings();
+            ApplyPrintSettings();
+            await _settingsService.SaveAsync(_settings);
             var submission = await _printService.PrintTestAsync(_settings);
             var page = submission.PageValidation;
             DiagnosticStatus = $"Тест передано в чергу Windows, job ID {submission.JobId}. " +
                                $"Запитаний формат: {DipToMm(page.RequestedWidthDip):0.##}×{DipToMm(page.RequestedHeightDip):0.##} мм; " +
                                $"прийнятий: {DipToMm(page.AcceptedWidthDip):0.##}×{DipToMm(page.AcceptedHeightDip):0.##} мм; " +
-                               $"доступна область: {DipToMm(page.ImageableWidthDip):0.##}×{DipToMm(page.ImageableHeightDip):0.##} мм; " +
-                               $"драйвер оголосив форматів: {page.AdvertisedMediaSizeCount}. Фізичний результат не підтверджено.";
+                               $"доступна область: {DipToMm(page.ImageableWidthDip):0.##}×{DipToMm(page.ImageableHeightDip):0.##} мм. " +
+                               "Фізичний результат підтверджує користувач.";
+            _logger.Info("print.test.submitted", printStatus: $"job_id={submission.JobId}");
+            return submission;
+        }
+        catch (Exception exception)
+        {
+            _logger.Error("print.test.failed", exception);
+            throw;
         }
         finally { IsBusy = false; }
     }
@@ -153,6 +170,11 @@ public sealed class SettingsViewModel : ObservableObject
     private void ApplyToSettings()
     {
         _settings.Login = Login.Trim();
+        ApplyPrintSettings();
+    }
+
+    private void ApplyPrintSettings()
+    {
         _settings.PrinterName = SelectedPrinter ?? string.Empty;
         _settings.PaperWidth = PaperWidth;
         _settings.CustomPaperWidthMm = CustomPaperWidthMm;

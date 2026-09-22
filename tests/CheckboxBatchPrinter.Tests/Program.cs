@@ -33,6 +33,7 @@ internal static class Program
         ("unsupported page size is rejected", TestUnsupportedPageSizeAsync),
         ("short narrow and custom pages", TestShortNarrowAndCustomPagesAsync),
         ("installed roll driver accepts a short custom page without submission", TestInstalledRollDriverCustomPageAsync),
+        ("test print persists chosen printer without saving unsaved Checkbox login", TestPrintPersistsPrinterAsync),
         ("long receipt validation", TestLongReceiptAsync),
         ("one submission error keeps remaining items", TestReliableBatchContinuesAsync),
         ("submitted receipt survives F5 and warns on repeat", TestRefreshPreservesSubmittedAttemptAsync),
@@ -47,8 +48,24 @@ internal static class Program
         ("API errors", TestApiErrorAsync)
     ];
 
-    public static async Task<int> Main()
+    public static async Task<int> Main(string[] args)
     {
+        if (args is ["--physical-test-rongta"])
+        {
+            WindowsPrintService.DiagnosticTrace = step => Console.WriteLine($"TRACE {DateTimeOffset.Now:HH:mm:ss} {step}");
+            using var printer = new WindowsPrintService();
+            var settings = new AppSettings
+            {
+                PrinterName = "RONGTA RPP210 Series Printer",
+                PaperWidth = PaperWidth.Mm50,
+                PrintableWidthMm = 40
+            };
+            var submission = await printer.PrintTestAsync(settings);
+            Console.WriteLine($"Submitted job {submission.JobId} to {submission.PrinterName}; " +
+                              $"media {submission.PageValidation.AcceptedWidthDip / PrintGeometry.DipPerMillimeter:0.##} × " +
+                              $"{submission.PageValidation.AcceptedHeightDip / PrintGeometry.DipPerMillimeter:0.##} mm.");
+            return 0;
+        }
         var failed = 0;
         foreach (var (name, test) in Tests)
         {
@@ -265,6 +282,10 @@ internal static class Program
             if (!ticketReader.ReadToEnd().Contains("CustomMediaSize", StringComparison.Ordinal))
                 throw new Exception("RONGTA's GDI custom media option was not selected.");
             var page = prepared.Layout.Validation;
+            var gdi = GdiReceiptPrinter.Probe(printerName, prepared.DriverDevMode!);
+            var expectedHeightMm = page.AcceptedHeightDip / PrintGeometry.DipPerMillimeter;
+            if (Math.Abs(gdi.PhysicalHeightMm - expectedHeightMm) > 2)
+                throw new Exception($"GDI page height {gdi.PhysicalHeightMm:0.##} mm differs from {expectedHeightMm:0.##} mm.");
             if (page.AcceptedWidthDip < Mm(40) || page.AcceptedWidthDip > Mm(50.5))
                 throw new Exception("RONGTA did not accept a suitable short-page width.");
             if (page.AcceptedHeightDip > Mm(300) || page.AcceptedHeightDip < page.RequestedHeightDip - Mm(0.5))
@@ -283,6 +304,24 @@ internal static class Program
                 throw new Exception("The default 58 mm settings were not fitted to the RONGTA stock.");
         });
         return Task.CompletedTask;
+    }
+
+    private static async Task TestPrintPersistsPrinterAsync()
+    {
+        var saved = new AppSettings { Login = "saved@example.invalid", PrinterName = "Fax" };
+        var settingsService = new MemorySettingsService(saved);
+        using var printer = new ScenarioPrintService();
+        var viewModel = new SettingsViewModel(settingsService, new StaticAuthentication(),
+            new FakeImageService(), printer, new NullLogger());
+        await viewModel.LoadAsync();
+        Equal("Fake printer", viewModel.SelectedPrinter);
+        viewModel.SelectedPrinter = "Fake printer";
+        viewModel.Login = "unsaved@example.invalid";
+        var submission = await viewModel.TestPrintAsync();
+        Equal("Fake printer", submission.PrinterName);
+        var persisted = await settingsService.LoadAsync();
+        Equal("Fake printer", persisted.PrinterName);
+        Equal("saved@example.invalid", persisted.Login);
     }
 
     private static Task TestShortNarrowAndCustomPagesAsync()
@@ -531,6 +570,8 @@ internal static class Program
                 .ToArray();
             Equal(2, unknown.Length);
             Equal(1, unknown.Select(x => x.AttemptId).Distinct().Count());
+            True(unknown.All(x => x.JobId == 777));
+            True(viewModel.Receipts.All(x => x.WindowsJobId == 777));
 
             foreach (var row in viewModel.Receipts) row.IsSelected = true;
             viewModel.PrintSelectedCommand.Execute(null);
@@ -813,6 +854,7 @@ internal static class Program
         public int ReceiptSubmissionCalls { get; private set; }
 
         public IReadOnlyList<string> GetInstalledPrinters() => ["Fake printer"];
+        public string? GetDefaultPrinterName() => "Fake printer";
         public bool PrinterExists(string printerName) => printerName == "Fake printer";
 
         public Task<PrintSubmissionResult> PrintReceiptAsync(
@@ -839,7 +881,7 @@ internal static class Program
             markSubmissionStarted(attempt);
             if (SharedSubmissionUnknown)
                 throw new PrintSubmissionUnknownException(attempt,
-                    new InvalidOperationException("fake backend threw after the shared job was registered"));
+                    new InvalidOperationException("fake backend threw after the shared job was registered"), 777);
             return Task.FromResult(FakeSubmission(Interlocked.Increment(ref _nextJobId), attempt));
         }
 

@@ -57,7 +57,7 @@ internal static class DriverCustomMediaTicket
             var request = new RequestedPageLayout(acceptedWidth, acceptedHeight,
                 geometry.WidthDip, geometry.HeightDip, geometry.MarginDip);
             var layout = PrinterPageValidator.Validate(request, metrics);
-            prepared = new WindowsPrintService.PreparedPage(ticket, layout);
+            prepared = new WindowsPrintService.PreparedPage(ticket, layout, devMode);
             return true;
         }
         catch (Exception exception) when (exception is ArgumentException or OverflowException or

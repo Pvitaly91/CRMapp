@@ -366,10 +366,13 @@ public sealed class MainViewModel : ObservableObject
                      outcome.Error is PrintSubmissionUnknownException unknown)
             {
                 outcome.Item.HasSubmissionRisk = true;
+                outcome.Item.WindowsJobId = unknown.JobId;
                 outcome.Item.PrintStatus = PrintItemStatus.ResultNotConfirmed;
                 outcome.Item.PrintError =
                     $"Передавання почалося, але результат невідомий. Принтер: {unknown.Attempt.PrinterName}; " +
-                    $"ім'я job: {unknown.Attempt.UniqueJobName}. Повтор може створити дублікат.";
+                    $"ім'я job: {unknown.Attempt.UniqueJobName}; job ID: {unknown.JobId?.ToString() ?? "—"}. Повтор може створити дублікат.";
+                TryRecord(accountContext, unknown.Attempt, [outcome.Item], PrintSubmissionState.SubmissionUnknown,
+                    outcome.Item.PrintStatus, unknown.JobId);
                 _logger.Error("receipt.print.submission_unknown", unknown, outcome.Item.Id,
                     printStatus: $"submission_unknown;job_name={unknown.Attempt.UniqueJobName}");
             }
@@ -469,11 +472,14 @@ public sealed class MainViewModel : ObservableObject
             foreach (var item in loaded)
             {
                 item.Row.HasSubmissionRisk = true;
+                item.Row.WindowsJobId = exception.JobId;
                 item.Row.PrintStatus = PrintItemStatus.ResultNotConfirmed;
                 item.Row.PrintError =
                     $"Передавання спільного job почалося, але результат невідомий. Принтер: {exception.Attempt.PrinterName}; " +
-                    $"ім'я job: {exception.Attempt.UniqueJobName}. Повтор може створити дублікати всієї пачки.";
+                    $"ім'я job: {exception.Attempt.UniqueJobName}; job ID: {exception.JobId?.ToString() ?? "—"}. Повтор може створити дублікати всієї пачки.";
             }
+            TryRecord(accountContext, exception.Attempt, loaded.Select(x => x.Row).ToArray(),
+                PrintSubmissionState.SubmissionUnknown, PrintItemStatus.ResultNotConfirmed, exception.JobId);
             _logger.Error("batch.single_job.submission_unknown", exception,
                 printStatus: $"submission_unknown;job_name={exception.Attempt.UniqueJobName}");
             return new BatchRunSummary([], loaded.Count);

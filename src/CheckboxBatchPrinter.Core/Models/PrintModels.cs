@@ -77,12 +77,13 @@ public sealed record PrintSubmissionResult(
     public string PrinterName => Attempt.PrinterName;
 }
 
-public sealed class PrintSubmissionUnknownException(PrintAttemptDescriptor attempt, Exception innerException)
+public sealed class PrintSubmissionUnknownException(PrintAttemptDescriptor attempt, Exception innerException, int? jobId = null)
     : Exception(
         $"Передавання завдання «{attempt.UniqueJobName}» у чергу Windows почалося, але результат невідомий.",
         innerException)
 {
     public PrintAttemptDescriptor Attempt { get; } = attempt;
+    public int? JobId { get; } = jobId;
 }
 
 public sealed record PrintBatchSnapshot<T>(IReadOnlyList<T> Items, int HiddenSelectedCount);
@@ -270,6 +271,7 @@ public static class PrintSubmissionBoundary
                 // Recovery is best-effort. Absence or lookup failure is never proof
                 // that the spooler did not accept the job.
             }
+            if (exception is PrintSubmissionUnknownException) throw;
             throw new PrintSubmissionUnknownException(attempt, exception);
         }
     }
