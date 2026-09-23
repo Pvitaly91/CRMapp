@@ -5,6 +5,11 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Threading;
+using System.Windows.Media;
+using System.Reflection;
+using System.Diagnostics;
+using System.Windows.Media.Imaging;
+using System.IO;
 using CheckboxBatchPrinter.Core.Models;
 using CheckboxBatchPrinter.Core.Services;
 using CheckboxBatchPrinter.Services;
@@ -18,6 +23,7 @@ internal static class MarketplaceViewModelTests
     private const string ReceiptOne = "00000000-0000-0000-0000-000000000001";
     private const string ReceiptTwo = "00000000-0000-0000-0000-000000000002";
     private const string ReceiptThree = "00000000-0000-0000-0000-000000000003";
+    private static volatile string _xamlCheckpoint = "not started";
 
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
@@ -37,8 +43,86 @@ internal static class MarketplaceViewModelTests
         ("STA corrupt marketplace settings do not block or overwrite Checkbox and printer settings", () => StaAsync(CorruptSettingsAsync)),
         ("STA Rozetka credential drafts merge and saved account identity cannot change", () => StaAsync(CredentialDraftAsync)),
         ("Checkbox details preserve units and do not infer marketplace IDs from opaque context", ReceiptDetailsAsync),
-        ("STA Main Settings and OrderLink XAML initialize without showing windows", () => StaAsync(XamlSmokeAsync))
+        ("STA default All Receipts tab works without integrations including preview and print", () => StaAsync(NoIntegrationsAsync)),
+        ("STA Checkbox F5 never opens marketplace settings, secrets, cache or APIs", () => StaAsync(CheckboxRefreshIsolationAsync)),
+        ("STA All Receipts includes linked Prom, Rozetka and unlinked receipts", () => StaAsync(AllCategoriesAsync)),
+        ("STA tab searches, sort, current row and check marks are independent", () => StaAsync(IndependentTabsAsync)),
+        ("STA slow marketplace API cannot block Checkbox F5, preview or printing", () => StaAsync(SlowMarketplaceAsync)),
+        ("STA damaged marketplace settings cache and links cannot block base workflow", () => StaAsync(CorruptModuleAsync)),
+        ("STA disabling integrations preserves receipts history decisions cache and secrets", () => StaAsync(DisabledIntegrationsAsync)),
+        ("STA print and preview commands use only active tab selection", () => StaAsync(ActiveTabCommandsAsync)),
+        ("STA changing tabs during confirmation and backend preserves one frozen job", () => StaAsync(SwitchDuringPrintAsync)),
+        ("STA Main Settings and OrderLink XAML initialize without showing windows", XamlSmokeProcessAsync)
     ];
+
+    public static void RunIsolatedXamlSmoke()
+    {
+        True(Thread.CurrentThread.GetApartmentState() == ApartmentState.STA);
+        // WPF owns the child process main thread. Do not tear down a secondary COM
+        // apartment and Join it while Application and theme resources still exist.
+        var dispatcher = Dispatcher.CurrentDispatcher;
+        SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(dispatcher));
+        Exception? failure = null;
+        var finished = false;
+        dispatcher.UnhandledException += (_, args) =>
+        {
+            failure = failure is null ? args.Exception : new AggregateException(failure, args.Exception);
+            args.Handled = true;
+            dispatcher.BeginInvokeShutdown(DispatcherPriority.Send);
+        };
+        dispatcher.BeginInvoke(new Action(async () =>
+        {
+            try
+            {
+                await XamlSmokeAsync();
+                Console.WriteLine("XAML assertions and binding cleanup completed.");
+                await DrainDispatcherAsync();
+                Console.WriteLine("XAML final dispatcher drain completed.");
+            }
+            catch (Exception exception) { failure = exception; }
+            finally
+            {
+                finished = true;
+                dispatcher.BeginInvokeShutdown(DispatcherPriority.ContextIdle);
+            }
+        }));
+        Dispatcher.Run();
+        Console.WriteLine("XAML main dispatcher shut down.");
+        if (failure is not null) throw new InvalidOperationException("XAML checkpoint: " + _xamlCheckpoint, failure);
+        True(finished, "XAML dispatcher exited before assertions completed. " + _xamlCheckpoint);
+    }
+
+    private static async Task XamlSmokeProcessAsync()
+    {
+        // WPF Application/theme caches are process-wide. Give compiled window tests
+        // their own main STA thread and generic test Application (never production App).
+        // A fresh child is isolation, not a retry: all assertions run exactly once.
+        var executable = Environment.ProcessPath ?? throw new InvalidOperationException("Cannot locate test executable.");
+        var start = new ProcessStartInfo(executable)
+        {
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+            start.ArgumentList.Add(typeof(MarketplaceViewModelTests).Assembly.Location);
+        start.ArgumentList.Add("--xaml-smoke");
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("Cannot start isolated XAML test.");
+        var standardOutput = process.StandardOutput.ReadToEndAsync();
+        var standardError = process.StandardError.ReadToEndAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(40));
+        try { await process.WaitForExitAsync(timeout.Token); }
+        catch (OperationCanceledException)
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true); // Only our own synthetic child.
+            await process.WaitForExitAsync();
+            throw new InvalidOperationException("Isolated XAML test timed out. " + await standardOutput + await standardError);
+        }
+        var output = await standardOutput;
+        var error = await standardError;
+        True(process.ExitCode == 0, $"Isolated XAML test failed ({process.ExitCode}): {output}{error}");
+        True(output.Contains("PASS isolated compiled XAML tabs, bindings and one-click marks", StringComparison.Ordinal),
+            "Isolated XAML process exited without its completed-assertions marker.");
+    }
 
     private static async Task FilteredPrintAsync()
     {
@@ -48,6 +132,7 @@ internal static class MarketplaceViewModelTests
         fixture.Rozetka.Orders = [new() { Key = new(MarketplaceKind.Rozetka, "rz-test", "42"), Number = "RZ-42", ReceiptIds = [ReceiptTwo] }];
         var (main, workspace) = fixture.Create();
         await main.RefreshAsync();
+        await OpenOrdersAsync(main, workspace);
         workspace.Filter = "Prom";
         main.SelectAllCommand.Execute(null);
         workspace.Filter = "Rozetka";
@@ -69,6 +154,7 @@ internal static class MarketplaceViewModelTests
         fixture.Source.Orders = [Order(receiptIds: [ReceiptOne])];
         var (main, workspace) = fixture.Create();
         await main.RefreshAsync();
+        await OpenOrdersAsync(main, workspace);
         workspace.Filter = "Prom";
         main.SelectAllCommand.Execute(null);
         Equal(1, main.SelectedCount);
@@ -85,7 +171,7 @@ internal static class MarketplaceViewModelTests
         main.ClearSelectionCommand.Execute(null);
         Equal(0, main.SelectedCount);
         workspace.Filter = "Prom";
-        True(main.Receipts.All(r => !r.IsSelected));
+        True(main.Receipts.All(r => !r.IsSelectedForOrders));
         Equal(0, fixture.Printer.Calls);
     }
 
@@ -93,8 +179,9 @@ internal static class MarketplaceViewModelTests
     {
         var fixture = new Fixture();
         fixture.Source.Orders = [Order(receiptIds: [ReceiptOne])];
-        var (main, _) = fixture.Create();
+        var (main, workspace) = fixture.Create();
         await main.RefreshAsync();
+        await OpenOrdersAsync(main, workspace);
         main.SelectAllCommand.Execute(null);
         main.SearchText = "TEST-TTN";
         Equal(1, main.VisibleSelectedCount); Equal(2, main.HiddenSelectedCount);
@@ -122,8 +209,9 @@ internal static class MarketplaceViewModelTests
                 new() { Key = new(MarketplaceKind.Prom, "prom-test", "Z"), Number = "Z-2", ReceiptIds = [ReceiptOne] },
                 new() { Key = new(MarketplaceKind.Prom, "prom-test", "A"), Number = "A-1", ReceiptIds = [ReceiptTwo] }
             ];
-            var (main, _) = fixture.Create();
+            var (main, workspace) = fixture.Create();
             await main.RefreshAsync();
+            await OpenOrdersAsync(main, workspace);
             using (main.ReceiptsView.DeferRefresh())
             {
                 main.ReceiptsView.SortDescriptions.Clear();
@@ -142,6 +230,7 @@ internal static class MarketplaceViewModelTests
         fixture.Source.Orders = [Order(receiptIds: [ReceiptOne, ReceiptTwo])];
         var (main, workspace) = fixture.Create();
         await main.RefreshAsync();
+        await OpenOrdersAsync(main, workspace);
         workspace.Filter = "Prom";
         main.SelectAllCommand.Execute(null);
         fixture.Dialogs.DuringConfirmation = () =>
@@ -173,8 +262,9 @@ internal static class MarketplaceViewModelTests
     private static async Task UnlinkedPrintAsync()
     {
         var fixture = new Fixture();
-        var (main, _) = fixture.Create();
+        var (main, workspace) = fixture.Create();
         await main.RefreshAsync();
+        await OpenOrdersAsync(main, workspace);
         main.SelectAllCommand.Execute(null);
         await ExecuteAsync(main.PrintSelectedCommand);
         AssertConfirmation(fixture, [ReceiptThree, ReceiptTwo, ReceiptOne]);
@@ -229,16 +319,19 @@ internal static class MarketplaceViewModelTests
         fixture.Source.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
         fixture.Printer.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
         var (main, workspace) = fixture.Create();
-        var refresh = main.RefreshAsync();
+        await main.RefreshAsync();
+        main.SelectedTabIndex = 1;
+        await main.PrepareOrdersAsync();
+        var sync = workspace.SyncAsync();
         await fixture.Source.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         True(workspace.IsBusy && !main.IsBusy, "Marketplace loading must not own Main.IsBusy.");
         Equal(3, main.Receipts.Count);
-        main.Receipts[0].IsSelected = true;
-        main.Receipts[1].IsSelected = true;
+        main.Receipts[0].IsSelectedForOrders = true;
+        main.Receipts[1].IsSelectedForOrders = true;
         Equal(2, main.SelectedCount);
         Equal(PrintItemStatus.Done, main.Receipts[2].PrintStatus);
         True(main.PrintSelectedCommand.CanExecute(null));
-        await workspace.SyncAsync();
+        var duplicateSync = workspace.SyncAsync();
         Equal(1, fixture.Source.FetchCalls); // A second user action cannot duplicate the active sync.
 
         var rows = main.Receipts.ToArray();
@@ -248,7 +341,8 @@ internal static class MarketplaceViewModelTests
         True(fixture.Printer.BatchIds.SequenceEqual(expectedIds));
         Equal(0, fixture.History.Saves);
         fixture.Source.Gate.SetResult(true);
-        await refresh;
+        await sync;
+        await duplicateSync;
         True(rows.SequenceEqual(main.Receipts));
         Equal(2, main.SelectedCount);
         Equal("ORDER-41", main.Receipts[0].OrderNumber);
@@ -265,7 +359,11 @@ internal static class MarketplaceViewModelTests
         Equal(0, fixture.Dialogs.Errors.Count);
 
         fixture.Source.Gate = null;
+        var fetchesBeforeRefresh = fixture.Source.FetchCalls;
         await main.RefreshAsync();
+        await main.PrepareOrdersAsync();
+        Equal(fetchesBeforeRefresh, fixture.Source.FetchCalls);
+        await workspace.SyncAsync(); // Fresh range coverage is explicit; cached automatic evidence is incomplete.
         Equal(2, main.SelectedCount);
         True(main.Receipts.All(row => row.PrintStatus == PrintItemStatus.Done));
         Equal("ORDER-41", main.Receipts[0].OrderNumber);
@@ -278,8 +376,9 @@ internal static class MarketplaceViewModelTests
         fixture.Source.Orders = [Order()];
         var (main, workspace) = fixture.Create();
         await main.RefreshAsync();
+        await OpenOrdersAsync(main, workspace);
         var row = main.Receipts[0];
-        row.IsSelected = true;
+        row.IsSelectedForOrders = true;
         Equal(ReceiptLinkState.Candidates, row.OrderMatch!.State);
         Equal("", row.OrderNumber); // A candidate is not a confirmed table value.
         fixture.Dialogs.Choice = new(Order().Key, false);
@@ -295,12 +394,15 @@ internal static class MarketplaceViewModelTests
 
         main.SearchText = "";
         await main.RefreshAsync();
+        await main.PrepareOrdersAsync();
         Equal(ReceiptLinkState.Manual, main.Receipts[0].OrderMatch!.State);
         Equal("ORDER-41", main.Receipts[0].OrderNumber);
-        True(main.Receipts[0].IsSelected);
+        True(main.Receipts[0].IsSelectedForOrders);
         Equal(PrintItemStatus.Done, main.Receipts[2].PrintStatus);
         var (restarted, _) = fixture.Create(); // Fresh VMs + deserialized stored decisions/cache.
         await restarted.RefreshAsync();
+        restarted.SelectedTabIndex = 1;
+        await restarted.PrepareOrdersAsync();
         Equal(ReceiptLinkState.Manual, restarted.Receipts[0].OrderMatch!.State);
         Equal("ORDER-41", restarted.Receipts[0].OrderNumber);
         Equal(0, restarted.SelectedCount);
@@ -316,9 +418,12 @@ internal static class MarketplaceViewModelTests
         fixture.Source.Fail = true;
         var (main, workspace) = fixture.Create();
         await main.RefreshAsync();
+        await OpenOrdersAsync(main, workspace);
         Equal(3, main.Receipts.Count);
         True(!main.IsBusy && !workspace.IsBusy);
         True(main.Receipts.All(row => row.OrderMatch?.State == ReceiptLinkState.Incomplete));
+        main.SelectedTabIndex = 0;
+        Equal(3, main.ReceiptsView.Cast<ReceiptRowViewModel>().Count());
         main.Receipts[0].IsSelected = true;
         True(main.PrintSelectedCommand.CanExecute(null));
         await ExecuteAsync(main.PrintSelectedCommand);
@@ -358,7 +463,8 @@ internal static class MarketplaceViewModelTests
         fixture.Source.Orders = [Order(receiptIds: [ReceiptTwo])];
         var (main, workspace) = fixture.Create();
         await main.RefreshAsync();
-        main.Receipts[0].IsSelected = true;
+        await OpenOrdersAsync(main, workspace);
+        main.Receipts[0].IsSelectedForOrders = true;
         Equal("Тестовий покупець", main.Receipts[0].OrderBuyer);
         // Test connection inside Settings has already persisted a new cashier, then user presses Cancel.
         fixture.Dialogs.AfterSettings = () => fixture.Settings.App.Login = "other-cashier";
@@ -367,7 +473,7 @@ internal static class MarketplaceViewModelTests
         True(workspace.SelectedReceipt is null);
         Equal("", main.Receipts[0].OrderBuyer);
         Equal(0, fixture.Printer.Calls);
-        True(main.Receipts[0].IsSelected);
+        True(main.Receipts[0].IsSelectedForOrders);
         await ExecuteAsync(main.PrintSelectedCommand);
         Equal(0, fixture.Printer.Calls); // Existing receipts cannot be printed under a different account.
         Equal(1, fixture.Dialogs.Errors.Count);
@@ -379,6 +485,7 @@ internal static class MarketplaceViewModelTests
         fixture.Source.Orders = [Order()];
         var (main, workspace) = fixture.Create();
         await main.RefreshAsync();
+        await OpenOrdersAsync(main, workspace);
         fixture.Details.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
         workspace.SelectedReceipt = main.Receipts[0];
         workspace.LinkCommand.Execute(null);
@@ -394,6 +501,7 @@ internal static class MarketplaceViewModelTests
         Equal(0, fixture.Dialogs.ChoiceCalls); Equal(0, fixture.Links.Saves);
         fixture.Details.Gate = null;
         fixture.Dialogs.Choice = new(Order().Key, false);
+        workspace.SelectedReceipt = main.Receipts[0]; // Current row is tab-local; attachment no longer silently selects one.
         await ExecuteAsync(workspace.LinkCommand);
         Equal(2, fixture.Details.Calls); // Fetch again: old continuation must not populate this context.
         Equal(1, fixture.Links.Saves);
@@ -407,6 +515,8 @@ internal static class MarketplaceViewModelTests
         var marketplace = new MarketplaceSettingsViewModel(fixture.Settings, fixture.Settings, sync);
         var settings = new SettingsViewModel(fixture.Settings, new Authentication(), new Images(), fixture.Printer, new Logger(), marketplace);
         await settings.LoadAsync();
+        Equal(0, fixture.Settings.MarketplaceLoads);
+        await settings.EnsureMarketplaceLoadedAsync();
         True(!marketplace.CanEdit && !marketplace.AddPromCommand.CanExecute(null));
         Equal("mock-printer", settings.SelectedPrinter);
         Equal("test-cashier", settings.Login);
@@ -453,45 +563,454 @@ internal static class MarketplaceViewModelTests
         Equal(1, fixture.Settings.MarketplaceSaves);
     }
 
+    private static async Task OpenOrdersAsync(MainViewModel main, MarketplaceWorkspaceViewModel workspace)
+    {
+        main.SelectedTabIndex = 1;
+        await main.PrepareOrdersAsync();
+        await workspace.SyncAsync();
+    }
+
+    private static async Task NoIntegrationsAsync()
+    {
+        var fixture = new Fixture();
+        fixture.Settings.Market.Connections.Clear();
+        fixture.Authentication.IsStored = false;
+        fixture.Dialogs.AfterSettings = () => fixture.Authentication.IsStored = true;
+        var (main, workspace) = fixture.Create();
+        Equal(0, main.SelectedTabIndex);
+        await main.InitializeAsync(); // Simulate first startup: configure Checkbox only, never marketplaces.
+        Equal(false, fixture.Dialogs.SettingsOpenedForMarketplace);
+        Equal(3, main.ReceiptsView.Cast<ReceiptRowViewModel>().Count());
+        True(main.Receipts.All(r => r.OrderMatch is null));
+        main.AllReceiptsTab.SelectedReceipt = main.Receipts.Single(r => r.Id == ReceiptOne);
+        await ExecuteAsync(main.PreviewCommand);
+        Equal(ReceiptOne, fixture.Dialogs.PreviewId);
+        main.SelectAllCommand.Execute(null);
+        await ExecuteAsync(main.PrintSelectedCommand);
+        AssertConfirmation(fixture, [ReceiptThree, ReceiptTwo, ReceiptOne]);
+        Equal(0, fixture.Source.FetchCalls); Equal(0, fixture.Rozetka.FetchCalls);
+        Equal(0, fixture.Settings.MarketplaceLoads); Equal(0, fixture.Settings.SecretLoads);
+        Equal(0, fixture.Cache.Loads); Equal(0, fixture.Links.Loads);
+        main.SelectedTabIndex = 1;
+        await main.PrepareOrdersAsync();
+        True(workspace.Status.Contains("Інтеграції не налаштовані"));
+        Equal(3, main.ReceiptsView.Cast<ReceiptRowViewModel>().Count());
+        Equal(0, main.SelectedCount); // Shared print history never becomes selection.
+        True(main.Receipts.All(r => r.PrintStatus == PrintItemStatus.Done));
+    }
+
+    private static async Task CheckboxRefreshIsolationAsync()
+    {
+        var fixture = new Fixture();
+        fixture.Settings.ThrowOnMarketplaceLoad = true;
+        fixture.Cache.ThrowOnLoad = true; fixture.Links.ThrowOnLoad = true;
+        var (main, _) = fixture.Create();
+        await main.RefreshAsync();
+        main.Receipts[0].IsSelected = true;
+        await ExecuteAsync(main.RefreshCommand);
+        main.DateFrom = new(2026, 9, 22);
+        await main.RefreshAsync();
+        Equal(3, fixture.ReceiptSource.Calls);
+        Equal(3, main.ReceiptsView.Cast<ReceiptRowViewModel>().Count());
+        Equal(1, main.SelectedCount);
+        Equal(0, fixture.Settings.MarketplaceLoads); Equal(0, fixture.Settings.SecretLoads);
+        Equal(0, fixture.Cache.Loads); Equal(0, fixture.Links.Loads);
+        Equal(0, fixture.Source.FetchCalls); Equal(0, fixture.Rozetka.FetchCalls);
+        Equal(PrintItemStatus.Done, main.Receipts.Single(r => r.Id == ReceiptThree).PrintStatus);
+    }
+
+    private static async Task AllCategoriesAsync()
+    {
+        var fixture = new Fixture();
+        fixture.Source.Orders = [Order(receiptIds: [ReceiptOne])];
+        fixture.Settings.Market.Connections.Add(new() { Id = "rz-test", Marketplace = MarketplaceKind.Rozetka, Enabled = true });
+        fixture.Rozetka.Orders = [new() { Key = new(MarketplaceKind.Rozetka, "rz-test", "42"), Number = "RZ-42", ReceiptIds = [ReceiptTwo] }];
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync();
+        await OpenOrdersAsync(main, workspace);
+        Equal("Prom", main.Receipts.Single(r => r.Id == ReceiptOne).Marketplace);
+        Equal("Rozetka", main.Receipts.Single(r => r.Id == ReceiptTwo).Marketplace);
+        True(main.Receipts.Single(r => r.Id == ReceiptThree).OrderMatch?.Order is null);
+        workspace.Filter = "Rozetka";
+        True(main.OrdersReceiptsTab.View.Cast<ReceiptRowViewModel>().Select(r => r.Id).SequenceEqual([ReceiptTwo]));
+        True(main.AllReceiptsTab.View.Cast<ReceiptRowViewModel>().Select(r => r.Id).SequenceEqual([ReceiptThree, ReceiptTwo, ReceiptOne]));
+        main.SelectedTabIndex = 0;
+        Equal(3, main.ReceiptsView.Cast<ReceiptRowViewModel>().Count());
+        main.SelectAllCommand.Execute(null);
+        await ExecuteAsync(main.PrintSelectedCommand);
+        AssertConfirmation(fixture, [ReceiptThree, ReceiptTwo, ReceiptOne]);
+        Equal(0, fixture.Dialogs.Confirmation!.HiddenSelectedCount);
+    }
+
+    private static async Task IndependentTabsAsync()
+    {
+        var fixture = new Fixture();
+        fixture.Source.Orders = [Order(receiptIds: [ReceiptOne])];
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync();
+        main.AllReceiptsTab.SearchText = "2";
+        main.AllReceiptsTab.SelectedReceipt = main.Receipts.Single(r => r.Id == ReceiptTwo);
+        using (main.AllReceiptsTab.View.DeferRefresh())
+        {
+            main.AllReceiptsTab.View.SortDescriptions.Clear();
+            main.AllReceiptsTab.View.SortDescriptions.Add(new("Serial", ListSortDirection.Ascending));
+        }
+        main.SelectAllCommand.Execute(null);
+        await OpenOrdersAsync(main, workspace);
+        main.SearchText = "TEST-TTN";
+        main.OrdersReceiptsTab.SelectedReceipt = main.Receipts.Single(r => r.Id == ReceiptOne);
+        main.SelectAllCommand.Execute(null);
+        True(!ReferenceEquals(main.AllReceiptsTab.View, main.OrdersReceiptsTab.View));
+        Equal("2", main.AllReceiptsTab.SearchText); Equal("TEST-TTN", main.OrdersReceiptsTab.SearchText);
+        Equal("Serial", main.AllReceiptsTab.View.SortDescriptions[0].PropertyName);
+        Equal("LocalDate", main.OrdersReceiptsTab.View.SortDescriptions[0].PropertyName);
+        Equal(ReceiptTwo, main.AllReceiptsTab.SelectedReceipt!.Id); Equal(ReceiptOne, main.OrdersReceiptsTab.SelectedReceipt!.Id);
+        True(main.Receipts.Single(r => r.Id == ReceiptTwo).IsSelected);
+        True(!main.Receipts.Single(r => r.Id == ReceiptTwo).IsSelectedForOrders);
+        True(main.Receipts.Single(r => r.Id == ReceiptOne).IsSelectedForOrders);
+        True(!main.Receipts.Single(r => r.Id == ReceiptOne).IsSelected);
+        main.SelectedType = main.ReceiptTypes.Single(t => t.Value == ReceiptTypes.Return);
+        Equal(0, main.VisibleSelectedCount); Equal(1, main.HiddenSelectedCount);
+        Equal(1, main.AllReceiptsTab.View.Cast<ReceiptRowViewModel>().Count());
+        main.ClearSelectionCommand.Execute(null);
+        True(main.Receipts.Single(r => r.Id == ReceiptTwo).IsSelected);
+        main.SelectedTabIndex = 0;
+        Equal(1, main.VisibleSelectedCount); Equal(0, main.HiddenSelectedCount);
+        True(main.PrintSelectedCommand.CanExecute(null));
+        main.SearchText = "TEST-TTN";
+        Equal(0, main.ReceiptsView.Cast<ReceiptRowViewModel>().Count()); // Base search never reads order fields.
+        main.SearchText = "2";
+        await main.RefreshAsync();
+        Equal("2", main.AllReceiptsTab.SearchText); Equal("TEST-TTN", main.OrdersReceiptsTab.SearchText);
+        True(main.Receipts.Single(r => r.Id == ReceiptTwo).IsSelected);
+        True(main.Receipts.All(r => !r.IsSelectedForOrders));
+    }
+
+    private static async Task SlowMarketplaceAsync()
+    {
+        var fixture = new Fixture();
+        fixture.Source.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync();
+        main.SelectedTabIndex = 1;
+        await main.PrepareOrdersAsync();
+        var sync = workspace.SyncAsync();
+        await fixture.Source.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        True(workspace.IsBusy);
+        main.SelectedTabIndex = 0;
+        await main.RefreshAsync().WaitAsync(TimeSpan.FromSeconds(3));
+        Equal(3, main.ReceiptsView.Cast<ReceiptRowViewModel>().Count());
+        main.AllReceiptsTab.SelectedReceipt = main.Receipts[0];
+        await ExecuteAsync(main.PreviewCommand);
+        Equal(ReceiptTwo, fixture.Dialogs.PreviewId);
+        main.SelectAllCommand.Execute(null);
+        await ExecuteAsync(main.PrintSelectedCommand);
+        Equal(1, fixture.Printer.Calls);
+        Equal(2, fixture.ReceiptSource.Calls);
+        Equal(1, fixture.Source.FetchCalls);
+        if (workspace.CancelCommand.CanExecute(null)) workspace.CancelCommand.Execute(null);
+        fixture.Source.Gate.TrySetResult(true);
+        await sync;
+        True(main.Receipts.All(r => r.PrintStatus == PrintItemStatus.Done));
+    }
+
+    private static async Task CorruptModuleAsync()
+    {
+        foreach (var damaged in new[] { "settings", "cache", "links" })
+        {
+            var fixture = new Fixture();
+            fixture.Settings.ThrowOnMarketplaceLoad = damaged == "settings";
+            fixture.Cache.ThrowOnLoad = damaged == "cache";
+            fixture.Links.ThrowOnLoad = damaged == "links";
+            var (main, workspace) = fixture.Create();
+            await main.RefreshAsync();
+            Equal(3, main.ReceiptsView.Cast<ReceiptRowViewModel>().Count());
+            main.SelectedTabIndex = 1;
+            await main.PrepareOrdersAsync();
+            True(workspace.Status.Contains("Не вдалося"));
+            main.SelectedTabIndex = 0;
+            await main.RefreshAsync();
+            main.SelectAllCommand.Execute(null);
+            await ExecuteAsync(main.PrintSelectedCommand);
+            AssertConfirmation(fixture, [ReceiptThree, ReceiptTwo, ReceiptOne]);
+            Equal(0, fixture.Source.FetchCalls); Equal(0, fixture.Dialogs.Errors.Count);
+            Equal(0, fixture.Settings.MarketplaceSaves); Equal(0, fixture.Settings.SecretSaves); Equal(0, fixture.Links.Saves);
+        }
+    }
+
+    private static async Task DisabledIntegrationsAsync()
+    {
+        var fixture = new Fixture();
+        fixture.Source.Orders = [Order()];
+        fixture.Settings.Secrets["prom-test"] = new(Token: "synthetic-preserved-token");
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync();
+        await OpenOrdersAsync(main, workspace);
+        workspace.SelectedReceipt = main.Receipts[0];
+        fixture.Dialogs.Choice = new(Order().Key, false);
+        await ExecuteAsync(workspace.LinkCommand);
+        var account = PrintAccountContext.Create(fixture.Settings.App);
+        var saved = (await fixture.Links.LoadAsync(account)).Single();
+        var cacheCount = fixture.Cache.Snapshot.Orders.Count;
+        var fetches = fixture.Source.FetchCalls;
+        var cacheReads = fixture.Cache.Loads;
+        var linkReads = fixture.Links.Loads;
+        var secretReads = fixture.Settings.SecretLoads;
+        fixture.Dialogs.AfterSettings = () => fixture.Settings.Market.Connections.Single().Enabled = false;
+        await ExecuteAsync(main.SettingsCommand);
+        await workspace.SyncAsync();
+        Equal(fetches, fixture.Source.FetchCalls);
+        Equal(cacheReads, fixture.Cache.Loads); Equal(linkReads, fixture.Links.Loads); Equal(secretReads, fixture.Settings.SecretLoads);
+        Equal(cacheCount, fixture.Cache.Snapshot.Orders.Count);
+        Equal(saved.ConfirmedOrder, (await fixture.Links.LoadAsync(account)).Single().ConfirmedOrder);
+        Equal("synthetic-preserved-token", fixture.Settings.Secrets["prom-test"].Token);
+        main.SelectedTabIndex = 0;
+        await main.RefreshAsync();
+        Equal(3, main.ReceiptsView.Cast<ReceiptRowViewModel>().Count());
+        Equal(PrintItemStatus.Done, main.Receipts.Single(r => r.Id == ReceiptThree).PrintStatus);
+        main.SelectAllCommand.Execute(null);
+        await ExecuteAsync(main.PrintSelectedCommand);
+        Equal(3, fixture.History.Records.Count);
+        Equal(1, fixture.Links.Saves);
+        Equal(0, fixture.Settings.SecretSaves);
+    }
+
+    private static async Task ActiveTabCommandsAsync()
+    {
+        var fixture = new Fixture();
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync();
+        main.AllReceiptsTab.SearchText = "2";
+        main.AllReceiptsTab.SelectedReceipt = main.Receipts.Single(r => r.Id == ReceiptTwo);
+        main.SelectAllCommand.Execute(null);
+        await OpenOrdersAsync(main, workspace);
+        main.SearchText = "1";
+        main.OrdersReceiptsTab.SelectedReceipt = main.Receipts.Single(r => r.Id == ReceiptOne);
+        Equal(0, main.SelectedCount); True(!main.PrintSelectedCommand.CanExecute(null));
+        main.SelectAllCommand.Execute(null);
+        await ExecuteAsync(main.PreviewCommand);
+        Equal(ReceiptOne, fixture.Dialogs.PreviewId);
+        await ExecuteAsync(main.PrintSelectedCommand);
+        AssertConfirmation(fixture, [ReceiptOne]);
+        main.SelectedTabIndex = 0;
+        Equal(1, main.SelectedCount);
+        await ExecuteAsync(main.PreviewCommand);
+        Equal(ReceiptTwo, fixture.Dialogs.PreviewId);
+        await ExecuteAsync(main.PrintSelectedCommand);
+        AssertConfirmation(fixture, [ReceiptTwo]);
+        Equal(2, fixture.Printer.Calls);
+        True(main.AllReceiptsTab.View.Cast<ReceiptRowViewModel>().All(r => r.PrintStatus == PrintItemStatus.Done));
+        True(main.OrdersReceiptsTab.View.Cast<ReceiptRowViewModel>().All(r => r.PrintStatus == PrintItemStatus.Done));
+    }
+
+    private static async Task SwitchDuringPrintAsync()
+    {
+        var fixture = new Fixture();
+        fixture.Printer.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync();
+        await OpenOrdersAsync(main, workspace);
+        main.Receipts.Single(r => r.Id == ReceiptOne).IsSelectedForOrders = true;
+        main.SelectedTabIndex = 0;
+        main.Receipts.Single(r => r.Id == ReceiptTwo).IsSelected = true;
+        fixture.Dialogs.DuringConfirmation = () =>
+        {
+            main.SelectedTabIndex = 1;
+            True(main.IsBusy && !main.PrintSelectedCommand.CanExecute(null));
+            True(!main.RetryFailedCommand.CanExecute(null));
+            main.PrintSelectedCommand.Execute(null); // Async command guard prevents a second job.
+            fixture.Settings.App.PrinterName = "changed-after-snapshot";
+        };
+        var print = ExecuteAsync(main.PrintSelectedCommand, () => !main.IsBusy);
+        await fixture.Printer.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Equal(1, fixture.Printer.Calls);
+        Equal("mock-printer", fixture.Printer.PrinterName);
+        True(fixture.Printer.BatchIds.SequenceEqual([ReceiptTwo]));
+        main.SelectedTabIndex = 0;
+        main.SelectedTabIndex = 1;
+        True(!main.PrintSelectedCommand.CanExecute(null));
+        main.PrintSelectedCommand.Execute(null);
+        Equal(1, fixture.Printer.Calls);
+        fixture.Printer.Gate.SetResult(true);
+        await print;
+        AssertConfirmation(fixture, [ReceiptTwo]);
+        Equal(1, fixture.Printer.Calls);
+        Equal(PrintItemStatus.Waiting, main.Receipts.Single(r => r.Id == ReceiptOne).PrintStatus);
+        Equal(PrintItemStatus.Done, main.Receipts.Single(r => r.Id == ReceiptTwo).PrintStatus);
+        True(main.Receipts.Single(r => r.Id == ReceiptOne).IsSelectedForOrders);
+        True(!main.Receipts.Single(r => r.Id == ReceiptTwo).IsSelectedForOrders);
+    }
+
     private static async Task XamlSmokeAsync()
     {
-        // Initialize real compiled application resources, but never run App.OnStartup or show a window.
-        var application = new CheckboxBatchPrinter.App();
-        application.InitializeComponent();
+        _xamlCheckpoint = "initialize application";
+        // Never construct the production App: WPF schedules Startup even without Run.
+        // Generic Application shares only the exact compiled production resource dictionary.
+        var application = new SyntheticApplication();
+        application.Resources.MergedDictionaries.Add((ResourceDictionary)Application.LoadComponent(
+            new Uri("/CheckboxBatchPrinter;component/Resources/AppResources.xaml", UriKind.Relative)));
         application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
         True(application.Resources["BoolToVisibility"] is BooleanToVisibilityConverter);
         var fixture = new Fixture();
         var (main, _) = fixture.Create();
+        await main.RefreshAsync();
         var mainWindow = new MainWindow { DataContext = main };
         var settingsWindow = new SettingsWindow();
         var orderWindow = new OrderLinkWindow(new OrderLinkViewModel(new(Receipt(ReceiptOne, 1, 10000)), null, [Order()], [Order()]));
         var printWindow = new PrintConfirmationWindow(new("mock-printer", 2, [new(1, ReceiptOne, "1", "Prom", "ORDER-41")]));
+        var bindingFailures = new BindingErrorListener();
+        PresentationTraceSources.DataBindingSource.Listeners.Add(bindingFailures);
+        PresentationTraceSources.DataBindingSource.Switch.Level = SourceLevels.Error;
         try
         {
             foreach (var window in new Window[] { mainWindow, settingsWindow, orderWindow, printWindow })
             {
-                window.Measure(new Size(1280, 720));
-                window.Arrange(new Rect(0, 0, 1280, 720));
-                window.UpdateLayout();
+                _xamlCheckpoint = "layout " + window.GetType().Name;
+                LayoutContent(window);
                 True(window.Content is not null && !window.IsVisible);
             }
+            _xamlCheckpoint = "drain initial layout";
             await DrainDispatcherAsync(); // Run real deferred binding/layout work before declaring the smoke test successful.
+            Equal(1, application.InterceptedStartupCalls);
+            var tabs = (TabControl)mainWindow.FindName("ReceiptTabs");
+            var allGrid = (DataGrid)mainWindow.FindName("AllReceiptsGrid");
+            var ordersGrid = (DataGrid)mainWindow.FindName("OrdersReceiptsGrid");
+            True(tabs is not null && allGrid is not null && ordersGrid is not null);
+            Equal(2, tabs!.Items.Count); Equal(0, tabs.SelectedIndex); Equal(0, main.SelectedTabIndex);
+            Equal("Усі чеки", ((TabItem)tabs.Items[0]).Header?.ToString());
+            Equal("Чеки та замовлення", ((TabItem)tabs.Items[1]).Header?.ToString());
+            True(ReferenceEquals(main.AllReceiptsTab.View, allGrid!.ItemsSource));
+            True(ReferenceEquals(main.OrdersReceiptsTab.View, ordersGrid!.ItemsSource));
+            True(!ReferenceEquals(allGrid.ItemsSource, ordersGrid.ItemsSource));
+            Equal(3, allGrid.Items.Count);
+            var first = main.Receipts.Single(r => r.Id == ReceiptOne);
+            var second = main.Receipts.Single(r => r.Id == ReceiptTwo);
+            allGrid.SelectedItem = second;
+            _xamlCheckpoint = "drain all selection";
+            await DrainDispatcherAsync();
+            True(ReferenceEquals(second, main.AllReceiptsTab.SelectedReceipt));
+            _xamlCheckpoint = "all ScrollIntoView";
+            allGrid.ScrollIntoView(second);
+            _xamlCheckpoint = "all UpdateLayout";
+            allGrid.UpdateLayout();
+            var allRow = (DataGridRow)allGrid.ItemContainerGenerator.ContainerFromItem(second);
+            var allCheckBox = VisualChildren<CheckBox>(allRow).First();
+            _xamlCheckpoint = "all OnClick";
+            ClickCheckBox(allCheckBox);
+            _xamlCheckpoint = "drain all click";
+            await DrainDispatcherAsync();
+            True(second.IsSelected && !second.IsSelectedForOrders, "One checkbox toggle must change only the All Receipts mark.");
+            RenderSyntheticContent(mainWindow, "all-receipts.png");
+            tabs.SelectedIndex = 1;
+            _xamlCheckpoint = "attach orders";
+            await main.PrepareOrdersAsync();
+            _xamlCheckpoint = "layout orders";
+            LayoutContent(mainWindow);
+            _xamlCheckpoint = "drain orders layout";
+            await DrainDispatcherAsync();
+            Equal(1, main.SelectedTabIndex);
+            Equal(0, main.SelectedCount); True(!main.PrintSelectedCommand.CanExecute(null));
+            ordersGrid.SelectedItem = first;
+            _xamlCheckpoint = "drain orders selection";
+            await DrainDispatcherAsync();
+            True(ReferenceEquals(first, main.OrdersReceiptsTab.SelectedReceipt));
+            True(ReferenceEquals(second, main.AllReceiptsTab.SelectedReceipt));
+            _xamlCheckpoint = "orders ScrollIntoView";
+            ordersGrid.ScrollIntoView(first);
+            _xamlCheckpoint = "orders UpdateLayout";
+            ordersGrid.UpdateLayout();
+            var ordersRow = (DataGridRow)ordersGrid.ItemContainerGenerator.ContainerFromItem(first);
+            var ordersCheckBox = VisualChildren<CheckBox>(ordersRow).First();
+            _xamlCheckpoint = "orders OnClick";
+            ClickCheckBox(ordersCheckBox);
+            _xamlCheckpoint = "drain orders click";
+            await DrainDispatcherAsync();
+            True(first.IsSelectedForOrders && !first.IsSelected);
+            RenderSyntheticContent(mainWindow, "receipts-and-orders.png");
+            Equal(1, main.SelectedCount); True(main.PrintSelectedCommand.CanExecute(null));
+            tabs.SelectedIndex = 0;
+            _xamlCheckpoint = "drain return to all";
+            await DrainDispatcherAsync();
+            Equal(0, main.SelectedTabIndex); Equal(1, main.SelectedCount);
+            True(ReferenceEquals(second, allGrid.SelectedItem));
             Equal(0, fixture.Source.FetchCalls);
             Equal(0, fixture.Printer.Calls);
+            True(bindingFailures.Messages.Count == 0, "Compiled XAML binding errors: " + string.Join("\n", bindingFailures.Messages));
         }
         finally
         {
+            _xamlCheckpoint = "detach trace listener";
+            PresentationTraceSources.DataBindingSource.Listeners.Remove(bindingFailures);
             foreach (var window in new Window[] { mainWindow, settingsWindow, orderWindow, printWindow })
             {
+                _xamlCheckpoint = "detach/close " + window.GetType().Name;
                 window.DataContext = null;
                 BindingOperations.ClearAllBindings(window);
                 window.Content = null;
                 window.Close();
             }
+            _xamlCheckpoint = "drain cleanup";
             await DrainDispatcherAsync();
-            // StaAsync owns dispatcher shutdown. Application.Shutdown here can tear down
-            // DataBindEngine while child binding detach operations are still queued.
+            _xamlCheckpoint = "finished body";
+            // The isolated child owns dispatcher shutdown after this binding cleanup.
         }
+    }
+
+    private sealed class SyntheticApplication : Application
+    {
+        public int InterceptedStartupCalls { get; private set; }
+        protected override void OnStartup(StartupEventArgs e)
+        {
+            InterceptedStartupCalls++;
+            // The real App type is never constructed and none of its bootstrap is inherited.
+        }
+    }
+
+    private static void LayoutContent(Window window)
+    {
+        // Hidden Windows skip their own layout; directly measure the real compiled content tree.
+        var content = (FrameworkElement)window.Content;
+        content.Measure(new Size(1280, 720));
+        content.Arrange(new Rect(0, 0, 1280, 720));
+        content.UpdateLayout();
+    }
+
+    private static void ClickCheckBox(CheckBox checkBox)
+    {
+        // Run one actual WPF click/toggle handler in-process. Avoid creating an external
+        // UI Automation provider for a deliberately hidden test window.
+        var click = typeof(CheckBox).GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        click.Invoke(checkBox, null);
+    }
+
+    private static void RenderSyntheticContent(Window window, string name)
+    {
+        var directory = Environment.GetEnvironmentVariable("CHECKBOX_TEST_RENDER_DIR");
+        if (string.IsNullOrWhiteSpace(directory)) return;
+        Directory.CreateDirectory(directory);
+        var bitmap = new RenderTargetBitmap(1280, 720, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render((Visual)window.Content);
+        var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var output = File.Create(Path.Combine(directory, name));
+        encoder.Save(output);
+    }
+
+    private static IEnumerable<T> VisualChildren<T>(DependencyObject root) where T : DependencyObject
+    {
+        if (root is null) throw new InvalidOperationException("Expected a realized WPF row.");
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T result) yield return result;
+            foreach (var nested in VisualChildren<T>(child)) yield return nested;
+        }
+    }
+
+    private sealed class BindingErrorListener : TraceListener
+    {
+        public List<string> Messages { get; } = [];
+        public override void Write(string? message) { if (!string.IsNullOrEmpty(message)) Messages.Add(message); }
+        public override void WriteLine(string? message) => Write(message);
     }
 
     private static Task ExecuteAsync(ICommand command, Func<bool>? finished = null)
@@ -558,7 +1077,7 @@ internal static class MarketplaceViewModelTests
         {
             if (testDispatcher is { HasShutdownStarted: false }) testDispatcher.BeginInvokeShutdown(DispatcherPriority.Send);
             if (!thread.Join(TimeSpan.FromSeconds(5)))
-                throw new InvalidOperationException("STA test dispatcher did not terminate cleanly.");
+                throw new InvalidOperationException("STA test dispatcher did not terminate cleanly. XAML checkpoint: " + _xamlCheckpoint);
         }
     }
 
@@ -596,6 +1115,7 @@ internal static class MarketplaceViewModelTests
         public Dialogs Dialogs { get; } = new();
         public Details Details { get; } = new();
         public Images Images { get; } = new();
+        public Authentication Authentication { get; } = new();
         public Receipts ReceiptSource { get; } = new();
         public Fixture()
         {
@@ -606,7 +1126,7 @@ internal static class MarketplaceViewModelTests
         {
             var sync = new MarketplaceSyncService([Source, Rozetka], Settings, Cache);
             var workspace = new MarketplaceWorkspaceViewModel(Settings, sync, Links, Details, Dialogs);
-            var main = new MainViewModel(ReceiptSource, Images, Settings, new Authentication(), History,
+            var main = new MainViewModel(ReceiptSource, Images, Settings, Authentication, History,
                 Printer, Dialogs, new Logger(), workspace) { DateFrom = new(2026, 9, 23), DateTo = new(2026, 9, 23) };
             return (main, workspace);
         }
@@ -618,14 +1138,17 @@ internal static class MarketplaceViewModelTests
             { Connections = [new() { Id = "prom-test", Marketplace = MarketplaceKind.Prom, Enabled = true, Name = "Test shop" }] };
         public Dictionary<string, MarketplaceCredentials> Secrets { get; } = [];
         public bool ThrowOnMarketplaceLoad;
-        public int AppSaves, MarketplaceSaves, SecretSaves;
+        public int AppSaves, MarketplaceSaves, SecretSaves, MarketplaceLoads, SecretLoads;
         Task<AppSettings> ISettingsService.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(App);
-        Task<MarketplaceSettings> IMarketplaceSettingsStore.LoadAsync(CancellationToken cancellationToken) => ThrowOnMarketplaceLoad
-            ? Task.FromException<MarketplaceSettings>(new JsonException("Synthetic damaged settings.")) : Task.FromResult(Market);
+        Task<MarketplaceSettings> IMarketplaceSettingsStore.LoadAsync(CancellationToken cancellationToken)
+        {
+            MarketplaceLoads++;
+            return ThrowOnMarketplaceLoad ? Task.FromException<MarketplaceSettings>(new JsonException("Synthetic damaged settings.")) : Task.FromResult(Market);
+        }
         public Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default) { AppSaves++; return Task.CompletedTask; }
         public Task SaveAsync(MarketplaceSettings settings, CancellationToken cancellationToken = default) { MarketplaceSaves++; return Task.CompletedTask; }
-        public Task<MarketplaceCredentials?> LoadAsync(string id, CancellationToken cancellationToken = default) =>
-            Task.FromResult<MarketplaceCredentials?>(Secrets.GetValueOrDefault(id) ?? new(Token: "synthetic"));
+        public Task<MarketplaceCredentials?> LoadAsync(string id, CancellationToken cancellationToken = default)
+        { SecretLoads++; return Task.FromResult<MarketplaceCredentials?>(Secrets.GetValueOrDefault(id) ?? new(Token: "synthetic")); }
         public Task SaveAsync(string id, MarketplaceCredentials value, CancellationToken cancellationToken = default)
         { SecretSaves++; Secrets[id] = value; return Task.CompletedTask; }
     }
@@ -651,16 +1174,24 @@ internal static class MarketplaceViewModelTests
     private sealed class Cache : IMarketplaceCacheStore
     {
         private string _json = JsonSerializer.Serialize(new MarketplaceSnapshot([], []));
+        public int Loads;
+        public bool ThrowOnLoad;
         public MarketplaceSnapshot Snapshot => JsonSerializer.Deserialize<MarketplaceSnapshot>(_json)!;
-        public Task<MarketplaceSnapshot> LoadAsync(int days, CancellationToken ct = default) => Task.FromResult(Snapshot);
+        public Task<MarketplaceSnapshot> LoadAsync(int days, CancellationToken ct = default)
+        { Loads++; return ThrowOnLoad ? Task.FromException<MarketplaceSnapshot>(new JsonException("Synthetic damaged cache.")) : Task.FromResult(Snapshot); }
         public Task SaveAsync(MarketplaceSnapshot value, CancellationToken ct = default) { _json = JsonSerializer.Serialize(value); return Task.CompletedTask; }
     }
     private sealed class Links : IReceiptOrderLinkStore
     {
         private string _json = "[]";
-        public int Saves;
-        public Task<IReadOnlyList<ReceiptOrderDecision>> LoadAsync(string account, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<ReceiptOrderDecision>>(JsonSerializer.Deserialize<List<ReceiptOrderDecision>>(_json)!.Where(d => d.AccountContext == account).ToArray());
+        public int Saves, Loads;
+        public bool ThrowOnLoad;
+        public Task<IReadOnlyList<ReceiptOrderDecision>> LoadAsync(string account, CancellationToken ct = default)
+        {
+            Loads++;
+            return ThrowOnLoad ? Task.FromException<IReadOnlyList<ReceiptOrderDecision>>(new JsonException("Synthetic damaged links.")) :
+                Task.FromResult<IReadOnlyList<ReceiptOrderDecision>>(JsonSerializer.Deserialize<List<ReceiptOrderDecision>>(_json)!.Where(d => d.AccountContext == account).ToArray());
+        }
         public Task SaveDecisionAsync(ReceiptOrderDecision decision, CancellationToken ct = default)
         {
             Saves++;
@@ -683,6 +1214,7 @@ internal static class MarketplaceViewModelTests
     private sealed class Printer : IPrintService
     {
         public int Calls;
+        public string PrinterName = "";
         public string[] BatchIds = [];
         public TaskCompletionSource<bool>? Gate;
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -692,16 +1224,17 @@ internal static class MarketplaceViewModelTests
             PrintReceiptsAsSingleJobAsync([(png, id)], settings, ct);
         public async Task PrintReceiptsAsSingleJobAsync(IReadOnlyList<(byte[] Png, string ReceiptId)> receipts, AppSettings settings, CancellationToken ct = default)
         {
-            Calls++; BatchIds = receipts.Select(r => r.ReceiptId).ToArray(); Entered.TrySetResult();
+            Calls++; PrinterName = settings.PrinterName; BatchIds = receipts.Select(r => r.ReceiptId).ToArray(); Entered.TrySetResult();
             if (Gate is not null) await Gate.Task.WaitAsync(ct);
         }
         public Task PrintTestAsync(AppSettings settings, CancellationToken ct = default) => throw new InvalidOperationException("Physical test forbidden in VM scenario.");
     }
     private sealed class Receipts : IReceiptService
     {
+        public int Calls;
         public IReadOnlyList<ReceiptRecord> Rows = [Receipt(ReceiptTwo, 2, 10000), Receipt(ReceiptOne, 1, 10000), Receipt(ReceiptThree, 3, 99900)];
-        public Task<IReadOnlyList<ReceiptRecord>> GetReceiptsAsync(DateOnly from, DateOnly to, CancellationToken ct = default) =>
-            Task.FromResult(Rows);
+        public Task<IReadOnlyList<ReceiptRecord>> GetReceiptsAsync(DateOnly from, DateOnly to, CancellationToken ct = default)
+        { Calls++; return Task.FromResult(Rows); }
     }
     private sealed class Images : IReceiptImageService
     {
@@ -725,7 +1258,8 @@ internal static class MarketplaceViewModelTests
     }
     private sealed class Authentication : IAuthenticationService
     {
-        public bool HasStoredCredentials => true;
+        public bool IsStored = true;
+        public bool HasStoredCredentials => IsStored;
         public Task<string> GetAccessTokenAsync(bool forceRefresh = false, CancellationToken ct = default) => Task.FromResult("synthetic");
         public Task SignInAndStoreAsync(string login, string password, CancellationToken ct = default) => Task.CompletedTask;
         public void InvalidateToken() { }
@@ -746,12 +1280,15 @@ internal static class MarketplaceViewModelTests
         public PrintBatchConfirmation? Confirmation;
         public Action? DuringConfirmation;
         public bool AcceptPrint = true;
+        public string? PreviewId;
+        public bool SettingsOpenedForMarketplace;
         public bool ConfirmPrint(PrintBatchConfirmation batch)
         { Confirmation = batch; DuringConfirmation?.Invoke(); return AcceptPrint; }
         public void ShowInfo(string message, string title = "") { }
         public void ShowError(string message, string title = "") => Errors.Add(message);
-        public Task<bool> OpenSettingsAsync() { AfterSettings?.Invoke(); return Task.FromResult(false); }
-        public void ShowPreview(byte[] png, ReceiptRowViewModel receipt) { }
+        public Task<bool> OpenSettingsAsync(bool marketplace = false)
+        { SettingsOpenedForMarketplace = marketplace; AfterSettings?.Invoke(); return Task.FromResult(false); }
+        public void ShowPreview(byte[] png, ReceiptRowViewModel receipt) => PreviewId = receipt.Id;
         public OrderLinkChoice? ChooseOrder(ReceiptRowViewModel receipt, ReceiptDetails? details, IReadOnlyList<MarketplaceOrder> orders, IReadOnlyList<MarketplaceOrder> candidates)
         { ChoiceCalls++; return Choice; }
         public bool ConfirmUnlink() => true;

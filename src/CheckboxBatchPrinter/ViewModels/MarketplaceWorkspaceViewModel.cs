@@ -20,10 +20,14 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     private MarketplaceSnapshot _snapshot = new([], []);
     private IReadOnlyList<ReceiptOrderDecision> _decisions = [];
     private readonly Dictionary<string, ReceiptDetails> _receiptDetails = [];
-    private string _account = "", _status = "Маркетплейси не підключено.", _filter = "Усі";
-    private bool _busy, _canApply, _coverageComplete;
+    private const string SetupHint = "Інтеграції не налаштовані.\nУсі чеки доступні на вкладці “Усі чеки”.";
+    private string _account = "", _status = SetupHint, _filter = "Усі";
+    private bool _busy, _attaching, _configurationLoaded, _canApply, _coverageComplete;
+    private CancellationTokenSource _scopeCancel = new();
     private CancellationTokenSource? _cancel;
     private Task? _activeSync;
+    private Task? _attachment;
+    private int _activeSyncGeneration = -1, _attachedGeneration = -1;
     private DateOnly _from, _to;
     private int _extraHistory;
     private ReceiptRowViewModel? _selected;
@@ -36,8 +40,8 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         SyncCommand = new AsyncRelayCommand(_ => SyncAsync(), _ => !IsBusy && _account.Length > 0);
         ExpandCommand = new AsyncRelayCommand(async _ => { _extraHistory = Math.Min(_extraHistory + 30, 3650); await SyncAsync(); }, _ => !IsBusy && _account.Length > 0);
         CancelCommand = new RelayCommand(_ => _cancel?.Cancel(), _ => IsBusy);
-        LinkCommand = new AsyncRelayCommand(_ => LinkAsync(), _ => _selected is not null && !IsBusy && _canApply);
-        UnlinkCommand = new AsyncRelayCommand(_ => UnlinkAsync(), _ => _selected is not null && !IsBusy && _canApply &&
+        LinkCommand = new AsyncRelayCommand(_ => LinkAsync(), _ => _selected is not null && !IsBusy && _canApply && HasEnabledConnections);
+        UnlinkCommand = new AsyncRelayCommand(_ => UnlinkAsync(), _ => _selected is not null && !IsBusy && _canApply && HasEnabledConnections &&
             (_selected.OrderMatch?.Order is not null || _decisions.Any(d => d.AccountContext == _account && d.ReceiptId == _selected.Id && d.ConfirmedOrder is not null)));
         CopyNumberCommand = new RelayCommand(_ => _dialogs.CopyText(_selected?.OrderMatch?.Order?.Number ?? ""));
         CopyTrackingCommand = new RelayCommand(_ => _dialogs.CopyText(_selected?.OrderMatch?.Order?.TrackingDisplay ?? ""));
@@ -47,7 +51,9 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     public string Filter { get => _filter; set { if (SetProperty(ref _filter, value)) MatchesChanged?.Invoke(this, EventArgs.Empty); } }
     public bool ShowExtraColumns { get; set; }
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
-    public bool IsBusy { get => _busy; private set { SetProperty(ref _busy, value); RaiseCommands(); } }
+    public bool IsBusy { get => _busy || _attaching; private set { _busy = value; OnPropertyChanged(); RaiseCommands(); } }
+    public bool HasEnabledConnections => _config.Connections.Any(c => c.Enabled);
+    public bool ShowSetupHint => _configurationLoaded && !HasEnabledConnections;
     public ICommand SyncCommand { get; }
     public ICommand ExpandCommand { get; }
     public ICommand CancelCommand { get; }
@@ -64,49 +70,118 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     public IReadOnlyList<OrderItem> OrderItems => _selected?.OrderMatch?.Order?.Items ?? [];
     public string ReceiptScopeText => "Checkbox: лише чеки поточного касира. Відсутній чек міг бути створений іншим касиром.";
 
+    // Updating Checkbox never reads optional integration files or waits for an old API call.
+    public void SetReceiptScope(IReadOnlyList<ReceiptRowViewModel> rows, string account, DateOnly from, DateOnly to)
+    {
+        var selectedId = _account == account ? _selected?.Id : null;
+        _generation++;
+        _scopeCancel.Cancel();
+        _scopeCancel.Dispose();
+        _scopeCancel = new();
+        _cancel = null;
+        _attachment = null;
+        _attachedGeneration = -1;
+        _attaching = false;
+        IsBusy = false;
+        if (_account != account)
+        {
+            _receiptDetails.Clear(); _extraHistory = 0;
+            foreach (var row in rows) row.OrderMatch = null;
+        }
+        _rows = rows; _account = account; _from = from; _to = to; _canApply = false;
+        _coverageComplete = false;
+        _configurationLoaded = false;
+        _config = new(); _snapshot = new([], []); _decisions = [];
+        SelectedReceipt = rows.FirstOrDefault(r => r.Id == selectedId);
+        Status = "Замовлення можна перевірити на вкладці «Чеки та замовлення».";
+        NotifyConfiguration();
+    }
+
     public async Task AttachAsync(IReadOnlyList<ReceiptRowViewModel> rows, string account, DateOnly from, DateOnly to)
     {
-        _cancel?.Cancel();
-        if (_activeSync is not null) await _activeSync;
-        _generation++;
-        if (_account != account) { _receiptDetails.Clear(); _extraHistory = 0; }
-        _rows = rows; _account = account; _from = from; _to = to; _canApply = true;
-        SelectedReceipt = rows.FirstOrDefault();
+        SetReceiptScope(rows, account, from, to);
+        await EnsureAttachedAsync();
+    }
+
+    // Entering the optional tab loads local data only; only SyncAsync contacts APIs.
+    public Task EnsureAttachedAsync()
+    {
+        if (_attachedGeneration == _generation) return Task.CompletedTask;
+        if (_attachment is { IsCompleted: false }) return _attachment;
+        return _attachment = AttachLocalAsync(_generation, _account, _scopeCancel.Token);
+    }
+
+    private async Task AttachLocalAsync(int generation, string account, CancellationToken token)
+    {
+        _attaching = true; OnPropertyChanged(nameof(IsBusy)); RaiseCommands();
         try
         {
-            _config = await _settings.LoadAsync();
-            _snapshot = await _sync.LoadCachedAsync(_config.CacheDays);
-            _decisions = await _links.LoadAsync(account);
+            var config = await _settings.LoadAsync(token);
+            if (generation != _generation || token.IsCancellationRequested) return;
+            _config = config; _configurationLoaded = true; NotifyConfiguration();
+            if (!HasEnabledConnections)
+            {
+                // Disabling is not deletion: do not open cache, links or credential stores.
+                _snapshot = new([], []); _decisions = []; _canApply = true;
+                _attachedGeneration = generation; Status = SetupHint; ApplyMatches();
+                return;
+            }
+            var snapshot = await _sync.LoadCachedAsync(config.CacheDays, token);
+            if (generation != _generation || token.IsCancellationRequested) return;
+            var decisions = account.Length > 0 ? await _links.LoadAsync(account, token) : [];
+            if (generation != _generation || token.IsCancellationRequested) return;
+            _snapshot = snapshot; _decisions = decisions; _canApply = true;
+            _attachedGeneration = generation;
             _coverageComplete = false; // Cached results are not a completed check of this newly selected range.
+            Status = "Локальні дані завантажено. Натисніть «Оновити замовлення» для перевірки API.";
             ApplyMatches();
         }
-        catch (Exception) { _canApply = false; Status = "Не вдалося прочитати локальні дані маркетплейсів. Друк чеків доступний."; }
-        RaiseCommands();
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception)
+        {
+            if (generation != _generation) return;
+            _canApply = false;
+            Status = "Не вдалося прочитати локальні дані маркетплейсів. Друк чеків доступний.";
+        }
+        finally
+        {
+            if (generation == _generation)
+            { _attaching = false; OnPropertyChanged(nameof(IsBusy)); NotifyConfiguration(); RaiseCommands(); }
+        }
     }
 
     public Task SyncAsync()
     {
-        if (IsBusy || _account.Length == 0 || !_canApply) return Task.CompletedTask;
-        _activeSync = SyncCoreAsync();
+        if (_account.Length == 0) return Task.CompletedTask;
+        if (_activeSyncGeneration == _generation && _activeSync is { IsCompleted: false }) return _activeSync;
+        var previous = _activeSync;
+        _activeSyncGeneration = _generation;
+        _activeSync = SyncCoreAsync(previous, _generation);
         return _activeSync;
     }
 
-    private async Task SyncCoreAsync()
+    private async Task SyncCoreAsync(Task? previous, int generation)
     {
         IsBusy = true;
-        _cancel?.Dispose(); _cancel = new();
-        var token = _cancel.Token;
-        var generation = _generation;
-        Status = "Завантаження замовлень… Друк чеків залишається доступним.";
-        _coverageComplete = false;
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(_scopeCancel.Token);
+        _cancel = cancel;
+        var token = cancel.Token;
         try
         {
-            _config = await _settings.LoadAsync(token);
+            await EnsureAttachedAsync();
+            if (generation != _generation || token.IsCancellationRequested || !_canApply) return;
+            if (!HasEnabledConnections) { Status = SetupHint; return; }
+            // A cancelled backend may finish late. Wait only in this optional operation,
+            // never in SetReceiptScope or the Checkbox refresh path.
+            if (previous is { IsCompleted: false }) await previous.WaitAsync(token);
+            token.ThrowIfCancellationRequested();
             if (generation != _generation) return;
-            if (!_config.Connections.Any(c => c.Enabled)) { Status = "Додайте Prom або Rozetka: Налаштування → Маркетплейси."; ApplyMatches(); return; }
+            Status = "Завантаження замовлень… Друк чеків залишається доступним.";
+            _coverageComplete = false;
             var range = MarketplaceSyncService.BuildRange(_from, _to, Math.Min(3650, _config.HistoryDays + _extraHistory));
             var known = _decisions.Where(d => d.ConfirmedOrder is not null).Select(d => d.ConfirmedOrder!).Distinct().ToArray();
             var snapshot = await _sync.SynchronizeAsync(_config, range, known, token);
+            token.ThrowIfCancellationRequested();
             if (generation != _generation) return;
             _snapshot = snapshot;
             var enabled = _config.Connections.Where(c => c.Enabled).ToArray();
@@ -120,22 +195,38 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
                 try
                 {
                     var details = await _details.GetAsync(row.Id, token);
+                    token.ThrowIfCancellationRequested();
                     if (generation != _generation) return;
                     _receiptDetails[row.Id] = details;
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-                catch (Exception) { _coverageComplete = false; Status += " Деталі повернення недоступні."; }
+                catch (Exception)
+                {
+                    if (generation != _generation) return;
+                    _coverageComplete = false; Status += " Деталі повернення недоступні.";
+                }
             }
             ApplyMatches();
         }
-        catch (OperationCanceledException) { _coverageComplete = false; Status = "Оновлення скасовано: перевірка неповна. Друк доступний."; ApplyMatches(); }
-        catch (Exception) { _coverageComplete = false; Status = "Перевірка неповна: API або локальний кеш недоступні. Друк доступний."; ApplyMatches(); }
-        finally { IsBusy = false; }
+        catch (OperationCanceledException)
+        {
+            if (generation != _generation) return;
+            _coverageComplete = false; Status = "Оновлення скасовано: перевірка неповна. Друк доступний."; ApplyMatches();
+        }
+        catch (Exception)
+        {
+            if (generation != _generation) return;
+            _coverageComplete = false; Status = "Перевірка неповна: API або локальний кеш недоступні. Друк доступний."; ApplyMatches();
+        }
+        finally
+        {
+            if (generation == _generation && ReferenceEquals(_cancel, cancel)) { _cancel = null; IsBusy = false; }
+        }
     }
 
     public void InvalidateAccount()
     {
-        _generation++; _cancel?.Cancel(); _canApply = false; _account = ""; _decisions = []; _receiptDetails.Clear();
+        SetReceiptScope(_rows, "", _from, _to);
         foreach (var row in _rows) row.OrderMatch = null;
         SelectedReceipt = null; Status = "Касира змінено. Оновіть список чеків."; RaiseCommands();
     }
@@ -148,7 +239,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         if (!_canApply) return;
         var orders = ActiveOrders;
         foreach (var row in _rows)
-            row.OrderMatch = !_config.Connections.Any(c => c.Enabled) && !_decisions.Any(d => d.ReceiptId == row.Id)
+            row.OrderMatch = !HasEnabledConnections
                 ? new(ReceiptLinkState.NotChecked, null, "Маркетплейси не підключено. Звичайний друк доступний.", [])
                 : _matcher.Match(row.Model, _account, orders, _decisions, _coverageComplete, _receiptDetails.GetValueOrDefault(row.Id));
         NotifyDetails(); MatchesChanged?.Invoke(this, EventArgs.Empty); RaiseCommands();
@@ -165,8 +256,9 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
 
     private async Task LinkAsync()
     {
-        if (_selected is not { } row || !_canApply) return;
+        if (_selected is not { } row || !_canApply || !HasEnabledConnections) return;
         var generation = _generation;
+        var account = _account;
         try
         {
             if (!_receiptDetails.ContainsKey(row.Id))
@@ -176,37 +268,50 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
                     if (generation != _generation) return;
                     _receiptDetails[row.Id] = details;
                 }
-                catch (Exception) { Status = "Деталі чека недоступні. Можна порівняти номер, дату та суму."; }
+                catch (Exception)
+                {
+                    if (generation != _generation) return;
+                    Status = "Деталі чека недоступні. Можна порівняти номер, дату та суму.";
+                }
             if (generation != _generation) return;
             var choice = _dialogs.ChooseOrder(row, _receiptDetails.GetValueOrDefault(row.Id), ActiveOrders, row.OrderMatch?.Candidates ?? []);
-            if (choice is null) return;
-            var previous = _decisions.FirstOrDefault(d => d.ReceiptId == row.Id && d.AccountContext == _account);
-            var decision = new ReceiptOrderDecision { ReceiptId = row.Id, AccountContext = _account,
+            if (choice is null || generation != _generation) return;
+            var previous = _decisions.FirstOrDefault(d => d.ReceiptId == row.Id && d.AccountContext == account);
+            var decision = new ReceiptOrderDecision { ReceiptId = row.Id, AccountContext = account,
                 ConfirmedOrder = previous?.ConfirmedOrder, SuppressAutomatic = previous?.SuppressAutomatic ?? false,
                 RejectedOrders = previous?.RejectedOrders.ToList() ?? [] };
             if (choice.Reject) decision.RejectedOrders = decision.RejectedOrders.Append(choice.Key).Distinct().ToList();
             else { decision.ConfirmedOrder = choice.Key; decision.SuppressAutomatic = false; decision.RejectedOrders.RemoveAll(k => k == choice.Key); }
             decision.UpdatedAtUtc = DateTimeOffset.UtcNow;
             await _links.SaveDecisionAsync(decision);
-            _decisions = await _links.LoadAsync(_account);
+            if (generation != _generation) return;
+            var decisions = await _links.LoadAsync(account);
+            if (generation != _generation) return;
+            _decisions = decisions;
             ApplyMatches();
         }
-        catch (Exception) { Status = "Не вдалося зберегти локальну прив’язку. Повторіть дію."; }
+        catch (Exception) { if (generation == _generation) Status = "Не вдалося зберегти локальну прив’язку. Повторіть дію."; }
     }
 
     private async Task UnlinkAsync()
     {
-        if (_selected is not { } row || !_dialogs.ConfirmUnlink()) return;
+        if (_selected is not { } row || !_canApply || !HasEnabledConnections) return;
+        var generation = _generation;
+        var account = _account;
+        if (!_dialogs.ConfirmUnlink() || generation != _generation) return;
         try
         {
-            var previous = _decisions.FirstOrDefault(d => d.ReceiptId == row.Id && d.AccountContext == _account);
+            var previous = _decisions.FirstOrDefault(d => d.ReceiptId == row.Id && d.AccountContext == account);
             var rejected = previous?.RejectedOrders.ToList() ?? [];
             if (row.OrderMatch?.Order is { } order) rejected.Add(order.Key);
-            await _links.SaveDecisionAsync(new() { AccountContext = _account, ReceiptId = row.Id, SuppressAutomatic = true,
+            await _links.SaveDecisionAsync(new() { AccountContext = account, ReceiptId = row.Id, SuppressAutomatic = true,
                 RejectedOrders = rejected.Distinct().ToList(), UpdatedAtUtc = DateTimeOffset.UtcNow });
-            _decisions = await _links.LoadAsync(_account); ApplyMatches();
+            if (generation != _generation) return;
+            var decisions = await _links.LoadAsync(account);
+            if (generation != _generation) return;
+            _decisions = decisions; ApplyMatches();
         }
-        catch (Exception) { Status = "Не вдалося зберегти відв’язування."; }
+        catch (Exception) { if (generation == _generation) Status = "Не вдалося зберегти відв’язування."; }
     }
 
     private string BuildDetails(ReceiptRowViewModel? row)
@@ -226,6 +331,10 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
             (o.FiscalReceiptNumbers.Count > 0 ? $"Фіскальні номери з API: {string.Join(", ", o.FiscalReceiptNumbers)}" : "");
     }
     private void NotifyDetails() { OnPropertyChanged(nameof(DetailsText)); OnPropertyChanged(nameof(OrderItems)); }
+    private void NotifyConfiguration()
+    {
+        OnPropertyChanged(nameof(HasEnabledConnections)); OnPropertyChanged(nameof(ShowSetupHint)); RaiseCommands();
+    }
     private void RaiseCommands()
     {
         foreach (var command in new[] { SyncCommand, ExpandCommand, CancelCommand, LinkCommand, UnlinkCommand })

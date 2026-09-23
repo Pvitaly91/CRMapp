@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 using CheckboxBatchPrinter.Core.Services;
 using CheckboxBatchPrinter.ViewModels;
 
@@ -14,6 +15,17 @@ public partial class SettingsWindow : Window
             if (DataContext is SettingsViewModel { Marketplace: { } marketplace })
                 marketplace.CredentialsCleared += (_, _) => { PromTokenInput.Clear(); RozetkaPasswordInput.Clear(); };
         };
+    }
+
+    public void ShowMarketplaceTab() => MarketplaceTab.IsSelected = true;
+
+    private async void SettingsTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // SelectionChanged also bubbles from the store picker; only the tab switch loads the module.
+        if (!ReferenceEquals(e.Source, SettingsTabs) || MarketplaceTab?.IsSelected != true
+            || DataContext is not SettingsViewModel viewModel) return;
+        try { await viewModel.EnsureMarketplaceLoadedAsync(); }
+        catch (Exception ex) { ShowError(ex.Message); }
     }
 
     private void PromTokenInput_PasswordChanged(object sender, RoutedEventArgs e)

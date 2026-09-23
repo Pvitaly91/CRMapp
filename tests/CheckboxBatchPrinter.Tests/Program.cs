@@ -31,7 +31,27 @@ internal static class Program
         ("cashier sign-in stores credentials only after success", TestCashierSignInSuccessAsync)
     ];
 
-    public static async Task<int> Main()
+    [STAThread]
+    public static int Main(string[] args)
+    {
+        if (args.SequenceEqual(["--xaml-smoke"]))
+        {
+            try
+            {
+                MarketplaceViewModelTests.RunIsolatedXamlSmoke();
+                Console.WriteLine("PASS isolated compiled XAML tabs, bindings and one-click marks");
+                return 0;
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine(exception);
+                return 1;
+            }
+        }
+        return RunAllAsync().GetAwaiter().GetResult();
+    }
+
+    private static async Task<int> RunAllAsync()
     {
         Tests.AddRange(PromOrdersTests.All);
         Tests.AddRange(RozetkaOrdersTests.All);

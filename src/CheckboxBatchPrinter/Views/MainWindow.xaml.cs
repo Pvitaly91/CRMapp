@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -27,7 +26,8 @@ public partial class MainWindow : Window
 
     private void ReceiptsGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (DataContext is MainViewModel viewModel && ReceiptsGrid.SelectedItem is ReceiptRowViewModel row && viewModel.PreviewCommand.CanExecute(row))
+        if (DataContext is MainViewModel viewModel && sender is DataGrid { SelectedItem: ReceiptRowViewModel row }
+            && viewModel.PreviewCommand.CanExecute(row))
             viewModel.PreviewCommand.Execute(row);
     }
 

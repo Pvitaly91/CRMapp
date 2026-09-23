@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.Windows.Data;
 using System.Windows.Input;
 using CheckboxBatchPrinter.Core.Models;
 using CheckboxBatchPrinter.Core.Services;
@@ -22,12 +21,12 @@ public sealed class MainViewModel : ObservableObject
     private CancellationTokenSource? _operationCancellation;
     private DateTime? _dateFrom = DateRangeBuilder.TodayKyiv;
     private DateTime? _dateTo = DateRangeBuilder.TodayKyiv;
-    private string _searchText = string.Empty;
-    private ReceiptTypeOption? _selectedType;
+    private int _selectedTabIndex;
     private string _statusText = "Готово";
     private string _progressText = string.Empty;
     private bool _isBusy;
     private string? _loadedAccountContext;
+    private DateOnly? _loadedFrom, _loadedTo;
 
     public MainViewModel(
         IReceiptService receiptService,
@@ -50,16 +49,12 @@ public sealed class MainViewModel : ObservableObject
         _logger = logger;
         Marketplace = marketplace;
 
-        ReceiptsView = CollectionViewSource.GetDefaultView(Receipts);
-        ReceiptsView.Filter = MatchesFilter;
-        ReceiptsView.SortDescriptions.Add(new SortDescription(nameof(ReceiptRowViewModel.LocalDate), ListSortDirection.Descending));
-        ReceiptsView.SortDescriptions.Add(new SortDescription(nameof(ReceiptRowViewModel.LocalTime), ListSortDirection.Descending));
-        if (Marketplace is not null) Marketplace.MatchesChanged += (_, _) => ReceiptsView.Refresh();
-
         ReceiptTypes = new ObservableCollection<ReceiptTypeOption>(
             new[] { new ReceiptTypeOption(string.Empty, "Усі типи") }
                 .Concat(Core.Models.ReceiptTypes.Known.Select(x => new ReceiptTypeOption(x, Core.Models.ReceiptTypes.ToUkrainian(x)))));
-        _selectedType = ReceiptTypes[0];
+        AllReceiptsTab = new(Receipts, ReceiptTypes[0]);
+        OrdersReceiptsTab = new(Receipts, ReceiptTypes[0], usesOrders: true, Marketplace);
+        if (Marketplace is not null) Marketplace.MatchesChanged += (_, _) => OrdersReceiptsTab.View.Refresh();
 
         RefreshCommand = new AsyncRelayCommand(_ => RefreshAsync(), _ => !IsBusy);
         TodayCommand = new RelayCommand(_ => { DateFrom = DateRangeBuilder.TodayKyiv; DateTo = DateRangeBuilder.TodayKyiv; });
@@ -74,11 +69,43 @@ public sealed class MainViewModel : ObservableObject
         RetryFailedCommand = new AsyncRelayCommand(_ => RetryFailedAsync(), _ => FailedCount > 0 && !IsBusy);
         PreviewCommand = new AsyncRelayCommand(PreviewAsync, _ => !IsBusy);
         SettingsCommand = new AsyncRelayCommand(_ => OpenSettingsAsync(), _ => !IsBusy);
-        ReceiptsView.CollectionChanged += (_, _) => OnSelectionChanged(this, EventArgs.Empty);
+        MarketplaceSettingsCommand = new AsyncRelayCommand(_ => OpenSettingsAsync(marketplace: true), _ => !IsBusy);
+        foreach (var tab in new[] { AllReceiptsTab, OrdersReceiptsTab })
+        {
+            tab.View.CollectionChanged += (_, _) => OnSelectionChanged(this, EventArgs.Empty);
+            tab.PropertyChanged += (_, e) =>
+            {
+                if (ReferenceEquals(tab, ActiveTab))
+                {
+                    if (e.PropertyName == nameof(tab.SearchText)) OnPropertyChanged(nameof(SearchText));
+                    if (e.PropertyName == nameof(tab.SelectedType)) OnPropertyChanged(nameof(SelectedType));
+                }
+                if (tab.UsesOrders && e.PropertyName == nameof(tab.SelectedReceipt) && Marketplace is not null)
+                    Marketplace.SelectedReceipt = tab.SelectedReceipt;
+            };
+        }
     }
 
     public ObservableCollection<ReceiptRowViewModel> Receipts { get; } = [];
-    public ICollectionView ReceiptsView { get; }
+    public ReceiptTabViewModel AllReceiptsTab { get; }
+    public ReceiptTabViewModel OrdersReceiptsTab { get; }
+    public ReceiptTabViewModel ActiveTab => SelectedTabIndex == 1 ? OrdersReceiptsTab : AllReceiptsTab;
+    public ICollectionView ReceiptsView => ActiveTab.View;
+    public int SelectedTabIndex
+    {
+        get => _selectedTabIndex;
+        set
+        {
+            if (value is not (0 or 1) || !SetProperty(ref _selectedTabIndex, value)) return;
+            OnPropertyChanged(nameof(ActiveTab));
+            OnPropertyChanged(nameof(ReceiptsView));
+            OnPropertyChanged(nameof(SearchText));
+            OnPropertyChanged(nameof(SelectedType));
+            OnSelectionChanged(this, EventArgs.Empty);
+            if (value == 1) _ = PrepareOrdersAsync();
+        }
+    }
+    public Task PrepareOrdersAsync() => Marketplace?.EnsureAttachedAsync() ?? Task.CompletedTask;
     public ObservableCollection<ReceiptTypeOption> ReceiptTypes { get; }
     public MarketplaceWorkspaceViewModel? Marketplace { get; }
 
@@ -91,18 +118,19 @@ public sealed class MainViewModel : ObservableObject
     public ICommand RetryFailedCommand { get; }
     public ICommand PreviewCommand { get; }
     public ICommand SettingsCommand { get; }
+    public ICommand MarketplaceSettingsCommand { get; }
 
     public DateTime? DateFrom { get => _dateFrom; set => SetProperty(ref _dateFrom, value); }
     public DateTime? DateTo { get => _dateTo; set => SetProperty(ref _dateTo, value); }
     public string SearchText
     {
-        get => _searchText;
-        set { if (SetProperty(ref _searchText, value)) ReceiptsView.Refresh(); }
+        get => ActiveTab.SearchText;
+        set => ActiveTab.SearchText = value;
     }
     public ReceiptTypeOption? SelectedType
     {
-        get => _selectedType;
-        set { if (SetProperty(ref _selectedType, value)) ReceiptsView.Refresh(); }
+        get => ActiveTab.SelectedType;
+        set => ActiveTab.SelectedType = value;
     }
     public string StatusText { get => _statusText; private set => SetProperty(ref _statusText, value); }
     public string ProgressText { get => _progressText; private set => SetProperty(ref _progressText, value); }
@@ -115,8 +143,8 @@ public sealed class MainViewModel : ObservableObject
             RaiseCommands();
         }
     }
-    public int SelectedCount => Receipts.Count(x => x.IsSelected);
-    public int VisibleSelectedCount => ReceiptsView.Cast<ReceiptRowViewModel>().Count(x => x.IsSelected);
+    public int SelectedCount => Receipts.Count(ActiveTab.IsMarked);
+    public int VisibleSelectedCount => ReceiptsView.Cast<ReceiptRowViewModel>().Count(ActiveTab.IsMarked);
     public int HiddenSelectedCount => SelectedCount - VisibleSelectedCount;
     public int FailedCount => ReceiptsView.Cast<ReceiptRowViewModel>().Count(x => x.PrintStatus == PrintItemStatus.Error);
     public string SelectionText => $"Вибрано видимих: {VisibleSelectedCount}\nВибрано прихованих: {HiddenSelectedCount}";
@@ -161,6 +189,10 @@ public sealed class MainViewModel : ObservableObject
             var accountContext = PrintAccountContext.Create(settings);
             var selectedIds = _loadedAccountContext == accountContext
                 ? Receipts.Where(r => r.IsSelected).Select(r => r.Id).ToHashSet(StringComparer.OrdinalIgnoreCase) : [];
+            var orderSelectedIds = _loadedAccountContext == accountContext
+                ? Receipts.Where(r => r.IsSelectedForOrders).Select(r => r.Id).ToHashSet(StringComparer.OrdinalIgnoreCase) : [];
+            var allCurrentId = _loadedAccountContext == accountContext ? AllReceiptsTab.SelectedReceipt?.Id : null;
+            var ordersCurrentId = _loadedAccountContext == accountContext ? OrdersReceiptsTab.SelectedReceipt?.Id : null;
             var printedReceipts = await _printHistoryStore.LoadAsync(accountContext, _operationCancellation.Token);
             var items = await _receiptService.GetReceiptsAsync(
                 from, to, _operationCancellation.Token);
@@ -168,7 +200,8 @@ public sealed class MainViewModel : ObservableObject
             Receipts.Clear();
             foreach (var model in items)
             {
-                var row = new ReceiptRowViewModel(model) { IsSelected = selectedIds.Contains(model.Id) };
+                var row = new ReceiptRowViewModel(model)
+                { IsSelected = selectedIds.Contains(model.Id), IsSelectedForOrders = orderSelectedIds.Contains(model.Id) };
                 if (printedReceipts.TryGetValue(model.Id, out var history))
                 {
                     row.PrintStatus = PrintItemStatus.Done;
@@ -178,6 +211,9 @@ public sealed class MainViewModel : ObservableObject
                 Receipts.Add(row);
             }
             _loadedAccountContext = accountContext;
+            _loadedFrom = from; _loadedTo = to;
+            AllReceiptsTab.SelectedReceipt = Receipts.FirstOrDefault(r => r.Id == allCurrentId);
+            OrdersReceiptsTab.SelectedReceipt = Receipts.FirstOrDefault(r => r.Id == ordersCurrentId);
             refreshed = true;
             StatusText = items.Count == 0 ? "Чеків за обраний період не знайдено" : $"Завантажено чеків: {items.Count}";
             OnSelectionChanged(this, EventArgs.Empty);
@@ -197,63 +233,60 @@ public sealed class MainViewModel : ObservableObject
         finally { IsBusy = false; }
         if (refreshed && Marketplace is not null && _loadedAccountContext is not null)
         {
-            await Marketplace.AttachAsync(Receipts.ToArray(), _loadedAccountContext, from, to);
-            await Marketplace.SyncAsync();
+            Marketplace.SetReceiptScope(Receipts.ToArray(), _loadedAccountContext, from, to);
+            Marketplace.SelectedReceipt = OrdersReceiptsTab.SelectedReceipt;
+            if (SelectedTabIndex == 1) _ = PrepareOrdersAsync();
         }
-    }
-
-    private bool MatchesFilter(object item)
-    {
-        if (item is not ReceiptRowViewModel row) return false;
-        if (Marketplace?.MatchesFilter(row) == false) return false;
-        if (!string.IsNullOrEmpty(SelectedType?.Value) && !string.Equals(row.RawType, SelectedType.Value, StringComparison.OrdinalIgnoreCase))
-            return false;
-        if (string.IsNullOrWhiteSpace(SearchText)) return true;
-        var query = SearchText.Trim();
-        return row.FiscalCode.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
-               row.Serial.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
-               row.Payment.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
-               row.CashRegister.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
-               row.Type.Contains(query, StringComparison.CurrentCultureIgnoreCase) || row.MatchesOrderSearch(query);
     }
 
     private void SelectVisible(bool selected)
     {
-        SelectionService.SetVisibleSelection(ReceiptsView.Cast<ReceiptRowViewModel>(), (row, value) => row.IsSelected = value, selected);
+        SelectionService.SetVisibleSelection(ReceiptsView.Cast<ReceiptRowViewModel>(), ActiveTab.SetMarked, selected);
         OnSelectionChanged(this, EventArgs.Empty);
     }
 
     private void ClearSelection()
     {
-        foreach (var row in Receipts) row.IsSelected = false;
+        foreach (var row in Receipts) ActiveTab.SetMarked(row, false);
     }
 
     private async Task PrintSelectedAsync()
     {
-        var settings = await _settingsService.LoadAsync();
-        if (string.IsNullOrWhiteSpace(settings.PrinterName) || !_printService.PrinterExists(settings.PrinterName))
-        {
-            _dialogs.ShowError("Оберіть доступний принтер у Налаштуваннях → Друк.");
-            return;
-        }
-        var accountContext = PrintAccountContext.Create(settings);
-        if (!string.Equals(_loadedAccountContext, accountContext, StringComparison.Ordinal))
-        {
-            _dialogs.ShowError("Касира Checkbox змінено. Натисніть «Оновити» перед друком.");
-            return;
-        }
-        // Capture once on the UI thread. Marketplace sync can continue inside the modal
-        // dialog or while PNGs load, but cannot change this batch or its displayed metadata.
-        var selected = ReceiptsView.Cast<ReceiptRowViewModel>().Where(x => x.IsSelected).ToArray();
+        // Capture the active tab before the first await; tab switching and order sync
+        // never change the submitted rows, their order or confirmation metadata.
+        var tab = ActiveTab;
+        var selected = tab.View.Cast<ReceiptRowViewModel>().Where(tab.IsMarked).ToArray();
         if (selected.Length == 0) return;
-        var confirmation = new PrintBatchConfirmation(settings.PrinterName, HiddenSelectedCount,
-            selected.Select((row, index) => new PrintBatchItem(index + 1, row.Id, row.Serial, row.Marketplace, row.OrderNumber)));
+        var hiddenCount = HiddenSelectedCount;
+        var items = selected.Select((row, index) => new PrintBatchItem(index + 1, row.Id, row.Serial, row.Marketplace, row.OrderNumber)).ToArray();
 
         IsBusy = true;
         var success = 0;
         var errors = 0;
         try
         {
+            var sourceSettings = await _settingsService.LoadAsync();
+            // A detached copy also freezes the printer and paper settings for this job.
+            var settings = new AppSettings
+            {
+                ApiBaseUrl = sourceSettings.ApiBaseUrl, Login = sourceSettings.Login,
+                PrinterName = sourceSettings.PrinterName, PaperWidth = sourceSettings.PaperWidth,
+                CustomPaperWidthMm = sourceSettings.CustomPaperWidthMm, PrintableWidthMm = sourceSettings.PrintableWidthMm,
+                SeparatePrintJobPerReceipt = sourceSettings.SeparatePrintJobPerReceipt,
+                CacheRetentionDays = sourceSettings.CacheRetentionDays, HttpTimeoutSeconds = sourceSettings.HttpTimeoutSeconds
+            };
+            if (string.IsNullOrWhiteSpace(settings.PrinterName) || !_printService.PrinterExists(settings.PrinterName))
+            {
+                _dialogs.ShowError("Оберіть доступний принтер у Налаштуваннях → Друк.");
+                return;
+            }
+            var accountContext = PrintAccountContext.Create(settings);
+            if (!string.Equals(_loadedAccountContext, accountContext, StringComparison.Ordinal))
+            {
+                _dialogs.ShowError("Касира Checkbox змінено. Натисніть «Оновити» перед друком.");
+                return;
+            }
+            var confirmation = new PrintBatchConfirmation(settings.PrinterName, hiddenCount, items);
             if (!_dialogs.ConfirmPrint(confirmation)) return;
             foreach (var row in selected) { row.PrintStatus = PrintItemStatus.Waiting; row.PrintError = string.Empty; }
             if (selected.Length == 1)
@@ -353,13 +386,14 @@ public sealed class MainViewModel : ObservableObject
     private async Task RetryFailedAsync()
     {
         var failed = ReceiptsView.Cast<ReceiptRowViewModel>().Where(x => x.PrintStatus == PrintItemStatus.Error).ToArray();
-        foreach (var row in Receipts) row.IsSelected = failed.Contains(row);
+        foreach (var row in Receipts) ActiveTab.SetMarked(row, failed.Contains(row));
         await PrintSelectedAsync();
     }
 
     private async Task PreviewAsync(object? parameter)
     {
-        var row = parameter as ReceiptRowViewModel ?? Receipts.FirstOrDefault(x => x.IsSelected);
+        var tab = ActiveTab;
+        var row = parameter as ReceiptRowViewModel ?? tab.SelectedReceipt ?? tab.View.Cast<ReceiptRowViewModel>().FirstOrDefault(tab.IsMarked);
         if (row is null) { _dialogs.ShowInfo("Оберіть чек для перегляду."); return; }
         IsBusy = true;
         StatusText = "Завантаження перегляду…";
@@ -378,15 +412,21 @@ public sealed class MainViewModel : ObservableObject
         finally { IsBusy = false; }
     }
 
-    private async Task OpenSettingsAsync()
+    private async Task OpenSettingsAsync(bool marketplace = false)
     {
-        var changed = await _dialogs.OpenSettingsAsync();
+        var changed = await _dialogs.OpenSettingsAsync(marketplace);
         if (changed && _authentication.HasStoredCredentials) StatusText = "Налаштування збережено";
         // Testing Checkbox credentials persists them even if the dialog is then cancelled.
         if (Marketplace is not null)
         {
             var settings = await _settingsService.LoadAsync();
             if (_loadedAccountContext != PrintAccountContext.Create(settings)) Marketplace.InvalidateAccount();
+            else if (_loadedAccountContext is not null && _loadedFrom is { } from && _loadedTo is { } to)
+            {
+                Marketplace.SetReceiptScope(Receipts.ToArray(), _loadedAccountContext, from, to);
+                Marketplace.SelectedReceipt = OrdersReceiptsTab.SelectedReceipt;
+                if (SelectedTabIndex == 1) await PrepareOrdersAsync();
+            }
         }
     }
 
@@ -402,7 +442,7 @@ public sealed class MainViewModel : ObservableObject
 
     private void RaiseCommands()
     {
-        foreach (var command in new ICommand[] { RefreshCommand, SelectAllCommand, ClearSelectionCommand, PrintSelectedCommand, RetryFailedCommand, PreviewCommand, SettingsCommand })
+        foreach (var command in new ICommand[] { RefreshCommand, SelectAllCommand, ClearSelectionCommand, PrintSelectedCommand, RetryFailedCommand, PreviewCommand, SettingsCommand, MarketplaceSettingsCommand })
         {
             if (command is RelayCommand relay) relay.RaiseCanExecuteChanged();
             if (command is AsyncRelayCommand asyncRelay) asyncRelay.RaiseCanExecuteChanged();

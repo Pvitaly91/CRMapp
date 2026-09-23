@@ -8,7 +8,7 @@
             <Button Content="Скасувати" IsCancel="True" />
             <Button Content="Зберегти" Click="Save_Click" IsDefault="True" Background="#1769AA" Foreground="White" />
         </StackPanel>
-        <TabControl>
+        <TabControl x:Name="SettingsTabs" SelectionChanged="SettingsTabs_SelectionChanged">
             <TabItem Header="Checkbox">
                 <Grid Margin="16">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="170" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
@@ -47,11 +47,12 @@
                     <Button Grid.Row="5" Grid.Column="1" Content="Надрукувати тест" HorizontalAlignment="Left" Click="TestPrint_Click" />
                 </Grid>
             </TabItem>
-            <TabItem Header="Маркетплейси">
+            <TabItem x:Name="MarketplaceTab" Header="Маркетплейси">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="14" DataContext="{Binding Marketplace}">
                         <TextBlock Text="Лише читання замовлень. Prom: токен із правом читання замовлень. Для іншого магазину створіть нове підключення; для ротації токена використовуйте існуюче."
                                    TextWrapping="Wrap" Background="#EDF6FF" Padding="10" />
+                        <StackPanel IsEnabled="{Binding CanEdit}">
                         <WrapPanel>
                             <Button Content="Додати Prom" Command="{Binding AddPromCommand}" />
                             <Button Content="Додати Rozetka" Command="{Binding AddRozetkaCommand}" />
@@ -79,6 +80,7 @@
                             <TextBlock Text="Строк кешу, днів:" VerticalAlignment="Center" Margin="12,0,0,0" />
                             <TextBox Text="{Binding CacheDays}" Width="70" />
                         </WrapPanel>
+                        </StackPanel>
                         <TextBlock Text="{Binding Status}" TextWrapping="Wrap" Background="#F2F4F7" Padding="10" Margin="3,6" />
                         <ProgressBar Height="10" IsIndeterminate="True" Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}" />
                     </StackPanel>

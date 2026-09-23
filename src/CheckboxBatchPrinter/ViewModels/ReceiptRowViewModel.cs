@@ -7,6 +7,7 @@ namespace CheckboxBatchPrinter.ViewModels;
 public sealed class ReceiptRowViewModel : ObservableObject
 {
     private bool _isSelected;
+    private bool _isSelectedForOrders;
     private PrintItemStatus _printStatus = PrintItemStatus.Waiting;
     private string _printError = string.Empty;
     private ReceiptOrderMatch? _orderMatch;
@@ -71,6 +72,16 @@ public sealed class ReceiptRowViewModel : ObservableObject
     {
         get => _printStatus;
         set { if (SetProperty(ref _printStatus, value)) OnPropertyChanged(nameof(PrintStatusText)); }
+    }
+
+    public bool IsSelectedForOrders
+    {
+        get => _isSelectedForOrders;
+        set
+        {
+            if (!SetProperty(ref _isSelectedForOrders, value)) return;
+            SelectionChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     public string PrintError

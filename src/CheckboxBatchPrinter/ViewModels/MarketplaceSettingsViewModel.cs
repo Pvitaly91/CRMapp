@@ -14,7 +14,7 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
     private MarketplaceConnection? _selected;
     private string _token = "", _login = "", _password = "", _status = "Локальні секрети захищено для поточного користувача Windows.";
     private bool _busy;
-    private bool _canEdit = true;
+    private bool _canEdit;
     private int _historyDays = 30, _cacheDays = 30;
     private readonly Dictionary<string, MarketplaceCredentials> _pending = [];
 
@@ -66,29 +66,45 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
 
     public async Task LoadAsync()
     {
-        MarketplaceSettings settings;
-        try { settings = await _settings.LoadAsync(); }
-        catch (Exception)
+        IsBusy = true;
+        CanEdit = false;
+        var settingsLoaded = false;
+        try
         {
-            CanEdit = false;
-            Status = "Файл налаштувань маркетплейсів недоступний або пошкоджений. Його не буде перезаписано; налаштування Checkbox і принтера доступні.";
-            ((RelayCommand)AddPromCommand).RaiseCanExecuteChanged();
-            ((RelayCommand)AddRozetkaCommand).RaiseCanExecuteChanged();
-            return;
+            MarketplaceSettings settings;
+            try { settings = await _settings.LoadAsync(); }
+            catch (Exception)
+            {
+                Status = "Файл налаштувань маркетплейсів недоступний або пошкоджений. Його не буде перезаписано; налаштування Checkbox і принтера доступні.";
+                return;
+            }
+            Connections.Clear();
+            foreach (var connection in settings.Connections) Connections.Add(connection);
+            HistoryDays = settings.HistoryDays; CacheDays = settings.CacheDays;
+            Selected = Connections.FirstOrDefault();
+            settingsLoaded = true;
+            if (!Connections.Any(connection => connection.Enabled))
+            {
+                // Disabled integrations retain their files and secrets without opening them.
+                Status = "Інтеграції не налаштовані.\nУсі чеки доступні на вкладці “Усі чеки”.";
+                return;
+            }
+            MarketplaceSnapshot snapshot;
+            try { snapshot = await _sync.LoadCachedAsync(CacheDays); }
+            catch (Exception)
+            {
+                Status = "Не вдалося прочитати захищений кеш маркетплейсів. Налаштування Checkbox та принтера доступні. Збережені файли не видалено.";
+                return;
+            }
+            Status = snapshot.States.Count == 0 ? "Підключення ще не оновлювалися." : string.Join("\n", snapshot.States.Select(s =>
+                $"{Connections.FirstOrDefault(c => c.Id == s.ConnectionId)?.Name ?? "Підключення"}: {s.Message} Останнє успішне: {s.LastSuccessUtc?.ToLocalTime().ToString("dd.MM.yyyy HH:mm") ?? "немає"}"));
         }
-        Connections.Clear();
-        foreach (var connection in settings.Connections) Connections.Add(connection);
-        HistoryDays = settings.HistoryDays; CacheDays = settings.CacheDays;
-        Selected = Connections.FirstOrDefault();
-        MarketplaceSnapshot snapshot;
-        try { snapshot = await _sync.LoadCachedAsync(CacheDays); }
-        catch (Exception)
+        finally
         {
-            Status = "Не вдалося прочитати захищений кеш маркетплейсів. Налаштування Checkbox та принтера доступні. Збережені файли не видалено.";
-            return;
+            // Lazy tab entry must not let a later Connections.Clear overwrite early edits.
+            CanEdit = settingsLoaded;
+            IsBusy = false;
         }
-        Status = snapshot.States.Count == 0 ? "Підключення ще не оновлювалися." : string.Join("\n", snapshot.States.Select(s =>
-            $"{Connections.FirstOrDefault(c => c.Id == s.ConnectionId)?.Name ?? "Підключення"}: {s.Message} Останнє успішне: {s.LastSuccessUtc?.ToLocalTime().ToString("dd.MM.yyyy HH:mm") ?? "немає"}"));
     }
     private void Add(MarketplaceKind kind)
     {

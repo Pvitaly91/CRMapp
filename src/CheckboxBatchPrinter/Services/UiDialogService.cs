@@ -22,7 +22,7 @@ public sealed class UiDialogService(
     public void ShowError(string message, string title = "Помилка") =>
         MessageBox.Show(Application.Current.MainWindow, message, title, MessageBoxButton.OK, MessageBoxImage.Error);
 
-    public async Task<bool> OpenSettingsAsync()
+    public async Task<bool> OpenSettingsAsync(bool marketplace = false)
     {
         var viewModel = new SettingsViewModel(settingsService, authentication, imageService, printService, logger, marketplaceSettingsFactory?.Invoke());
         await viewModel.LoadAsync();
@@ -31,6 +31,11 @@ public sealed class UiDialogService(
             Owner = Application.Current.MainWindow,
             DataContext = viewModel
         };
+        if (marketplace)
+        {
+            await viewModel.EnsureMarketplaceLoadedAsync();
+            window.ShowMarketplaceTab();
+        }
         return window.ShowDialog() == true;
     }
 

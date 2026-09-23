@@ -26,6 +26,7 @@ public sealed class SettingsViewModel : ObservableObject
     private string _diagnosticStatus = "Готово";
     private bool _isBusy;
     private string _originalLogin = string.Empty;
+    private Task? _marketplaceLoad;
 
     public SettingsViewModel(ISettingsService settingsService, IAuthenticationService authentication,
         IReceiptImageService imageService, IPrintService printService, IAppLogger logger,
@@ -74,8 +75,11 @@ public sealed class SettingsViewModel : ObservableObject
         Printers.Clear();
         foreach (var printer in _printService.GetInstalledPrinters()) Printers.Add(printer);
         if (string.IsNullOrWhiteSpace(SelectedPrinter) && Printers.Count > 0) SelectedPrinter = Printers[0];
-        if (Marketplace is not null) await Marketplace.LoadAsync();
     }
+
+    // Checkbox/printer settings must not wait for or read optional integration files.
+    public Task EnsureMarketplaceLoadedAsync() => Marketplace is null
+        ? Task.CompletedTask : _marketplaceLoad ??= Marketplace.LoadAsync();
 
     public async Task SaveAsync()
     {
@@ -93,7 +97,11 @@ public sealed class SettingsViewModel : ObservableObject
                     throw new InvalidOperationException("Для зміни логіна введіть пароль Checkbox.");
             }
             await _settingsService.SaveAsync(_settings);
-            if (Marketplace is not null) await Marketplace.SaveAsync();
+            if (_marketplaceLoad is not null && Marketplace is not null)
+            {
+                await _marketplaceLoad;
+                await Marketplace.SaveAsync();
+            }
             _originalLogin = _settings.Login;
             Password = string.Empty;
             DiagnosticStatus = "Налаштування збережено";
