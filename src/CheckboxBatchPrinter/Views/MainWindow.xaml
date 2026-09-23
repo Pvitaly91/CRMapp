@@ -8,21 +8,25 @@
         <Border DockPanel.Dock="Top" Background="White" BorderBrush="#D9DEE7" BorderThickness="0,0,0,1" Padding="10">
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" /><ColumnDefinition Width="150" />
-                    <ColumnDefinition Width="Auto" /><ColumnDefinition Width="150" />
+                    <ColumnDefinition Width="Auto" /><ColumnDefinition Width="145" /><ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" /><ColumnDefinition Width="145" /><ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="18" /><ColumnDefinition Width="240" />
                     <ColumnDefinition Width="180" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <TextBlock Grid.Column="0" Text="Дата від" VerticalAlignment="Center" Margin="3" />
                 <DatePicker Grid.Column="1" SelectedDate="{Binding DateFrom}" />
-                <TextBlock Grid.Column="2" Text="Дата до" VerticalAlignment="Center" Margin="8,3,3,3" />
-                <DatePicker Grid.Column="3" SelectedDate="{Binding DateTo}" />
-                <Button Grid.Column="4" Content="Сьогодні" Command="{Binding TodayCommand}" />
-                <Button Grid.Column="5" Content="Оновити" Command="{Binding RefreshCommand}" ToolTip="F5" />
-                <TextBox Grid.Column="7" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" ToolTip="Пошук за номером, оплатою, типом або касою" />
-                <ComboBox Grid.Column="8" ItemsSource="{Binding ReceiptTypes}" SelectedItem="{Binding SelectedType}" />
-                <Button Grid.Column="10" Content="Налаштування" Command="{Binding SettingsCommand}" />
+                <Button Grid.Column="2" Content="×" Command="{Binding ClearDateCommand}" CommandParameter="from"
+                        ToolTip="Скинути дату від" MinWidth="28" Padding="5,2" />
+                <TextBlock Grid.Column="3" Text="Дата до" VerticalAlignment="Center" Margin="8,3,3,3" />
+                <DatePicker Grid.Column="4" SelectedDate="{Binding DateTo}" />
+                <Button Grid.Column="5" Content="×" Command="{Binding ClearDateCommand}" CommandParameter="to"
+                        ToolTip="Скинути дату до" MinWidth="28" Padding="5,2" />
+                <Button Grid.Column="6" Content="Сьогодні" Command="{Binding TodayCommand}" />
+                <Button Grid.Column="7" Content="Оновити" Command="{Binding RefreshCommand}" ToolTip="F5" />
+                <TextBox Grid.Column="9" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" ToolTip="Пошук за номером, оплатою, типом або касою" />
+                <ComboBox Grid.Column="10" ItemsSource="{Binding ReceiptTypes}" SelectedItem="{Binding SelectedType}" />
+                <Button Grid.Column="12" Content="Налаштування" Command="{Binding SettingsCommand}" />
             </Grid>
         </Border>
 

@@ -56,6 +56,11 @@ public sealed class MainViewModel : ObservableObject
 
         RefreshCommand = new AsyncRelayCommand(_ => RefreshAsync(), _ => !IsBusy);
         TodayCommand = new RelayCommand(_ => { DateFrom = DateTime.Today; DateTo = DateTime.Today; });
+        ClearDateCommand = new RelayCommand(parameter =>
+        {
+            if (string.Equals(parameter as string, "from", StringComparison.Ordinal)) DateFrom = null;
+            if (string.Equals(parameter as string, "to", StringComparison.Ordinal)) DateTo = null;
+        });
         SelectAllCommand = new RelayCommand(_ => SelectVisible(true), _ => Receipts.Count > 0 && !IsBusy);
         ClearSelectionCommand = new RelayCommand(_ => SelectVisible(false), _ => Receipts.Count > 0 && !IsBusy);
         PrintSelectedCommand = new AsyncRelayCommand(_ => PrintSelectedAsync(), _ => SelectedCount > 0 && !IsBusy);
@@ -70,6 +75,7 @@ public sealed class MainViewModel : ObservableObject
 
     public ICommand RefreshCommand { get; }
     public ICommand TodayCommand { get; }
+    public ICommand ClearDateCommand { get; }
     public ICommand SelectAllCommand { get; }
     public ICommand ClearSelectionCommand { get; }
     public ICommand PrintSelectedCommand { get; }
