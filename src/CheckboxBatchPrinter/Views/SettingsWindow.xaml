@@ -42,8 +42,8 @@
                     <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding CustomPaperWidthMm}" IsEnabled="{Binding IsCustomPaperWidth}" />
                     <TextBlock Grid.Row="3" Text="Ширина області друку, мм" VerticalAlignment="Center" />
                     <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding PrintableWidthMm}" />
-                    <CheckBox Grid.Row="4" Grid.ColumnSpan="2" IsChecked="{Binding SeparatePrintJobPerReceipt}" Margin="3,12"
-                              Content="Окреме завдання друку для кожного чека (рекомендовано для автообрізання)" />
+                    <TextBlock Grid.Row="4" Grid.ColumnSpan="2" Margin="3,12" TextWrapping="Wrap" Foreground="#667085"
+                               Text="Пачка друкується одним безперервним завданням із короткими розділювачами між чеками." />
                     <Button Grid.Row="5" Grid.Column="1" Content="Надрукувати тест" HorizontalAlignment="Left" Click="TestPrint_Click" />
                 </Grid>
             </TabItem>

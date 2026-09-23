@@ -1,8 +1,14 @@
+using System.IO;
 using System.Net;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using CheckboxBatchPrinter.Core.Models;
 using CheckboxBatchPrinter.Core.Services;
+using CheckboxBatchPrinter.Services;
 
 namespace CheckboxBatchPrinter.Tests;
 
@@ -16,6 +22,7 @@ internal static class Program
         ("selection", TestSelectionAsync),
         ("image scaling", TestImageScalingAsync),
         ("printable size", TestPrintableSizeAsync),
+        ("batch print uses one continuous page with compact separators", TestBatchPrintPageAsync),
         ("print queue continues after error", TestBatchQueueAsync),
         ("retry", TestRetryAsync),
         ("API errors", TestApiErrorAsync),
@@ -73,6 +80,7 @@ internal static class Program
         var handler = new StubHandler(request =>
         {
             var query = request.RequestUri!.Query;
+            True(query.Contains("self_receipts=true", StringComparison.Ordinal));
             var offset = query.Contains("offset=100", StringComparison.Ordinal) ? 100 : 0;
             requestedOffsets.Add(offset);
             var count = offset == 0 ? 100 : 1;
@@ -123,6 +131,50 @@ internal static class Program
         NearlyEqual(1 * 96 / 25.4, geometry.MarginDip);
         Throws<ArgumentOutOfRangeException>(() => PrintGeometry.Calculate(400, 800, 60, 58));
         return Task.CompletedTask;
+    }
+
+    private static Task TestBatchPrintPageAsync()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var receipts = Enumerable.Range(1, 3)
+                    .Select(index => (CreatePng(100, 200), $"receipt-{index}"))
+                    .ToArray();
+                var settings = new AppSettings { PaperWidth = PaperWidth.Mm50, PrintableWidthMm = 48 };
+                var page = WindowsPrintService.BuildBatchPage(receipts, settings, out var width, out var height);
+                var separators = page.Children.OfType<Border>().ToArray();
+                Equal(2, separators.Length);
+                Equal(5, page.Children.Count);
+                NearlyEqual(width * 0.82, separators[0].Width);
+                NearlyEqual(0.3 * 96 / 25.4, separators[0].Height);
+
+                var imageHeight = PrintGeometry.Calculate(100, 200, 48, 50, 0).HeightDip;
+                var expectedHeight = 2 * 0.6 * 96 / 25.4 + 3 * imageHeight +
+                                     2 * 1.9 * 96 / 25.4;
+                NearlyEqual(expectedHeight, height);
+            }
+            catch (Exception exception) { failure = exception; }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+        if (failure is not null) throw failure;
+        return Task.CompletedTask;
+    }
+
+    private static byte[] CreatePng(int width, int height)
+    {
+        var stride = width;
+        var pixels = Enumerable.Repeat((byte)255, stride * height).ToArray();
+        var bitmap = BitmapSource.Create(width, height, 96, 96, PixelFormats.Gray8, null, pixels, stride);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = new MemoryStream();
+        encoder.Save(stream);
+        return stream.ToArray();
     }
 
     private static async Task TestBatchQueueAsync()

@@ -44,6 +44,6 @@ public sealed class ReceiptService(
         var fromValue = Uri.EscapeDataString(from.ToString("O", CultureInfo.InvariantCulture));
         var toValue = Uri.EscapeDataString(toExclusive.ToString("O", CultureInfo.InvariantCulture));
         return $"{baseUrl.TrimEnd('/')}/api/v1/receipts/search?from_date={fromValue}&to_date={toValue}" +
-               $"&desc=true&self_receipts=false&limit={limit}&offset={offset}";
+               $"&desc=true&self_receipts=true&limit={limit}&offset={offset}";
     }
 }

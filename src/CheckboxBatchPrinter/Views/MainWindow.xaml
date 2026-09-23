@@ -62,6 +62,11 @@
                             <DataTrigger Binding="{Binding RawType}" Value="RETURN"><Setter Property="Background" Value="#FFF0F0" /></DataTrigger>
                             <DataTrigger Binding="{Binding RawType}" Value="SERVICE_IN"><Setter Property="Background" Value="#EEF6FF" /></DataTrigger>
                             <DataTrigger Binding="{Binding RawType}" Value="SERVICE_OUT"><Setter Property="Background" Value="#EEF6FF" /></DataTrigger>
+                            <DataTrigger Binding="{Binding PrintStatus}" Value="Done">
+                                <Setter Property="Background" Value="#C7F2D4" />
+                                <Setter Property="Foreground" Value="#075E3A" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                            </DataTrigger>
                             <DataTrigger Binding="{Binding PrintStatus}" Value="Error"><Setter Property="ToolTip" Value="{Binding PrintError}" /></DataTrigger>
                         </Style.Triggers>
                     </Style>

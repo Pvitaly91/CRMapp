@@ -203,7 +203,7 @@ public sealed class MainViewModel : ObservableObject
         var errors = 0;
         try
         {
-            if (settings.SeparatePrintJobPerReceipt)
+            if (selected.Length == 1)
             {
                 var current = 0;
                 var result = await BatchProcessor.RunAsync(selected, async (row, cancellationToken) =>

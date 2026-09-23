@@ -6,8 +6,6 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows.Markup;
-using System.Windows.Xps;
 using CheckboxBatchPrinter.Core.Models;
 
 namespace CheckboxBatchPrinter.Services;
@@ -51,20 +49,10 @@ public sealed class WindowsPrintService : IPrintService
             if (receipts.Count == 0) return;
             using var server = new LocalPrintServer();
             using var queue = FindQueue(server, settings.PrinterName);
-            var document = new FixedDocument();
-            double maxWidth = 0, maxHeight = 0;
-            foreach (var item in receipts)
-            {
-                var page = BuildPage(DecodeGrayscale(item.Png), settings, out var width, out var height);
-                maxWidth = Math.Max(maxWidth, width);
-                maxHeight = Math.Max(maxHeight, height);
-                var content = new PageContent();
-                ((IAddChild)content).AddChild(page);
-                document.Pages.Add(content);
-            }
-            var ticket = BuildTicket(queue, maxWidth, maxHeight);
-            var writer = PrintQueue.CreateXpsDocumentWriter(queue);
-            writer.Write(document, ticket);
+            var page = BuildBatchPage(receipts, settings, out var pageWidth, out var pageHeight);
+            var ticket = BuildTicket(queue, pageWidth, pageHeight);
+            new PrintDialog { PrintQueue = queue, PrintTicket = ticket }
+                .PrintVisual(page, $"Checkbox — пачка з {receipts.Count} чеків");
         }).Task;
 
     public Task PrintTestAsync(AppSettings settings, CancellationToken cancellationToken = default) =>
@@ -140,6 +128,67 @@ public sealed class WindowsPrintService : IPrintService
         FixedPage.SetTop(image, geometry.MarginDip);
         var page = new FixedPage { Width = pageWidth, Height = pageHeight, Background = Brushes.White };
         page.Children.Add(image);
+        page.Measure(new Size(pageWidth, pageHeight));
+        page.Arrange(new Rect(0, 0, pageWidth, pageHeight));
+        page.UpdateLayout();
+        return page;
+    }
+
+    internal static FixedPage BuildBatchPage(
+        IReadOnlyList<(byte[] Png, string ReceiptId)> receipts,
+        AppSettings settings,
+        out double pageWidth,
+        out double pageHeight)
+    {
+        if (receipts.Count == 0) throw new ArgumentException("Пачка друку порожня.", nameof(receipts));
+
+        var sources = receipts.Select(item => DecodeGrayscale(item.Png)).ToArray();
+        var geometries = sources.Select(source =>
+            PrintGeometry.Calculate(source.PixelWidth, source.PixelHeight,
+                settings.PrintableWidthMm, settings.EffectivePaperWidthMm, marginMm: 0)).ToArray();
+
+        pageWidth = geometries.Max(item => item.WidthDip);
+        var outerMargin = MillimetersToDip(0.6);
+        var separatorPadding = MillimetersToDip(0.8);
+        var separatorThickness = MillimetersToDip(0.3);
+        var separatorHeight = separatorPadding * 2 + separatorThickness;
+        pageHeight = outerMargin * 2 + geometries.Sum(item => item.HeightDip) +
+                     separatorHeight * (receipts.Count - 1);
+
+        var page = new FixedPage { Width = pageWidth, Height = pageHeight, Background = Brushes.White };
+        var top = outerMargin;
+        for (var index = 0; index < sources.Length; index++)
+        {
+            var geometry = geometries[index];
+            var image = new Image
+            {
+                Source = sources[index],
+                Width = geometry.WidthDip,
+                Height = geometry.HeightDip,
+                Stretch = Stretch.Fill,
+                SnapsToDevicePixels = true
+            };
+            RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
+            FixedPage.SetLeft(image, Math.Max(0, (pageWidth - geometry.WidthDip) / 2));
+            FixedPage.SetTop(image, top);
+            page.Children.Add(image);
+            top += geometry.HeightDip;
+
+            if (index == sources.Length - 1) continue;
+            top += separatorPadding;
+            var separator = new Border
+            {
+                Width = pageWidth * 0.82,
+                Height = separatorThickness,
+                Background = Brushes.Black,
+                SnapsToDevicePixels = true
+            };
+            FixedPage.SetLeft(separator, pageWidth * 0.09);
+            FixedPage.SetTop(separator, top);
+            page.Children.Add(separator);
+            top += separatorThickness + separatorPadding;
+        }
+
         page.Measure(new Size(pageWidth, pageHeight));
         page.Arrange(new Rect(0, 0, pageWidth, pageHeight));
         page.UpdateLayout();

@@ -52,7 +52,7 @@ public sealed class ReceiptRowViewModel : ObservableObject
         PrintItemStatus.Waiting => "Очікує",
         PrintItemStatus.Downloading => "Завантаження",
         PrintItemStatus.Printing => "Друкується",
-        PrintItemStatus.Done => "Готово",
+        PrintItemStatus.Done => "Надруковано",
         PrintItemStatus.Error => "Помилка",
         _ => "—"
     };
