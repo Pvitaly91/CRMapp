@@ -1,4 +1,5 @@
 using CheckboxBatchPrinter.Core.Models;
+using CheckboxBatchPrinter.Core.Services;
 using CheckboxBatchPrinter.Infrastructure;
 
 namespace CheckboxBatchPrinter.ViewModels;
@@ -8,6 +9,7 @@ public sealed class ReceiptRowViewModel : ObservableObject
     private bool _isSelected;
     private PrintItemStatus _printStatus = PrintItemStatus.Waiting;
     private string _printError = string.Empty;
+    private ReceiptOrderMatch? _orderMatch;
 
     public ReceiptRowViewModel(ReceiptRecord model) => Model = model;
 
@@ -17,13 +19,43 @@ public sealed class ReceiptRowViewModel : ObservableObject
     public string RawType => Model.Type;
     public string Type => ReceiptTypes.ToUkrainian(Model.Type);
     public string Status => ReceiptStatuses.ToUkrainian(Model.Status);
-    public DateTime? LocalDate => Model.DisplayDate?.LocalDateTime.Date;
-    public string LocalTime => Model.DisplayDate?.LocalDateTime.ToString("HH:mm:ss") ?? "—";
+    public DateTime? LocalDate => Model.DisplayDate is { } date ? TimeZoneInfo.ConvertTime(date, DateRangeBuilder.KyivZone).Date : null;
+    public string LocalTime => Model.DisplayDate is { } date ? TimeZoneInfo.ConvertTime(date, DateRangeBuilder.KyivZone).ToString("HH:mm:ss") : "—";
     public string FiscalCode => string.IsNullOrWhiteSpace(Model.FiscalCode) ? "—" : Model.FiscalCode;
     public string Serial => Model.Serial == 0 ? "—" : Model.Serial.ToString();
     public decimal Total => Model.TotalSum;
     public string Payment => Model.PaymentDisplay;
     public string CashRegister => string.IsNullOrWhiteSpace(Model.CashRegisterFiscalNumber) ? "—" : Model.CashRegisterFiscalNumber;
+
+    public ReceiptOrderMatch? OrderMatch
+    {
+        get => _orderMatch;
+        set
+        {
+            if (!SetProperty(ref _orderMatch, value)) return;
+            foreach (var property in new[] { nameof(Marketplace), nameof(OrderNumber), nameof(OrderBuyer), nameof(OrderStatus), nameof(OrderTracking), nameof(LinkStatus), nameof(LinkExplanation) })
+                OnPropertyChanged(property);
+        }
+    }
+    public string Marketplace => OrderMatch?.Order?.Key.Marketplace.ToString() ?? "";
+    public string OrderNumber => OrderMatch?.Order?.Number ?? "";
+    public string OrderBuyer => OrderMatch?.Order?.Buyer?.Name ?? "";
+    public string OrderStatus => OrderMatch?.Order?.Status ?? "";
+    public string OrderTracking => OrderMatch?.Order?.TrackingDisplay ?? "";
+    public string LinkExplanation => OrderMatch?.Explanation ?? "Не перевірено";
+    public string LinkStatus => OrderMatch?.State switch
+    {
+        ReceiptLinkState.Exact => "Точний зв’язок",
+        ReceiptLinkState.Manual => "Підтверджено вручну",
+        ReceiptLinkState.Candidates => "Є кандидати",
+        ReceiptLinkState.NotFound => "Не знайдено у діапазоні",
+        ReceiptLinkState.Conflict => "Конфлікт",
+        ReceiptLinkState.Incomplete => "Перевірка неповна",
+        _ => "Не перевірено"
+    };
+    public bool MatchesOrderSearch(string query) => OrderMatch?.Order is { } order &&
+        new[] { order.Number, order.Buyer?.Name, order.Buyer?.Phone, order.Recipient?.Name, order.Recipient?.Phone,
+            order.TrackingDisplay, order.StoreName }.Any(value => value?.Contains(query, StringComparison.CurrentCultureIgnoreCase) == true);
 
     public bool IsSelected
     {

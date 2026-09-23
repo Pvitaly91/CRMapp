@@ -10,3 +10,8 @@ settings.json
 credential.bin
 *.log
 *.zip
+*.dpapi
+marketplace-settings.json
+printed-receipts.json
+print-attempts*.json
+Marketplaces/

@@ -10,7 +10,8 @@ public sealed class UiDialogService(
     IAuthenticationService authentication,
     IReceiptImageService imageService,
     IPrintService printService,
-    IAppLogger logger) : IUiDialogService
+    IAppLogger logger,
+    Func<MarketplaceSettingsViewModel>? marketplaceSettingsFactory = null) : IUiDialogService
 {
     public bool ConfirmPrint(int count, string printerName) =>
         MessageBox.Show(Application.Current.MainWindow,
@@ -25,7 +26,7 @@ public sealed class UiDialogService(
 
     public async Task<bool> OpenSettingsAsync()
     {
-        var viewModel = new SettingsViewModel(settingsService, authentication, imageService, printService, logger);
+        var viewModel = new SettingsViewModel(settingsService, authentication, imageService, printService, logger, marketplaceSettingsFactory?.Invoke());
         await viewModel.LoadAsync();
         var window = new SettingsWindow
         {

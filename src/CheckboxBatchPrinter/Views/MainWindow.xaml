@@ -52,10 +52,51 @@
             </Grid>
         </Border>
 
+        <StackPanel DockPanel.Dock="Top" Margin="10,4">
+            <WrapPanel>
+                <TextBlock Text="Замовлення:" VerticalAlignment="Center" />
+                <ComboBox Width="175" ItemsSource="{Binding Marketplace.Filters}" SelectedItem="{Binding Marketplace.Filter}" />
+                <Button Content="Оновити замовлення" Command="{Binding Marketplace.SyncCommand}" />
+                <Button Content="Розширити на 30 днів" Command="{Binding Marketplace.ExpandCommand}" />
+                <Button Content="Скасувати оновлення" Command="{Binding Marketplace.CancelCommand}" />
+                <CheckBox x:Name="ExtraOrderColumns" Content="Покупець, статус, ТТН у таблиці" VerticalAlignment="Center" Margin="12,0" />
+            </WrapPanel>
+            <TextBlock Text="{Binding Marketplace.Status}" TextWrapping="Wrap" FontSize="11" Foreground="#48566A" Margin="3" MaxHeight="55" />
+            <TextBlock Text="{Binding Marketplace.ReceiptScopeText}" Foreground="#667085" FontSize="11" Margin="3" />
+        </StackPanel>
+
+        <Expander DockPanel.Dock="Bottom" Header="Пов’язане замовлення" IsExpanded="False" Margin="10,2">
+            <Grid MaxHeight="250">
+                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                <WrapPanel>
+                    <Button Content="Зв’язати / змінити прив’язку" Command="{Binding Marketplace.LinkCommand}" />
+                    <Button Content="Відв’язати" Command="{Binding Marketplace.UnlinkCommand}" />
+                    <Button Content="Копіювати № замовлення" Command="{Binding Marketplace.CopyNumberCommand}" />
+                    <Button Content="Копіювати ТТН" Command="{Binding Marketplace.CopyTrackingCommand}" />
+                </WrapPanel>
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <TextBlock Text="{Binding Marketplace.DetailsText}" TextWrapping="Wrap" Margin="6" />
+                        <ItemsControl ItemsSource="{Binding Marketplace.OrderItems}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Margin="6,2" TextWrapping="Wrap">
+                                        <Run Text="{Binding Sku}" /><Run Text=" — " /><Run Text="{Binding Name}" /><Run Text=" · " />
+                                        <Run Text="{Binding Quantity}" /><Run Text=" × " /><Run Text="{Binding UnitPrice, StringFormat=N2}" />
+                                    </TextBlock>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+        </Expander>
+
         <Grid Margin="10">
             <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
             <DataGrid x:Name="ReceiptsGrid" Grid.Row="0" ItemsSource="{Binding ReceiptsView}" AutoGenerateColumns="False"
                       CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="False" SelectionMode="Single"
+                      SelectedItem="{Binding Marketplace.SelectedReceipt, Mode=TwoWay}"
                       HeadersVisibility="Column" GridLinesVisibility="Horizontal"
                       BorderBrush="#D9DEE7" Sorting="DataGrid_Sorting" MouseDoubleClick="ReceiptsGrid_MouseDoubleClick">
                 <DataGrid.RowStyle>
@@ -97,6 +138,17 @@
                     <DataGridTextColumn Header="Статус" Binding="{Binding Status}" Width="105" IsReadOnly="True" />
                     <DataGridTextColumn Header="Каса" Binding="{Binding CashRegister}" Width="150" IsReadOnly="True" />
                     <DataGridTextColumn Header="Друк" Binding="{Binding PrintStatusText}" Width="110" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Маркетплейс" Binding="{Binding Marketplace}" Width="100" IsReadOnly="True" />
+                    <DataGridTextColumn Header="№ замовлення" Binding="{Binding OrderNumber}" Width="120" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Зв’язок" Binding="{Binding LinkStatus}" Width="165" IsReadOnly="True">
+                        <DataGridTextColumn.ElementStyle><Style TargetType="TextBlock"><Setter Property="ToolTip" Value="{Binding LinkExplanation}" /></Style></DataGridTextColumn.ElementStyle>
+                    </DataGridTextColumn>
+                    <DataGridTextColumn Header="Покупець" Binding="{Binding OrderBuyer}" Width="180" IsReadOnly="True"
+                        Visibility="{Binding IsChecked, Source={x:Reference ExtraOrderColumns}, Converter={StaticResource BoolToVisibility}}" />
+                    <DataGridTextColumn Header="Статус замовлення" Binding="{Binding OrderStatus}" Width="150" IsReadOnly="True"
+                        Visibility="{Binding IsChecked, Source={x:Reference ExtraOrderColumns}, Converter={StaticResource BoolToVisibility}}" />
+                    <DataGridTextColumn Header="ТТН" Binding="{Binding OrderTracking}" Width="155" IsReadOnly="True"
+                        Visibility="{Binding IsChecked, Source={x:Reference ExtraOrderColumns}, Converter={StaticResource BoolToVisibility}}" />
                     <DataGridTemplateColumn Header="" Width="90" CanUserSort="False">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate><Button Content="Перегляд" Padding="6,2" Command="{Binding DataContext.PreviewCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" /></DataTemplate>

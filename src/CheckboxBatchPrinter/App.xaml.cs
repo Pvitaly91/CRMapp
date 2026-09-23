@@ -12,6 +12,7 @@ namespace CheckboxBatchPrinter;
 public partial class App : Application
 {
     private HttpClient? _httpClient;
+    private HttpClient? _marketplaceHttpClient;
     private IAppLogger? _logger;
 
     protected override async void OnStartup(StartupEventArgs e)
@@ -34,10 +35,22 @@ public partial class App : Application
             var imageService = new ReceiptImageService(apiClient, settingsService, Path.Combine(localData, "Cache"), _logger);
             var printHistoryStore = new JsonPrintHistoryStore(Path.Combine(localData, "printed-receipts.json"));
             var printService = new WindowsPrintService();
-            var dialogs = new UiDialogService(settingsService, authentication, imageService, printService, _logger);
+            var marketplaceData = Path.Combine(localData, "Marketplaces");
+            var marketplaceSettings = new JsonMarketplaceSettingsStore(Path.Combine(marketplaceData, "marketplace-settings.json"));
+            var marketplaceSecrets = new DpapiMarketplaceSecretStore(Path.Combine(marketplaceData, "Secrets"));
+            var marketplaceCache = new DpapiMarketplaceCacheStore(Path.Combine(marketplaceData, "orders.dpapi"));
+            var orderLinks = new DpapiReceiptOrderLinkStore(Path.Combine(marketplaceData, "receipt-order-links.dpapi"));
+            _marketplaceHttpClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(45) };
+            var marketplaceTransport = new MarketplaceHttpTransport(_marketplaceHttpClient);
+            var marketplaceSync = new MarketplaceSyncService(
+                [new PromOrdersClient(marketplaceTransport), new RozetkaOrdersClient(marketplaceTransport)], marketplaceSecrets, marketplaceCache);
+            var marketplace = new MarketplaceWorkspaceViewModel(marketplaceSettings, marketplaceSync, orderLinks,
+                new ReceiptDetailsService(apiClient, settingsService), new OrderLinkDialogService());
+            var dialogs = new UiDialogService(settingsService, authentication, imageService, printService, _logger,
+                () => new MarketplaceSettingsViewModel(marketplaceSettings, marketplaceSecrets, marketplaceSync));
             _logger.Info("app.viewmodel.create");
             var viewModel = new MainViewModel(receiptService, imageService, settingsService, authentication,
-                printHistoryStore, printService, dialogs, _logger);
+                printHistoryStore, printService, dialogs, _logger, marketplace);
             _logger.Info("app.window.create");
             var window = new MainWindow { DataContext = viewModel };
             _logger.Info("app.window.created");
@@ -57,6 +70,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _httpClient?.Dispose();
+        _marketplaceHttpClient?.Dispose();
         base.OnExit(e);
     }
 

@@ -6,7 +6,24 @@ namespace CheckboxBatchPrinter.Views;
 
 public partial class SettingsWindow : Window
 {
-    public SettingsWindow() => InitializeComponent();
+    public SettingsWindow()
+    {
+        InitializeComponent();
+        DataContextChanged += (_, _) =>
+        {
+            if (DataContext is SettingsViewModel { Marketplace: { } marketplace })
+                marketplace.CredentialsCleared += (_, _) => { PromTokenInput.Clear(); RozetkaPasswordInput.Clear(); };
+        };
+    }
+
+    private void PromTokenInput_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is SettingsViewModel { Marketplace: { } marketplace }) marketplace.Token = PromTokenInput.Password;
+    }
+    private void RozetkaPasswordInput_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is SettingsViewModel { Marketplace: { } marketplace }) marketplace.Password = RozetkaPasswordInput.Password;
+    }
 
     private void PasswordInput_PasswordChanged(object sender, RoutedEventArgs e)
     {

@@ -20,8 +20,8 @@ public sealed class MainViewModel : ObservableObject
     private readonly IUiDialogService _dialogs;
     private readonly IAppLogger _logger;
     private CancellationTokenSource? _operationCancellation;
-    private DateTime? _dateFrom = DateTime.Today;
-    private DateTime? _dateTo = DateTime.Today;
+    private DateTime? _dateFrom = DateRangeBuilder.TodayKyiv;
+    private DateTime? _dateTo = DateRangeBuilder.TodayKyiv;
     private string _searchText = string.Empty;
     private ReceiptTypeOption? _selectedType;
     private string _statusText = "Готово";
@@ -37,7 +37,8 @@ public sealed class MainViewModel : ObservableObject
         IPrintHistoryStore printHistoryStore,
         IPrintService printService,
         IUiDialogService dialogs,
-        IAppLogger logger)
+        IAppLogger logger,
+        MarketplaceWorkspaceViewModel? marketplace = null)
     {
         _receiptService = receiptService;
         _imageService = imageService;
@@ -47,11 +48,13 @@ public sealed class MainViewModel : ObservableObject
         _printService = printService;
         _dialogs = dialogs;
         _logger = logger;
+        Marketplace = marketplace;
 
         ReceiptsView = CollectionViewSource.GetDefaultView(Receipts);
         ReceiptsView.Filter = MatchesFilter;
         ReceiptsView.SortDescriptions.Add(new SortDescription(nameof(ReceiptRowViewModel.LocalDate), ListSortDirection.Descending));
         ReceiptsView.SortDescriptions.Add(new SortDescription(nameof(ReceiptRowViewModel.LocalTime), ListSortDirection.Descending));
+        if (Marketplace is not null) Marketplace.MatchesChanged += (_, _) => ReceiptsView.Refresh();
 
         ReceiptTypes = new ObservableCollection<ReceiptTypeOption>(
             new[] { new ReceiptTypeOption(string.Empty, "Усі типи") }
@@ -59,7 +62,7 @@ public sealed class MainViewModel : ObservableObject
         _selectedType = ReceiptTypes[0];
 
         RefreshCommand = new AsyncRelayCommand(_ => RefreshAsync(), _ => !IsBusy);
-        TodayCommand = new RelayCommand(_ => { DateFrom = DateTime.Today; DateTo = DateTime.Today; });
+        TodayCommand = new RelayCommand(_ => { DateFrom = DateRangeBuilder.TodayKyiv; DateTo = DateRangeBuilder.TodayKyiv; });
         ClearDateCommand = new RelayCommand(parameter =>
         {
             if (string.Equals(parameter as string, "from", StringComparison.Ordinal)) DateFrom = null;
@@ -76,6 +79,7 @@ public sealed class MainViewModel : ObservableObject
     public ObservableCollection<ReceiptRowViewModel> Receipts { get; } = [];
     public ICollectionView ReceiptsView { get; }
     public ObservableCollection<ReceiptTypeOption> ReceiptTypes { get; }
+    public MarketplaceWorkspaceViewModel? Marketplace { get; }
 
     public ICommand RefreshCommand { get; }
     public ICommand TodayCommand { get; }
@@ -126,7 +130,7 @@ public sealed class MainViewModel : ObservableObject
             await RefreshAsync();
     }
 
-    private async Task RefreshAsync()
+    public async Task RefreshAsync()
     {
         if (DateFrom is null || DateTo is null)
         {
@@ -145,18 +149,23 @@ public sealed class MainViewModel : ObservableObject
         IsBusy = true;
         StatusText = "Завантаження чеків…";
         ProgressText = string.Empty;
+        var from = DateOnly.FromDateTime(DateFrom.Value);
+        var to = DateOnly.FromDateTime(DateTo.Value);
+        var refreshed = false;
         try
         {
             var settings = await _settingsService.LoadAsync(_operationCancellation.Token);
             var accountContext = PrintAccountContext.Create(settings);
+            var selectedIds = _loadedAccountContext == accountContext
+                ? Receipts.Where(r => r.IsSelected).Select(r => r.Id).ToHashSet(StringComparer.OrdinalIgnoreCase) : [];
             var printedReceipts = await _printHistoryStore.LoadAsync(accountContext, _operationCancellation.Token);
             var items = await _receiptService.GetReceiptsAsync(
-                DateOnly.FromDateTime(DateFrom.Value), DateOnly.FromDateTime(DateTo.Value), _operationCancellation.Token);
+                from, to, _operationCancellation.Token);
             foreach (var old in Receipts) old.SelectionChanged -= OnSelectionChanged;
             Receipts.Clear();
             foreach (var model in items)
             {
-                var row = new ReceiptRowViewModel(model);
+                var row = new ReceiptRowViewModel(model) { IsSelected = selectedIds.Contains(model.Id) };
                 if (printedReceipts.TryGetValue(model.Id, out var history))
                 {
                     row.PrintStatus = PrintItemStatus.Done;
@@ -166,6 +175,7 @@ public sealed class MainViewModel : ObservableObject
                 Receipts.Add(row);
             }
             _loadedAccountContext = accountContext;
+            refreshed = true;
             StatusText = items.Count == 0 ? "Чеків за обраний період не знайдено" : $"Завантажено чеків: {items.Count}";
             OnSelectionChanged(this, EventArgs.Empty);
         }
@@ -182,11 +192,17 @@ public sealed class MainViewModel : ObservableObject
             _dialogs.ShowError($"Не вдалося завантажити чеки. {exception.Message}");
         }
         finally { IsBusy = false; }
+        if (refreshed && Marketplace is not null && _loadedAccountContext is not null)
+        {
+            await Marketplace.AttachAsync(Receipts.ToArray(), _loadedAccountContext, from, to);
+            await Marketplace.SyncAsync();
+        }
     }
 
     private bool MatchesFilter(object item)
     {
         if (item is not ReceiptRowViewModel row) return false;
+        if (Marketplace?.MatchesFilter(row) == false) return false;
         if (!string.IsNullOrEmpty(SelectedType?.Value) && !string.Equals(row.RawType, SelectedType.Value, StringComparison.OrdinalIgnoreCase))
             return false;
         if (string.IsNullOrWhiteSpace(SearchText)) return true;
@@ -195,7 +211,7 @@ public sealed class MainViewModel : ObservableObject
                row.Serial.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
                row.Payment.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
                row.CashRegister.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
-               row.Type.Contains(query, StringComparison.CurrentCultureIgnoreCase);
+               row.Type.Contains(query, StringComparison.CurrentCultureIgnoreCase) || row.MatchesOrderSearch(query);
     }
 
     private void SelectVisible(bool selected)
@@ -349,6 +365,12 @@ public sealed class MainViewModel : ObservableObject
     {
         var changed = await _dialogs.OpenSettingsAsync();
         if (changed && _authentication.HasStoredCredentials) StatusText = "Налаштування збережено";
+        // Testing Checkbox credentials persists them even if the dialog is then cancelled.
+        if (Marketplace is not null)
+        {
+            var settings = await _settingsService.LoadAsync();
+            if (_loadedAccountContext != PrintAccountContext.Create(settings)) Marketplace.InvalidateAccount();
+        }
     }
 
     private void OnSelectionChanged(object? sender, EventArgs e)

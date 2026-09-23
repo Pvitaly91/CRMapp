@@ -1,7 +1,7 @@
 <Window x:Class="CheckboxBatchPrinter.Views.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Налаштування" Height="590" Width="650" MinHeight="540" MinWidth="600"
+        Title="Налаштування" Height="700" Width="760" MinHeight="540" MinWidth="600"
         WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip">
     <DockPanel Margin="12">
         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
@@ -46,6 +46,43 @@
                                Text="Пачка друкується одним безперервним завданням із короткими розділювачами між чеками." />
                     <Button Grid.Row="5" Grid.Column="1" Content="Надрукувати тест" HorizontalAlignment="Left" Click="TestPrint_Click" />
                 </Grid>
+            </TabItem>
+            <TabItem Header="Маркетплейси">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="14" DataContext="{Binding Marketplace}">
+                        <TextBlock Text="Лише читання замовлень. Prom: токен із правом читання замовлень. Для іншого магазину створіть нове підключення; для ротації токена використовуйте існуюче."
+                                   TextWrapping="Wrap" Background="#EDF6FF" Padding="10" />
+                        <WrapPanel>
+                            <Button Content="Додати Prom" Command="{Binding AddPromCommand}" />
+                            <Button Content="Додати Rozetka" Command="{Binding AddRozetkaCommand}" />
+                        </WrapPanel>
+                        <ComboBox ItemsSource="{Binding Connections}" SelectedItem="{Binding Selected}" DisplayMemberPath="Name" />
+                        <CheckBox Content="Увімкнути підключення" IsChecked="{Binding Selected.Enabled}" Margin="6,8" />
+                        <TextBlock Text="Назва підключення / магазину" Margin="6,3" />
+                        <TextBox Text="{Binding Selected.Name, UpdateSourceTrigger=PropertyChanged}" />
+                        <StackPanel Visibility="{Binding IsProm, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="API-токен Prom" Margin="6,3" />
+                            <PasswordBox x:Name="PromTokenInput" PasswordChanged="PromTokenInput_PasswordChanged" Margin="3" Padding="6,4" />
+                        </StackPanel>
+                        <StackPanel Visibility="{Binding IsRozetka, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="Логін продавця Rozetka" Margin="6,3" />
+                            <TextBox Text="{Binding Login, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBlock Text="Пароль продавця Rozetka" Margin="6,3" />
+                            <PasswordBox x:Name="RozetkaPasswordInput" PasswordChanged="RozetkaPasswordInput_PasswordChanged" Margin="3" Padding="6,4" />
+                        </StackPanel>
+                        <TextBlock Text="Порожні поля облікових даних зберігають попередні значення. Секрети вводьте тільки тут, локально. Пароль Checkbox зберігається окремо."
+                                   TextWrapping="Wrap" Foreground="#667085" Margin="6,5" />
+                        <Button Content="Перевірити підключення" Command="{Binding TestCommand}" HorizontalAlignment="Left" />
+                        <WrapPanel Margin="0,6">
+                            <TextBlock Text="Історія до дати чека, днів:" VerticalAlignment="Center" />
+                            <TextBox Text="{Binding HistoryDays}" Width="70" />
+                            <TextBlock Text="Строк кешу, днів:" VerticalAlignment="Center" Margin="12,0,0,0" />
+                            <TextBox Text="{Binding CacheDays}" Width="70" />
+                        </WrapPanel>
+                        <TextBlock Text="{Binding Status}" TextWrapping="Wrap" Background="#F2F4F7" Padding="10" Margin="3,6" />
+                        <ProgressBar Height="10" IsIndeterminate="True" Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}" />
+                    </StackPanel>
+                </ScrollViewer>
             </TabItem>
             <TabItem Header="Діагностика">
                 <StackPanel Margin="16">

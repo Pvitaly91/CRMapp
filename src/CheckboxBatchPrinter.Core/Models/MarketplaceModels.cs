@@ -1,0 +1,81 @@
+using System.Text.Json.Serialization;
+
+namespace CheckboxBatchPrinter.Core.Models;
+
+public enum MarketplaceKind { Prom, Rozetka }
+
+public sealed record OrderKey(MarketplaceKind Marketplace, string ConnectionId, string OrderId);
+
+public sealed class MarketplaceConnection
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public MarketplaceKind Marketplace { get; set; }
+    public bool Enabled { get; set; }
+    public string Name { get; set; } = string.Empty;
+}
+
+public sealed class MarketplaceSettings
+{
+    public int HistoryDays { get; set; } = 30;
+    public int CacheDays { get; set; } = 30;
+    public List<MarketplaceConnection> Connections { get; set; } = [];
+}
+
+public sealed record MarketplaceCredentials(string Token = "", string Login = "", string Password = "");
+public sealed record OrderPerson(string Name = "", string Phone = "");
+public sealed record OrderItem(string Name, string Sku, decimal? Quantity, decimal? UnitPrice, decimal? Total = null);
+public sealed record OrderShipment(string Carrier, string TrackingNumber, string Destination = "");
+
+public sealed class MarketplaceOrder
+{
+    public required OrderKey Key { get; init; }
+    public string StoreName { get; init; } = "";
+    public string Number { get; init; } = "";
+    public DateTimeOffset? CreatedAt { get; init; }
+    public DateTimeOffset? UpdatedAt { get; init; }
+    public string Status { get; init; } = "";
+    public string SourceStatus { get; init; } = "";
+    public string RawTotal { get; init; } = "";
+    public string RawCreatedAt { get; init; } = "";
+    public string PaymentStatus { get; init; } = "";
+    public OrderPerson? Buyer { get; init; }
+    public OrderPerson? Recipient { get; init; }
+    public decimal? Total { get; init; }
+    public string Currency { get; init; } = "";
+    public string PaymentMethod { get; init; } = "";
+    public string DeliveryMethod { get; init; } = "";
+    public decimal? Discount { get; init; }
+    public decimal? DeliveryCost { get; init; }
+    public IReadOnlyList<OrderItem> Items { get; init; } = [];
+    public IReadOnlyList<OrderShipment> Shipments { get; init; } = [];
+    // Only IDs extracted from documented fields / strictly verified URL formats.
+    public IReadOnlyList<string> ReceiptIds { get; init; } = [];
+    public IReadOnlyList<string> FiscalReceiptNumbers { get; init; } = [];
+    public IReadOnlyList<string> FiscalReceiptUrls { get; init; } = [];
+    public string? SellerUrl { get; init; }
+    public DateTimeOffset RetrievedAtUtc { get; init; } = DateTimeOffset.UtcNow;
+    [JsonIgnore] public string TrackingDisplay => string.Join(", ", Shipments.Select(s => s.TrackingNumber).Where(s => s.Length > 0).Distinct());
+}
+
+public sealed record MarketplaceRange(DateTimeOffset From, DateTimeOffset ToExclusive);
+public sealed record OrdersFetchResult(IReadOnlyList<MarketplaceOrder> Orders, bool Complete, string Message = "");
+public sealed record ConnectionSyncState(string ConnectionId, MarketplaceRange Range, bool Complete,
+    DateTimeOffset? LastSuccessUtc, string Message, DateTimeOffset AttemptedAtUtc);
+public sealed record MarketplaceSnapshot(IReadOnlyList<MarketplaceOrder> Orders, IReadOnlyList<ConnectionSyncState> States);
+
+public enum ReceiptLinkState { NotChecked, Exact, Manual, Candidates, NotFound, Conflict, Incomplete }
+public sealed record ReceiptOrderMatch(ReceiptLinkState State, MarketplaceOrder? Order, string Explanation,
+    IReadOnlyList<MarketplaceOrder> Candidates);
+
+public sealed class ReceiptOrderDecision
+{
+    public string AccountContext { get; set; } = "";
+    public string ReceiptId { get; set; } = "";
+    public OrderKey? ConfirmedOrder { get; set; }
+    public List<OrderKey> RejectedOrders { get; set; } = [];
+    public bool SuppressAutomatic { get; set; }
+    public DateTimeOffset UpdatedAtUtc { get; set; }
+}
+
+public sealed record ReceiptDetails(string Id, IReadOnlyList<OrderItem> Items, string? RelatedReceiptId = null,
+    string? CheckboxOrderId = null, bool HasUnmappedContext = false);

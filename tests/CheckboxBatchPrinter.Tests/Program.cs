@@ -33,6 +33,11 @@ internal static class Program
 
     public static async Task<int> Main()
     {
+        Tests.AddRange(PromOrdersTests.All);
+        Tests.AddRange(RozetkaOrdersTests.All);
+        Tests.AddRange(MarketplaceMatchingTests.All);
+        Tests.AddRange(MarketplaceSyncTests.All);
+        Tests.AddRange(MarketplaceViewModelTests.All);
         var failed = 0;
         foreach (var (name, test) in Tests)
         {

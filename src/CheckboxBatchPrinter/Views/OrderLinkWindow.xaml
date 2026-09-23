@@ -1,0 +1,128 @@
+<Window x:Class="CheckboxBatchPrinter.Views.OrderLinkWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Зв’язати чек із замовленням" Width="1150" Height="760" MinWidth="800" MinHeight="540"
+        WindowStartupLocation="CenterOwner" UseLayoutRounding="True" Background="#F5F7FA">
+    <Window.Resources>
+        <Style x:Key="Label" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#536174" />
+            <Setter Property="Margin" Value="0,8,0,3" />
+        </Style>
+        <Style x:Key="Value" TargetType="TextBlock">
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style x:Key="ItemsGrid" TargetType="DataGrid">
+            <Setter Property="AutoGenerateColumns" Value="False" />
+            <Setter Property="IsReadOnly" Value="True" />
+            <Setter Property="CanUserAddRows" Value="False" />
+            <Setter Property="HeadersVisibility" Value="Column" />
+            <Setter Property="MaxHeight" Value="230" />
+            <Setter Property="MinHeight" Value="55" />
+            <Setter Property="BorderBrush" Value="#D5DCE5" />
+        </Style>
+    </Window.Resources>
+    <DockPanel Margin="16">
+        <Border DockPanel.Dock="Top" Background="#FFF4D6" BorderBrush="#E9C267" BorderThickness="1" Padding="10" Margin="0,0,0,10">
+            <TextBlock Text="Кандидати — лише можливі збіги. Звірте товари, дату й суму та натисніть «Підтвердити зв’язок». Дані в Prom, Rozetka та Checkbox не змінюються."
+                       TextWrapping="Wrap" Foreground="#624900" />
+        </Border>
+        <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="2*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="1.4*" /></Grid.ColumnDefinitions>
+            <StackPanel Margin="0,0,8,0">
+                <TextBlock Text="Пошук: номер, покупець, телефон або ТТН" />
+                <TextBox Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}" MinHeight="30" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Margin="0,0,8,0">
+                <TextBlock Text="Маркетплейс" />
+                <ComboBox ItemsSource="{Binding MarketplaceFilters}" SelectedItem="{Binding MarketplaceFilter}" DisplayMemberPath="Label" MinHeight="30" />
+            </StackPanel>
+            <StackPanel Grid.Column="2">
+                <TextBlock Text="Магазин" />
+                <ComboBox ItemsSource="{Binding ShopFilters}" SelectedItem="{Binding ShopFilter}" DisplayMemberPath="Label" MinHeight="30" />
+            </StackPanel>
+        </Grid>
+        <Grid DockPanel.Dock="Bottom" Margin="0,12,0,0">
+            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+            <TextBlock Text="Зв’язок зберігається локально для цього чека та вибраного магазину." Foreground="#536174" TextWrapping="Wrap" Margin="0,0,0,8" />
+            <WrapPanel Grid.Row="1" HorizontalAlignment="Right">
+                <Button Content="Відхилити кандидата" Command="{Binding RejectCommand}" Margin="3" Padding="12,6" />
+                <Button Content="Скасувати" IsCancel="True" Margin="3" Padding="12,6" />
+                <Button Content="Підтвердити зв’язок" Command="{Binding LinkCommand}" Background="#176BAA" Foreground="White" Margin="3" Padding="12,6" />
+            </WrapPanel>
+        </Grid>
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="0.95*" MinWidth="280" /><ColumnDefinition Width="10" /><ColumnDefinition Width="1.1*" MinWidth="340" /></Grid.ColumnDefinitions>
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Text="{Binding ResultCount}" Margin="0,0,0,8" Foreground="#536174" />
+                <DataGrid ItemsSource="{Binding Orders}" SelectedItem="{Binding SelectedOrder}" AutoGenerateColumns="False"
+                          IsReadOnly="True" CanUserAddRows="False" SelectionMode="Single" SelectionUnit="FullRow"
+                          HeadersVisibility="Column" BorderBrush="#D5DCE5" HorizontalScrollBarVisibility="Auto">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Номер" Binding="{Binding Number}" Width="100" />
+                        <DataGridTextColumn Header="Джерело / магазин" Binding="{Binding Source}" Width="*" MinWidth="120" />
+                        <DataGridTextColumn Header="Перевірка" Binding="{Binding Relation}" Width="100" />
+                        <DataGridTextColumn Header="Покупець" Binding="{Binding Buyer}" Width="140" />
+                        <DataGridTextColumn Header="Дата" Binding="{Binding Date}" Width="125" />
+                    </DataGrid.Columns>
+                    <DataGrid.RowStyle>
+                        <Style TargetType="DataGridRow">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsCandidate}" Value="True"><Setter Property="Background" Value="#FFF4D6" /></DataTrigger>
+                                <Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="#D9EAF8" /><Setter Property="Foreground" Value="#182533" /></Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </DataGrid.RowStyle>
+                </DataGrid>
+            </DockPanel>
+            <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center" Background="#D5DCE5" />
+            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="4,0,6,0">
+                <StackPanel>
+                    <Border Background="White" BorderBrush="#D5DCE5" BorderThickness="1" Padding="12" Margin="0,0,0,10">
+                        <StackPanel>
+                            <TextBlock Text="{Binding ReceiptHeading}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding ReceiptFiscalNumber}" Style="{StaticResource Value}" Margin="0,5,0,0" />
+                            <Grid Margin="0,8,0,4"><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition /></Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding ReceiptDate}" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="1" Text="{Binding ReceiptAmount}" FontWeight="SemiBold" TextAlignment="Right" TextWrapping="Wrap" />
+                            </Grid>
+                            <TextBlock Text="{Binding ReceiptDetailsHint}" Foreground="#536174" TextWrapping="Wrap" Margin="0,4,0,8" />
+                            <DataGrid ItemsSource="{Binding ReceiptItems}" Style="{StaticResource ItemsGrid}">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Товар чека" Binding="{Binding Name}" Width="*" MinWidth="130" />
+                                    <DataGridTextColumn Header="Артикул" Binding="{Binding Sku}" Width="80" />
+                                    <DataGridTextColumn Header="К-ть" Binding="{Binding Quantity}" Width="55" />
+                                    <DataGridTextColumn Header="Ціна" Binding="{Binding UnitPrice, StringFormat=N2}" Width="70" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </StackPanel>
+                    </Border>
+                    <Border Background="White" BorderBrush="#D5DCE5" BorderThickness="1" Padding="12">
+                        <StackPanel>
+                            <TextBlock Text="{Binding SelectedHeading}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding SelectedRelation}" Foreground="#936600" TextWrapping="Wrap" Margin="0,6,0,4" />
+                            <Grid Margin="0,6,0,4"><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition /></Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding SelectedDate}" TextWrapping="Wrap" />
+                                <TextBlock Grid.Column="1" Text="{Binding SelectedAmount}" FontWeight="SemiBold" TextAlignment="Right" TextWrapping="Wrap" />
+                            </Grid>
+                            <TextBlock Text="{Binding Comparison}" TextWrapping="Wrap" Foreground="#536174" Margin="0,6,0,4" />
+                            <TextBlock Text="Покупець" Style="{StaticResource Label}" /><TextBlock Text="{Binding SelectedBuyer}" Style="{StaticResource Value}" />
+                            <TextBlock Text="Одержувач" Style="{StaticResource Label}" /><TextBlock Text="{Binding SelectedRecipient}" Style="{StaticResource Value}" />
+                            <TextBlock Text="Оплата / статус оплати" Style="{StaticResource Label}" /><TextBlock Text="{Binding SelectedPayment}" Style="{StaticResource Value}" />
+                            <TextBlock Text="Доставка" Style="{StaticResource Label}" /><TextBlock Text="{Binding SelectedDelivery}" Style="{StaticResource Value}" />
+                            <TextBlock Text="ТТН" Style="{StaticResource Label}" /><TextBlock Text="{Binding SelectedTracking}" Style="{StaticResource Value}" />
+                            <TextBlock Text="Товари замовлення" Style="{StaticResource Label}" />
+                            <DataGrid ItemsSource="{Binding OrderItems}" Style="{StaticResource ItemsGrid}">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Товар" Binding="{Binding Name}" Width="*" MinWidth="130" />
+                                    <DataGridTextColumn Header="Артикул" Binding="{Binding Sku}" Width="80" />
+                                    <DataGridTextColumn Header="К-ть" Binding="{Binding Quantity}" Width="55" />
+                                    <DataGridTextColumn Header="Ціна" Binding="{Binding UnitPrice, StringFormat=N2}" Width="70" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </DockPanel>
+</Window>

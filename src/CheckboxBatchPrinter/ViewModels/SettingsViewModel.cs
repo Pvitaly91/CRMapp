@@ -28,13 +28,15 @@ public sealed class SettingsViewModel : ObservableObject
     private string _originalLogin = string.Empty;
 
     public SettingsViewModel(ISettingsService settingsService, IAuthenticationService authentication,
-        IReceiptImageService imageService, IPrintService printService, IAppLogger logger)
+        IReceiptImageService imageService, IPrintService printService, IAppLogger logger,
+        MarketplaceSettingsViewModel? marketplace = null)
     {
         _settingsService = settingsService;
         _authentication = authentication;
         _imageService = imageService;
         _printService = printService;
         _logger = logger;
+        Marketplace = marketplace;
         PaperWidths = new ObservableCollection<PaperWidthOption>
         {
             new(PaperWidth.Mm50, "50 мм"), new(PaperWidth.Mm58, "58 мм"),
@@ -43,6 +45,7 @@ public sealed class SettingsViewModel : ObservableObject
     }
 
     public ObservableCollection<string> Printers { get; } = [];
+    public MarketplaceSettingsViewModel? Marketplace { get; }
     public ObservableCollection<PaperWidthOption> PaperWidths { get; }
     public string Login { get => _login; set => SetProperty(ref _login, value); }
     public string Password { get => _password; set => SetProperty(ref _password, value); }
@@ -71,10 +74,12 @@ public sealed class SettingsViewModel : ObservableObject
         Printers.Clear();
         foreach (var printer in _printService.GetInstalledPrinters()) Printers.Add(printer);
         if (string.IsNullOrWhiteSpace(SelectedPrinter) && Printers.Count > 0) SelectedPrinter = Printers[0];
+        if (Marketplace is not null) await Marketplace.LoadAsync();
     }
 
     public async Task SaveAsync()
     {
+        if (Marketplace?.IsBusy == true) throw new InvalidOperationException("Дочекайтеся завершення перевірки маркетплейсу.");
         ValidatePrintSettings();
         IsBusy = true;
         try
@@ -88,6 +93,7 @@ public sealed class SettingsViewModel : ObservableObject
                     throw new InvalidOperationException("Для зміни логіна введіть пароль Checkbox.");
             }
             await _settingsService.SaveAsync(_settings);
+            if (Marketplace is not null) await Marketplace.SaveAsync();
             _originalLogin = _settings.Login;
             Password = string.Empty;
             DiagnosticStatus = "Налаштування збережено";
