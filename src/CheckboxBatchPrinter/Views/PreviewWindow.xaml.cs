@@ -28,4 +28,15 @@ public partial class PreviewWindow : Window
     {
         if (e.Key == Key.Escape) Close();
     }
+
+    private void Window_Loaded(object sender, RoutedEventArgs e) => FitReceiptToWidth();
+
+    private void PreviewScroll_SizeChanged(object sender, SizeChangedEventArgs e) => FitReceiptToWidth();
+
+    private void FitReceiptToWidth()
+    {
+        // Keep the complete official PNG visible. The remaining space covers
+        // the viewer padding, receipt border and the vertical scroll bar.
+        ReceiptImage.MaxWidth = Math.Max(100, PreviewScroll.ActualWidth - 60);
+    }
 }
