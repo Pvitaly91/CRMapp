@@ -15,7 +15,7 @@ public interface IPrintService
 
 public interface IUiDialogService
 {
-    bool ConfirmPrint(int count, string printerName);
+    bool ConfirmPrint(PrintBatchConfirmation batch);
     void ShowInfo(string message, string title = "Checkbox Batch Printer");
     void ShowError(string message, string title = "Помилка");
     Task<bool> OpenSettingsAsync();

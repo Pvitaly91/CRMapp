@@ -13,10 +13,8 @@ public sealed class UiDialogService(
     IAppLogger logger,
     Func<MarketplaceSettingsViewModel>? marketplaceSettingsFactory = null) : IUiDialogService
 {
-    public bool ConfirmPrint(int count, string printerName) =>
-        MessageBox.Show(Application.Current.MainWindow,
-            $"Буде надруковано: {count} чеків\nПринтер: {printerName}\n\nЦе копії існуючих чеків. Повторна фіскалізація не виконується.",
-            "Підтвердження друку", MessageBoxButton.OKCancel, MessageBoxImage.Question) == MessageBoxResult.OK;
+    public bool ConfirmPrint(PrintBatchConfirmation batch) =>
+        new PrintConfirmationWindow(batch) { Owner = Application.Current.MainWindow }.ShowDialog() == true;
 
     public void ShowInfo(string message, string title = "Checkbox Batch Printer") =>
         MessageBox.Show(Application.Current.MainWindow, message, title, MessageBoxButton.OK, MessageBoxImage.Information);

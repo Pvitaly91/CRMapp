@@ -69,11 +69,12 @@ public sealed class MainViewModel : ObservableObject
             if (string.Equals(parameter as string, "to", StringComparison.Ordinal)) DateTo = null;
         });
         SelectAllCommand = new RelayCommand(_ => SelectVisible(true), _ => Receipts.Count > 0 && !IsBusy);
-        ClearSelectionCommand = new RelayCommand(_ => SelectVisible(false), _ => Receipts.Count > 0 && !IsBusy);
-        PrintSelectedCommand = new AsyncRelayCommand(_ => PrintSelectedAsync(), _ => SelectedCount > 0 && !IsBusy);
+        ClearSelectionCommand = new RelayCommand(_ => ClearSelection(), _ => SelectedCount > 0 && !IsBusy);
+        PrintSelectedCommand = new AsyncRelayCommand(_ => PrintSelectedAsync(), _ => VisibleSelectedCount > 0 && !IsBusy);
         RetryFailedCommand = new AsyncRelayCommand(_ => RetryFailedAsync(), _ => FailedCount > 0 && !IsBusy);
         PreviewCommand = new AsyncRelayCommand(PreviewAsync, _ => !IsBusy);
         SettingsCommand = new AsyncRelayCommand(_ => OpenSettingsAsync(), _ => !IsBusy);
+        ReceiptsView.CollectionChanged += (_, _) => OnSelectionChanged(this, EventArgs.Empty);
     }
 
     public ObservableCollection<ReceiptRowViewModel> Receipts { get; } = [];
@@ -115,8 +116,10 @@ public sealed class MainViewModel : ObservableObject
         }
     }
     public int SelectedCount => Receipts.Count(x => x.IsSelected);
-    public int FailedCount => Receipts.Count(x => x.PrintStatus == PrintItemStatus.Error);
-    public string SelectionText => $"Вибрано: {SelectedCount}";
+    public int VisibleSelectedCount => ReceiptsView.Cast<ReceiptRowViewModel>().Count(x => x.IsSelected);
+    public int HiddenSelectedCount => SelectedCount - VisibleSelectedCount;
+    public int FailedCount => ReceiptsView.Cast<ReceiptRowViewModel>().Count(x => x.PrintStatus == PrintItemStatus.Error);
+    public string SelectionText => $"Вибрано видимих: {VisibleSelectedCount}\nВибрано прихованих: {HiddenSelectedCount}";
 
     public async Task InitializeAsync()
     {
@@ -220,10 +223,13 @@ public sealed class MainViewModel : ObservableObject
         OnSelectionChanged(this, EventArgs.Empty);
     }
 
+    private void ClearSelection()
+    {
+        foreach (var row in Receipts) row.IsSelected = false;
+    }
+
     private async Task PrintSelectedAsync()
     {
-        var selected = Receipts.Where(x => x.IsSelected).ToArray();
-        if (selected.Length == 0) return;
         var settings = await _settingsService.LoadAsync();
         if (string.IsNullOrWhiteSpace(settings.PrinterName) || !_printService.PrinterExists(settings.PrinterName))
         {
@@ -236,14 +242,20 @@ public sealed class MainViewModel : ObservableObject
             _dialogs.ShowError("Касира Checkbox змінено. Натисніть «Оновити» перед друком.");
             return;
         }
-        if (!_dialogs.ConfirmPrint(selected.Length, settings.PrinterName)) return;
+        // Capture once on the UI thread. Marketplace sync can continue inside the modal
+        // dialog or while PNGs load, but cannot change this batch or its displayed metadata.
+        var selected = ReceiptsView.Cast<ReceiptRowViewModel>().Where(x => x.IsSelected).ToArray();
+        if (selected.Length == 0) return;
+        var confirmation = new PrintBatchConfirmation(settings.PrinterName, HiddenSelectedCount,
+            selected.Select((row, index) => new PrintBatchItem(index + 1, row.Id, row.Serial, row.Marketplace, row.OrderNumber)));
 
         IsBusy = true;
-        foreach (var row in selected) { row.PrintStatus = PrintItemStatus.Waiting; row.PrintError = string.Empty; }
         var success = 0;
         var errors = 0;
         try
         {
+            if (!_dialogs.ConfirmPrint(confirmation)) return;
+            foreach (var row in selected) { row.PrintStatus = PrintItemStatus.Waiting; row.PrintError = string.Empty; }
             if (selected.Length == 1)
             {
                 var current = 0;
@@ -284,6 +296,11 @@ public sealed class MainViewModel : ObservableObject
                     {
                         row.PrintStatus = PrintItemStatus.Error; row.PrintError = exception.Message; errors++;
                     }
+                }
+                if (errors > 0)
+                {
+                    foreach (var item in loaded) item.Row.PrintStatus = PrintItemStatus.Waiting;
+                    throw new InvalidOperationException("Не всі PNG завантажено. Підтверджений пакет не передано принтеру; частковий пакет не друкується.");
                 }
                 if (loaded.Count > 0)
                 {
@@ -330,12 +347,12 @@ public sealed class MainViewModel : ObservableObject
             _logger.Error("batch.print", exception);
             _dialogs.ShowError($"Не вдалося завершити друк. {exception.Message}");
         }
-        finally { IsBusy = false; RaiseCommands(); }
+        finally { ProgressText = string.Empty; IsBusy = false; RaiseCommands(); }
     }
 
     private async Task RetryFailedAsync()
     {
-        var failed = Receipts.Where(x => x.PrintStatus == PrintItemStatus.Error).ToArray();
+        var failed = ReceiptsView.Cast<ReceiptRowViewModel>().Where(x => x.PrintStatus == PrintItemStatus.Error).ToArray();
         foreach (var row in Receipts) row.IsSelected = failed.Contains(row);
         await PrintSelectedAsync();
     }
@@ -376,6 +393,9 @@ public sealed class MainViewModel : ObservableObject
     private void OnSelectionChanged(object? sender, EventArgs e)
     {
         OnPropertyChanged(nameof(SelectedCount));
+        OnPropertyChanged(nameof(VisibleSelectedCount));
+        OnPropertyChanged(nameof(HiddenSelectedCount));
+        OnPropertyChanged(nameof(FailedCount));
         OnPropertyChanged(nameof(SelectionText));
         RaiseCommands();
     }

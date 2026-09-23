@@ -1,0 +1,29 @@
+<Window x:Class="CheckboxBatchPrinter.Views.PrintConfirmationWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Підтвердження друку" Width="690" Height="510" MinWidth="560" MinHeight="360"
+        WindowStartupLocation="CenterOwner">
+    <DockPanel Margin="14">
+        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+            <TextBlock Text="{Binding PrinterName, StringFormat=Принтер: {0}}" FontWeight="SemiBold" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding Count, StringFormat=Чеків у пакеті: {0}}" Margin="0,6" />
+            <TextBlock Text="{Binding HiddenSelectedCount, StringFormat=Прихованих вибраних (НЕ включені): {0}}" Foreground="#8B4500" />
+            <TextBlock Text="Порядок друку наведено нижче. Це копії існуючих чеків, без повторної фіскалізації."
+                       TextWrapping="Wrap" Margin="0,10,0,0" />
+        </StackPanel>
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button Content="Скасувати" IsCancel="True" MinWidth="100" />
+            <Button Content="Надрукувати цей пакет" Click="Confirm_Click" MinWidth="175" />
+        </StackPanel>
+        <DataGrid ItemsSource="{Binding Items}" AutoGenerateColumns="False" IsReadOnly="True"
+                  CanUserAddRows="False" CanUserDeleteRows="False" CanUserSortColumns="False"
+                  CanUserReorderColumns="False" HeadersVisibility="Column">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Порядок" Binding="{Binding Position}" Width="75" />
+                <DataGridTextColumn Header="№ чека" Binding="{Binding ReceiptNumber}" Width="110" />
+                <DataGridTextColumn Header="Маркетплейс" Binding="{Binding Marketplace}" Width="120" />
+                <DataGridTextColumn Header="№ замовлення" Binding="{Binding OrderNumber}" Width="*" />
+            </DataGrid.Columns>
+        </DataGrid>
+    </DockPanel>
+</Window>

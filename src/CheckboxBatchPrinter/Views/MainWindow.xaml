@@ -32,21 +32,23 @@
 
         <Border DockPanel.Dock="Bottom" Background="White" BorderBrush="#D9DEE7" BorderThickness="0,1,0,0" Padding="10">
             <Grid>
+                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <Button Grid.Column="0" Content="Вибрати всі" Command="{Binding SelectAllCommand}" ToolTip="Ctrl+A — усі видимі" />
-                <Button Grid.Column="1" Content="Зняти вибір" Command="{Binding ClearSelectionCommand}" />
-                <TextBlock Grid.Column="2" Text="{Binding SelectionText}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="12,0" />
-                <Button Grid.Column="3" Content="Перегляд" Command="{Binding PreviewCommand}" />
-                <StackPanel Grid.Column="4" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <WrapPanel Grid.ColumnSpan="2">
+                    <Button Content="Вибрати всі видимі" Command="{Binding SelectAllCommand}" ToolTip="Ctrl+A — усі видимі" />
+                    <Button Content="Зняти весь вибір" Command="{Binding ClearSelectionCommand}" />
+                    <TextBlock Text="{Binding SelectionText}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="12,0" />
+                    <Button Content="Перегляд" Command="{Binding PreviewCommand}" />
+                </WrapPanel>
+                <StackPanel Grid.Row="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <ProgressBar Width="110" Height="14" IsIndeterminate="True" Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}" />
                     <TextBlock Text="{Binding ProgressText}" Margin="10,0" VerticalAlignment="Center" />
                 </StackPanel>
-                <StackPanel Grid.Column="5" Orientation="Horizontal">
+                <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal">
                     <Button Content="Повторити невдалі" Command="{Binding RetryFailedCommand}" />
-                    <Button Content="Надрукувати вибрані" Command="{Binding PrintSelectedCommand}" FontWeight="Bold"
+                    <Button Content="Друк вибраних видимих" Command="{Binding PrintSelectedCommand}" FontWeight="Bold"
                             Background="#1769AA" Foreground="White" ToolTip="Ctrl+P" Padding="18,7" />
                 </StackPanel>
             </Grid>
