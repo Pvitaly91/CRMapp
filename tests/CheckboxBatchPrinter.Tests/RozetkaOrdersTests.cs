@@ -253,6 +253,10 @@ internal static class RozetkaOrdersTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            // Existing pagination scenarios have no issued fiscal document. New fiscal tests
+            // exercise the actual status/link responses independently, not this convenience default.
+            if (request.RequestUri!.AbsolutePath.StartsWith("/prro/receipt-status/", StringComparison.Ordinal))
+                return Task.FromResult(Json(new { success = true, content = new { status = 0 } }));
             return respond(request);
         }
     }

@@ -14,6 +14,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     private readonly IReceiptOrderLinkStore _links;
     private readonly IReceiptDetailsService _details;
     private readonly IOrderLinkDialogService _dialogs;
+    private readonly IFiscalReferenceVerifier? _fiscalVerifier;
     private readonly ReceiptOrderMatchingService _matcher = new();
     private IReadOnlyList<ReceiptRowViewModel> _rows = [];
     private MarketplaceSettings _config = new();
@@ -34,9 +35,11 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     private int _generation;
 
     public MarketplaceWorkspaceViewModel(IMarketplaceSettingsStore settings, MarketplaceSyncService sync,
-        IReceiptOrderLinkStore links, IReceiptDetailsService details, IOrderLinkDialogService dialogs)
+        IReceiptOrderLinkStore links, IReceiptDetailsService details, IOrderLinkDialogService dialogs,
+        IFiscalReferenceVerifier? fiscalVerifier = null)
     {
         _settings = settings; _sync = sync; _links = links; _details = details; _dialogs = dialogs;
+        _fiscalVerifier = fiscalVerifier;
         SyncCommand = new AsyncRelayCommand(_ => SyncAsync(), _ => !IsBusy && _account.Length > 0);
         ExpandCommand = new AsyncRelayCommand(async _ => { _extraHistory = Math.Min(_extraHistory + 30, 3650); await SyncAsync(); }, _ => !IsBusy && _account.Length > 0);
         CancelCommand = new RelayCommand(_ => _cancel?.Cancel(), _ => IsBusy);
@@ -51,6 +54,8 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     public string Filter { get => _filter; set { if (SetProperty(ref _filter, value)) MatchesChanged?.Invoke(this, EventArgs.Empty); } }
     public bool ShowExtraColumns { get; set; }
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
+    private string _fiscalSummary = "";
+    public string FiscalSummary { get => _fiscalSummary; private set => SetProperty(ref _fiscalSummary, value); }
     public bool IsBusy { get => _busy || _attaching; private set { _busy = value; OnPropertyChanged(); RaiseCommands(); } }
     public bool HasEnabledConnections => _config.Connections.Any(c => c.Enabled);
     public bool ShowSetupHint => _configurationLoaded && !HasEnabledConnections;
@@ -92,6 +97,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         _coverageComplete = false;
         _configurationLoaded = false;
         _config = new(); _snapshot = new([], []); _decisions = [];
+        FiscalSummary = "";
         SelectedReceipt = rows.FirstOrDefault(r => r.Id == selectedId);
         Status = "Замовлення можна перевірити на вкладці «Чеки та замовлення».";
         NotifyConfiguration();
@@ -184,6 +190,13 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
             token.ThrowIfCancellationRequested();
             if (generation != _generation) return;
             _snapshot = snapshot;
+            if (_fiscalVerifier is not null)
+            {
+                var verified = await _fiscalVerifier.VerifyAsync(ActiveOrders, _account, token);
+                token.ThrowIfCancellationRequested();
+                if (generation != _generation) return;
+                _snapshot = new(verified, snapshot.States);
+            }
             var enabled = _config.Connections.Where(c => c.Enabled).ToArray();
             _coverageComplete = enabled.All(c => _snapshot.States.Any(s => s.ConnectionId == c.Id && s.Complete && s.Range == range));
             Status = $"Діапазон замовлень: {range.From:dd.MM.yyyy} — {range.ToExclusive.AddDays(-1):dd.MM.yyyy} (Київ). " +
@@ -238,10 +251,19 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     {
         if (!_canApply) return;
         var orders = ActiveOrders;
+        var scope = _rows.Select(row => row.Model).ToArray();
         foreach (var row in _rows)
             row.OrderMatch = !HasEnabledConnections
                 ? new(ReceiptLinkState.NotChecked, null, "Маркетплейси не підключено. Звичайний друк доступний.", [])
-                : _matcher.Match(row.Model, _account, orders, _decisions, _coverageComplete, _receiptDetails.GetValueOrDefault(row.Id));
+                : _matcher.Match(row.Model, _account, orders, _decisions, _coverageComplete, _receiptDetails.GetValueOrDefault(row.Id), scope);
+        var linked = _rows.Where(r => r.OrderMatch?.Order is not null).Select(r => r.OrderMatch!.Order!.Key).ToHashSet();
+        var unmatchedKeys = orders.Count(o => o.FiscalReferences.Count > 0 && !linked.Contains(o.Key));
+        var unavailable = orders.Count(o => o.FiscalDataStatus.Length > 0);
+        FiscalSummary = !HasEnabledConnections ? "" : $"Завантажено замовлень: {orders.Count}. Автоматичних зв’язків: {_rows.Count(r => r.OrderMatch?.State == ReceiptLinkState.Exact)}. " +
+            (unmatchedKeys > 0 ? $"Замовлень із непідтвердженими фіскальними ключами: {unmatchedKeys}. Перевірте контекст каси/продавця, період і права касира; це не означає, що чека немає. " : "") +
+            (unavailable > 0 ? $"Фіскальні дані потребують перевірки: {unavailable}. " : "") +
+            (orders.Any(o => o.Key.Marketplace == MarketplaceKind.Prom && o.FiscalReferences.Count == 0)
+                ? "Prom: API не надав точного фіскального ключа для частини замовлень; сума/дата не є автоматичною прив’язкою." : "");
         NotifyDetails(); MatchesChanged?.Invoke(this, EventArgs.Empty); RaiseCommands();
     }
 
@@ -328,7 +350,8 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
             $"Доставка: {o.DeliveryMethod}; вартість: {o.DeliveryCost?.ToString("N2") ?? "не надано"}; знижка: {o.Discount?.ToString("N2") ?? "не надано"}\n" +
             string.Join("\n", o.Shipments.Select(s => $"{s.Carrier} · ТТН: {s.TrackingNumber} · {s.Destination}")) +
             $"\n{match.Explanation} · Отримано: {o.RetrievedAtUtc.ToLocalTime():dd.MM.yyyy HH:mm}\n" +
-            (o.FiscalReceiptNumbers.Count > 0 ? $"Фіскальні номери з API: {string.Join(", ", o.FiscalReceiptNumbers)}" : "");
+            (o.FiscalReceiptNumbers.Count > 0 ? $"Фіскальні номери з API: {string.Join(", ", o.FiscalReceiptNumbers)}" : "") +
+            (o.FiscalDataStatus.Length > 0 ? $"\n{o.FiscalDataStatus}" : "");
     }
     private void NotifyDetails() { OnPropertyChanged(nameof(DetailsText)); OnPropertyChanged(nameof(OrderItems)); }
     private void NotifyConfiguration()

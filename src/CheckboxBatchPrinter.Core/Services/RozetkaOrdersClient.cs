@@ -60,10 +60,12 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
                         complete = false;
                         warning = "Частина замовлень Rozetka має невизначену дату; повноту діапазону не підтверджено.";
                     }
-                    var isNew = !orders.ContainsKey(order.Key.OrderId);
-                    orders[order.Key.OrderId] = order;
+                    var previous = orders.GetValueOrDefault(order.Key.OrderId);
+                    var isNew = previous is null;
+                    orders[order.Key.OrderId] = MarketplaceFiscalEvidence.Preserve(order, previous);
                     if (isNew) idsOnPage.Add(order.Key.OrderId);
-                    // Requested expansions may be omitted. Preserve list data even when detail hydration fails.
+                    var data = row;
+                    // DetailExpand does not document prro. Keep list PRRO data even if details omit/null it.
                     if (!row.TryGetProperty("purchases", out _) ||
                         (!row.TryGetProperty("user_title", out _) && !row.TryGetProperty("user", out _)))
                     {
@@ -71,8 +73,8 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
                         {
                             using var detail = await ReadAsync($"/orders/{order.Key.OrderId}?expand={DetailExpand}",
                                 session, credentials, cancellationToken);
-                            var hydrated = Merge(row, Field(detail.RootElement, "content"));
-                            orders[order.Key.OrderId] = ParseOrder(hydrated, connection);
+                            data = Merge(row, Field(detail.RootElement, "content"));
+                            orders[order.Key.OrderId] = ParseOrder(data, connection);
                         }
                         catch (Exception exception) when (IsRecoverable(exception, cancellationToken))
                         {
@@ -80,6 +82,10 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
                             warning = "Частина деталей Rozetka недоступна; отримані замовлення збережені.";
                         }
                     }
+                    var fiscal = await ReadFiscalUrlAsync(data, order.Key.OrderId, session, credentials, cancellationToken);
+                    orders[order.Key.OrderId] = MarketplaceFiscalEvidence.Preserve(
+                        ParseOrder(data, connection, fiscal.Url) with { FiscalDataStatus = fiscal.Status },
+                        MarketplaceFiscalEvidence.Preserve(order, previous));
                 }
                 if (currentPage != page || pageCount is null or < 0)
                     throw new InvalidDataException("Rozetka не повернула достовірну пагінацію.");
@@ -106,21 +112,36 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
         using var detail = await ReadAsync($"/orders/{orderId}?expand={DetailExpand}", session, credentials, cancellationToken);
         var data = Field(detail.RootElement, "content");
         if (Text(data, "id") != orderId) throw new InvalidDataException("Rozetka повернула інше замовлення.");
-        string? receiptUrl = null;
-        if (session.CanReadPrro && Integer(Field(data, "prro"), "prro_receipt_status") == 1)
+        var fiscal = await ReadFiscalUrlAsync(data, orderId, session, credentials, cancellationToken);
+        return ParseOrder(data, connection, fiscal.Url) with { FiscalDataStatus = fiscal.Status };
+    }
+
+    private async Task<(string? Url, string Status)> ReadFiscalUrlAsync(JsonElement data, string orderId,
+        Session session, MarketplaceCredentials credentials, CancellationToken cancellationToken)
+    {
+        if (!session.CanReadPrro) return (null, "Немає права prro_access для читання посилання. Це не означає, що чека немає.");
+        try
         {
-            try
+            var status = Integer(Field(data, "prro"), "prro_receipt_status");
+            if (status is null)
             {
-                using var receipt = await ReadAsync($"/prro/receipt/{orderId}?type=link", session, credentials, cancellationToken);
-                var candidate = Text(Field(receipt.RootElement, "content"), "url");
-                // Display-only reference. Never request the returned URL or infer a Checkbox UUID from it.
-                if (Uri.TryCreate(candidate, UriKind.Absolute, out var uri) && uri.Scheme == "https" &&
-                    uri.UserInfo.Length == 0 && uri.Query.Length == 0 && uri.Fragment.Length == 0)
-                    receiptUrl = uri.AbsoluteUri;
+                // Missing expansion is unknown, not status=0. This GET cannot issue a new receipt.
+                using var state = await ReadAsync($"/prro/receipt-status/{orderId}", session, credentials, cancellationToken);
+                status = Integer(Field(state.RootElement, "content"), "status");
             }
-            catch (Exception exception) when (IsRecoverable(exception, cancellationToken)) { }
+            if (status == 0) return (null, "Rozetka повідомляє: чек ще не фіскалізований.");
+            if (status != 1) return (null, "Статус PRRO невідомий; наявність чека не встановлена.");
+            using var receipt = await ReadAsync($"/prro/receipt/{orderId}?type=link", session, credentials, cancellationToken);
+            var candidate = Text(Field(receipt.RootElement, "content"), "url");
+            // Keep a safe display-only reference even when its domain/format is not evidence.
+            // Never follow it; only the strict Checkbox parser can turn it into an exact key.
+            if (Uri.TryCreate(candidate, UriKind.Absolute, out var uri) && uri.Scheme == "https" &&
+                uri.UserInfo.Length == 0 && !candidate.Any(char.IsControl))
+                return (candidate, CheckboxReceiptReference.TryParseUrl(candidate, out _) ? "" : "Формат посилання PRRO не підтверджений як Checkbox; автоприв’язку за ним не виконано.");
+            return (null, "PRRO не повернув перевіреного посилання на чек.");
         }
-        return ParseOrder(data, connection, receiptUrl);
+        catch (Exception exception) when (IsRecoverable(exception, cancellationToken))
+        { return (null, "Читання наявного PRRO-документа недоступне; це не означає, що чека немає."); }
     }
 
     private async Task<Session> LoginAsync(MarketplaceCredentials credentials, CancellationToken cancellationToken)
@@ -213,9 +234,10 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
         var discountedAmount = Money(row, "amount_with_discount");
         var rawTotal = First(Text(row, "cost_with_discount"), Text(row, "cost"), Text(row, "amount"));
         var fiscalNumber = Text(Field(row, "prro"), "prro_receipt_fiscal_code");
+        var key = new OrderKey(MarketplaceKind.Rozetka, connection.Id, id);
         return new MarketplaceOrder
         {
-            Key = new(MarketplaceKind.Rozetka, connection.Id, id), StoreName = connection.Name, Number = id,
+            Key = key, StoreName = connection.Name, Number = id,
             CreatedAt = Date(row, "created"), UpdatedAt = Date(row, "changed"), RawCreatedAt = Text(row, "created"),
             Status = First(Text(status, "title"), Text(status, "name_uk"), Text(status, "name"), Text(row, "status")),
             SourceStatus = Text(row, "status"),
@@ -227,7 +249,9 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
             Discount = amount.HasValue && discountedAmount.HasValue ? amount.Value - discountedAmount.Value : null,
             DeliveryCost = Money(delivery, "cost"), Items = items, Shipments = shipments,
             FiscalReceiptNumbers = fiscalNumber.Length == 0 ? [] : [fiscalNumber],
-            FiscalReceiptUrls = receiptUrl is null ? [] : [receiptUrl], ReceiptIds = []
+            FiscalReceiptUrls = receiptUrl is null ? [] : [receiptUrl], ReceiptIds = [],
+            FiscalReferences = CheckboxReceiptReference.FromRozetka(key, fiscalNumber,
+                Text(Field(row, "prro"), "prro_receipt_service_name"), receiptUrl)
         };
     }
 
@@ -236,7 +260,19 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
         if (detail.ValueKind != JsonValueKind.Object || Text(list, "id") != Text(detail, "id"))
             throw new InvalidDataException("Некоректні деталі замовлення Rozetka.");
         var values = list.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone(), StringComparer.Ordinal);
-        foreach (var property in detail.EnumerateObject()) values[property.Name] = property.Value.Clone();
+        foreach (var property in detail.EnumerateObject())
+        {
+            if (property.Name == "prro" && values.TryGetValue("prro", out var prior) && prior.ValueKind == JsonValueKind.Object)
+            {
+                var fiscal = prior.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone(), StringComparer.Ordinal);
+                if (property.Value.ValueKind == JsonValueKind.Object)
+                    foreach (var part in property.Value.EnumerateObject())
+                        if (part.Value.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined) && part.Value.ToString().Length > 0)
+                            fiscal[part.Name] = part.Value.Clone();
+                values["prro"] = JsonSerializer.SerializeToElement(fiscal);
+            }
+            else values[property.Name] = property.Value.Clone();
+        }
         return JsonSerializer.SerializeToElement(values);
     }
 

@@ -12,6 +12,7 @@ public sealed class ReceiptRecord
     public long TotalSumMinor { get; init; }
     public IReadOnlyList<ReceiptPayment> Payments { get; init; } = [];
     public string CashRegisterFiscalNumber { get; init; } = string.Empty;
+    public string OrganizationId { get; init; } = string.Empty;
     public string BranchName { get; init; } = string.Empty;
 
     public DateTimeOffset? DisplayDate => FiscalDate ?? CreatedAt;

@@ -28,7 +28,7 @@ public partial class App : Application
             _logger = new FileAppLogger(Path.Combine(localData, "Logs"));
             _logger.Info("app.startup.begin");
             var credentialStore = new DpapiCredentialStore(Path.Combine(localData, "credential.bin"));
-            _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(settings.HttpTimeoutSeconds) };
+            _httpClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(settings.HttpTimeoutSeconds) };
             var authentication = new AuthenticationService(_httpClient, settingsService, credentialStore, _logger);
             var apiClient = new CheckboxApiClient(_httpClient, authentication, _logger);
             var receiptService = new ReceiptService(apiClient, settingsService);
@@ -45,7 +45,7 @@ public partial class App : Application
             var marketplaceSync = new MarketplaceSyncService(
                 [new PromOrdersClient(marketplaceTransport), new RozetkaOrdersClient(marketplaceTransport)], marketplaceSecrets, marketplaceCache);
             var marketplace = new MarketplaceWorkspaceViewModel(marketplaceSettings, marketplaceSync, orderLinks,
-                new ReceiptDetailsService(apiClient, settingsService), new OrderLinkDialogService());
+                new ReceiptDetailsService(apiClient, settingsService), new OrderLinkDialogService(), new FiscalReferenceVerifier(apiClient, settingsService));
             var dialogs = new UiDialogService(settingsService, authentication, imageService, printService, _logger,
                 () => new MarketplaceSettingsViewModel(marketplaceSettings, marketplaceSecrets, marketplaceSync));
             _logger.Info("app.viewmodel.create");

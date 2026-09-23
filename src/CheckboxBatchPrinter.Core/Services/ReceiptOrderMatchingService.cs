@@ -2,12 +2,12 @@ using CheckboxBatchPrinter.Core.Models;
 
 namespace CheckboxBatchPrinter.Core.Services;
 
-/// <summary>Only validated receipt UUIDs prove a link. Similarity produces suggestions, never a link.</summary>
+/// <summary>Typed fiscal evidence proves a link. Similarity produces suggestions, never a link.</summary>
 public sealed class ReceiptOrderMatchingService
 {
     public ReceiptOrderMatch Match(ReceiptRecord receipt, string accountContext,
         IReadOnlyList<MarketplaceOrder> orders, IReadOnlyList<ReceiptOrderDecision> decisions,
-        bool coverageComplete, ReceiptDetails? details = null)
+        bool coverageComplete, ReceiptDetails? details = null, IReadOnlyList<ReceiptRecord>? receiptScope = null)
     {
         ArgumentNullException.ThrowIfNull(receipt);
         ArgumentException.ThrowIfNullOrWhiteSpace(accountContext);
@@ -29,10 +29,14 @@ public sealed class ReceiptOrderMatchingService
 
         var rejected = decision?.RejectedOrders.ToHashSet() ?? [];
         // Count ALL exact keys before applying rejections: dismissing one does not prove another correct.
-        var direct = Guid.TryParse(receipt.Id, out var receiptUuid)
-            ? available.Where(order => order.ReceiptIds.Any(id =>
-                Guid.TryParse(id, out var candidateUuid) && candidateUuid == receiptUuid)).ToArray()
-            : [];
+        var evidence = available.ToDictionary(o => o.Key, o => FiscalReferenceMatching.Evaluate(o, receipt, accountContext, receiptScope));
+        var contradictions = available.Where(o => evidence[o.Key].Conflict).ToArray();
+        if (contradictions.Length > 0)
+            return new(ReceiptLinkState.Conflict, null,
+                "UUID, фіскальний номер або контекст каси одного документа суперечать один одному. Потрібна перевірка.",
+                contradictions.Where(o => !rejected.Contains(o.Key)).ToArray());
+        Guid.TryParse(receipt.Id, out var receiptUuid);
+        var direct = available.Where(order => evidence[order.Key].Exact).ToArray();
         var related = Array.Empty<MarketplaceOrder>();
         var missingRelatedManual = false;
         if (receipt.Type == ReceiptTypes.Return && details is not null && SameReceiptId(details.Id, receipt.Id) &&
@@ -50,8 +54,10 @@ public sealed class ReceiptOrderMatchingService
             }
             else if (originalDecision?.SuppressAutomatic != true)
             {
-                related = available.Where(order => order.ReceiptIds.Any(id =>
-                    Guid.TryParse(id, out var orderReceiptUuid) && orderReceiptUuid == relatedUuid)).ToArray();
+                var original = receiptScope?.FirstOrDefault(r => SameReceiptId(r.Id, relatedUuid.ToString("D")));
+                related = available.Where(order => original is not null
+                    ? FiscalReferenceMatching.Evaluate(order, original, accountContext, receiptScope) is { Exact: true, Conflict: false }
+                    : order.ReceiptIds.Any(id => Guid.TryParse(id, out var orderReceiptUuid) && orderReceiptUuid == relatedUuid)).ToArray();
                 // A rejected original link cannot become an automatic link through a return.
                 if (related.Length == 1 && originalDecision?.RejectedOrders.Contains(related[0].Key) == true)
                     related = [];
@@ -70,10 +76,19 @@ public sealed class ReceiptOrderMatchingService
         {
             if (coverageComplete)
                 return new(ReceiptLinkState.Exact, exact[0], direct.Length > 0
-                    ? "Збіг receipt UUID" : "Повернення: related_receipt_id → точний / підтверджений зв’язок початкового чека", []);
+                    ? evidence[exact[0].Key].Basis : "Повернення: related_receipt_id → точний / підтверджений зв’язок початкового чека", []);
             return new(ReceiptLinkState.Incomplete, null,
-                "Знайдено receipt UUID, але перевірка підключень неповна; однозначність ще не підтверджена.", allowedExact);
+                "Знайдено точний фіскальний ключ, але перевірка підключень неповна; однозначність ще не підтверджена.", allowedExact);
         }
+
+        var unresolvedFiscal = available.Where(order => !rejected.Contains(order.Key) && receipt.FiscalCode.Length > 0 &&
+            order.FiscalReferences.Any(reference => reference.Order == order.Key &&
+                (reference.Kind == FiscalDocumentKeyKind.FiscalCode && reference.Value == receipt.FiscalCode ||
+                 reference.Kind == FiscalDocumentKeyKind.CheckboxReceiptUrl && CheckboxReceiptReference.TryParseUrl(reference.Value, out var url) &&
+                    url.FiscalCode == receipt.FiscalCode))).ToArray();
+        if (unresolvedFiscal.Length > 0)
+            return new(ReceiptLinkState.Incomplete, null,
+                "Є фіскальний номер, але провайдер, контекст продавця/каси або однозначність ще не підтверджені. Друк чека доступний.", unresolvedFiscal);
 
         var candidates = allowedExact;
         if (receipt.Type == ReceiptTypes.Sell && receipt.DisplayDate is { } receiptDate)

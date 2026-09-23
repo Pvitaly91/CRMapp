@@ -86,7 +86,8 @@ public sealed class MarketplaceHttpTransport(HttpClient client,
             MarketplaceKind.Rozetka => uri.Host == "api-seller.rozetka.com.ua" &&
                 ((request.Method == HttpMethod.Post && uri.AbsolutePath == "/sites") ||
                  (request.Method == HttpMethod.Get && (uri.AbsolutePath == "/orders/search" ||
-                    Regex.IsMatch(uri.AbsolutePath, @"^/orders/\d+$") || Regex.IsMatch(uri.AbsolutePath, @"^/prro/receipt/\d+$")))),
+                    Regex.IsMatch(uri.AbsolutePath, @"^/orders/\d+$") || Regex.IsMatch(uri.AbsolutePath, @"^/prro/receipt/\d+$") ||
+                    Regex.IsMatch(uri.AbsolutePath, @"^/prro/receipt-status/\d+$")))),
             _ => false
         };
         if (!allowed) throw new InvalidOperationException("Операція не входить до дозволеного переліку читання маркетплейсів.");

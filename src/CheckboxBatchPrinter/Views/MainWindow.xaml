@@ -138,6 +138,7 @@
                             <CheckBox x:Name="ExtraOrderColumns" Content="Покупець, статус, ТТН у таблиці" VerticalAlignment="Center" Margin="12,0" />
                         </WrapPanel>
                         <TextBlock Text="{Binding Marketplace.Status}" TextWrapping="Wrap" FontSize="11" Foreground="#48566A" Margin="3" MaxHeight="55" />
+                        <TextBlock Text="{Binding Marketplace.FiscalSummary}" TextWrapping="Wrap" FontSize="11" Foreground="#48566A" Margin="3" />
                         <TextBlock Text="{Binding Marketplace.ReceiptScopeText}" Foreground="#667085" FontSize="11" Margin="3" />
                     </StackPanel>
 

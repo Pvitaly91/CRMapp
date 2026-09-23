@@ -26,7 +26,18 @@ public sealed record OrderPerson(string Name = "", string Phone = "");
 public sealed record OrderItem(string Name, string Sku, decimal? Quantity, decimal? UnitPrice, decimal? Total = null);
 public sealed record OrderShipment(string Carrier, string TrackingNumber, string Destination = "");
 
-public sealed class MarketplaceOrder
+public enum FiscalDocumentKeyKind { CheckboxReceiptUuid, CheckboxReceiptUrl, FiscalCode }
+
+// Keys of one document share DocumentId; different sale/return documents must not be collapsed.
+public sealed record FiscalDocumentReference(FiscalDocumentKeyKind Kind, string Value, string Source,
+    OrderKey Order, string Provider, string DocumentId, string CashRegisterFiscalNumber = "", string OrganizationId = "")
+{
+    // Authentication-scoped lookup evidence is memory-only: never trust it after restart/account change.
+    [JsonIgnore] public string VerifiedReceiptId { get; init; } = "";
+    [JsonIgnore] public string VerifiedAccountContext { get; init; } = "";
+}
+
+public sealed record MarketplaceOrder
 {
     public required OrderKey Key { get; init; }
     public string StoreName { get; init; } = "";
@@ -52,6 +63,8 @@ public sealed class MarketplaceOrder
     public IReadOnlyList<string> ReceiptIds { get; init; } = [];
     public IReadOnlyList<string> FiscalReceiptNumbers { get; init; } = [];
     public IReadOnlyList<string> FiscalReceiptUrls { get; init; } = [];
+    public IReadOnlyList<FiscalDocumentReference> FiscalReferences { get; init; } = [];
+    public string FiscalDataStatus { get; init; } = "";
     public string? SellerUrl { get; init; }
     public DateTimeOffset RetrievedAtUtc { get; init; } = DateTimeOffset.UtcNow;
     [JsonIgnore] public string TrackingDisplay => string.Join(", ", Shipments.Select(s => s.TrackingNumber).Where(s => s.Length > 0).Distinct());

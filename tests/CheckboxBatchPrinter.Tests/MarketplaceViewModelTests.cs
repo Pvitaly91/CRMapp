@@ -52,6 +52,7 @@ internal static class MarketplaceViewModelTests
         ("STA disabling integrations preserves receipts history decisions cache and secrets", () => StaAsync(DisabledIntegrationsAsync)),
         ("STA print and preview commands use only active tab selection", () => StaAsync(ActiveTabCommandsAsync)),
         ("STA changing tabs during confirmation and backend preserves one frozen job", () => StaAsync(SwitchDuringPrintAsync)),
+        ("STA real Rozetka adapter fiscal URL auto-fills row without manual link and does not gate base print", () => StaAsync(FiscalAutomaticUiAsync)),
         ("STA Main Settings and OrderLink XAML initialize without showing windows", XamlSmokeProcessAsync)
     ];
 
@@ -839,6 +840,40 @@ internal static class MarketplaceViewModelTests
         Equal(PrintItemStatus.Done, main.Receipts.Single(r => r.Id == ReceiptTwo).PrintStatus);
         True(main.Receipts.Single(r => r.Id == ReceiptOne).IsSelectedForOrders);
         True(!main.Receipts.Single(r => r.Id == ReceiptTwo).IsSelectedForOrders);
+    }
+
+    private static async Task FiscalAutomaticUiAsync()
+    {
+        var fixture = new Fixture();
+        // Normalize an actual API-shaped response through RozetkaOrdersClient first, not a synthetic ReceiptIds list.
+        var order = await FiscalLinkTests.Fetch($"https://api.checkbox.ua/api/v1/receipts/{ReceiptOne}/html?simple=true", "FN-1");
+        fixture.Settings.Market.Connections.Clear();
+        fixture.Settings.Market.Connections.Add(new() { Id = order.Key.ConnectionId, Marketplace = MarketplaceKind.Rozetka, Enabled = true });
+        fixture.Rozetka.Orders = [order];
+        fixture.ReceiptSource.Rows = [new ReceiptRecord { Id = ReceiptOne, FiscalCode = "FN-1", Serial = 1, Status = "DONE",
+            Type = ReceiptTypes.Sell, TotalSumMinor = 10000, FiscalDate = new DateTimeOffset(2026,9,24,12,0,0,TimeSpan.FromHours(3)) },
+            Receipt(ReceiptTwo, 2, 10000), Receipt(ReceiptThree, 3, 99900)];
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync();
+        var row = main.Receipts.Single(r => r.Id == ReceiptOne);
+        // Base Checkbox parsing provides fiscal_code; make the fixture agree with the issued document.
+        Equal("FN-1", row.FiscalCode);
+        await OpenOrdersAsync(main, workspace);
+        Equal(ReceiptLinkState.Exact, row.OrderMatch!.State);
+        Equal("100", row.OrderNumber); Equal("Rozetka", row.Marketplace);
+        Equal("Synthetic", row.OrderBuyer); Equal("SYNTHETIC-TTN", row.OrderTracking);
+        Equal("За посиланням на чек", row.LinkStatus);
+        Equal(0, fixture.Dialogs.ChoiceCalls); Equal(0, fixture.Links.Saves);
+        workspace.Filter = "Rozetka"; Equal(1, main.ReceiptsView.Cast<object>().Count());
+        main.SelectedTabIndex = 0; Equal(3, main.ReceiptsView.Cast<object>().Count());
+        main.Receipts.Single(r => r.Id == ReceiptTwo).IsSelected = true;
+        await ExecuteAsync(main.PrintSelectedCommand);
+        AssertConfirmation(fixture, [ReceiptTwo]);
+        True(!row.IsSelected && !row.IsSelectedForOrders);
+        await main.RefreshAsync(); // No marketplace fetch from F5; cache is re-evaluated on explicit sync.
+        Equal(1, fixture.Rozetka.FetchCalls);
+        await OpenOrdersAsync(main, workspace);
+        Equal(ReceiptLinkState.Exact, main.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch!.State);
     }
 
     private static async Task XamlSmokeAsync()

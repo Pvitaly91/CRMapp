@@ -46,8 +46,8 @@ public sealed class ReceiptRowViewModel : ObservableObject
     public string LinkExplanation => OrderMatch?.Explanation ?? "Не перевірено";
     public string LinkStatus => OrderMatch?.State switch
     {
-        ReceiptLinkState.Exact => "Точний зв’язок",
-        ReceiptLinkState.Manual => "Підтверджено вручну",
+        ReceiptLinkState.Exact => OrderMatch.Explanation,
+        ReceiptLinkState.Manual => "Прив’язано вручну",
         ReceiptLinkState.Candidates => "Є кандидати",
         ReceiptLinkState.NotFound => "Не знайдено у діапазоні",
         ReceiptLinkState.Conflict => "Конфлікт",

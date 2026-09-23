@@ -31,6 +31,7 @@ public static class ReceiptParser
                 TotalSumMinor = GetLong(item, "total_sum"),
                 Payments = ParsePayments(item),
                 CashRegisterFiscalNumber = GetCashRegister(item),
+                OrganizationId = GetString(item, "organization_id"),
                 BranchName = GetNestedString(item, "branch", "name")
             });
         }

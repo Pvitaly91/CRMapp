@@ -43,7 +43,8 @@ public sealed class MarketplaceSyncService(
                     complete = fetched.Complete;
                     message = fetched.Message.Length > 0 ? fetched.Message : message;
                     foreach (var order in fetched.Orders)
-                        if (order.Key.ConnectionId == connection.Id && order.Key.Marketplace == connection.Marketplace) orders[order.Key] = order;
+                        if (order.Key.ConnectionId == connection.Id && order.Key.Marketplace == connection.Marketplace)
+                            orders[order.Key] = MarketplaceFiscalEvidence.Preserve(order, orders.GetValueOrDefault(order.Key));
 
                     // Refresh changed older cached orders and durable linked IDs even outside this range.
                     var fetchedKeys = fetched.Orders.Select(o => o.Key).ToHashSet();
@@ -56,7 +57,7 @@ public sealed class MarketplaceSyncService(
                         try
                         {
                             var order = await client.GetOrderAsync(connection, credential, key.OrderId, ct).ConfigureAwait(false);
-                            if (order is not null && order.Key == key) orders[key] = order;
+                            if (order is not null && order.Key == key) orders[key] = MarketplaceFiscalEvidence.Preserve(order, orders.GetValueOrDefault(key));
                             else { complete = false; message = "Частково: одне з раніше пов’язаних замовлень недоступне."; }
                         }
                         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
