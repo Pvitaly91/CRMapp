@@ -197,6 +197,10 @@ public sealed class PromOrdersClient : IMarketplaceOrdersClient
             DeliveryMethod = Text(deliveryOption, "name"),
             DeliveryCost = DecimalValue(Property(order, "delivery_cost")),
             Items = items,
+            ItemsComplete = products.ValueKind == JsonValueKind.Array && products.GetArrayLength() > 0 &&
+                items.Count == products.GetArrayLength() && products.EnumerateArray().All(p =>
+                    !TryProperty(p, "discount_types", out var discounts) || discounts.ValueKind == JsonValueKind.Null ||
+                        (discounts.ValueKind == JsonValueKind.Array && discounts.GetArrayLength() == 0)),
             Shipments = tracking.Length == 0 ? [] :
                 [new OrderShipment(Text(delivery, "provider"), tracking, Text(order, "delivery_address"))],
             ReceiptIds = [],

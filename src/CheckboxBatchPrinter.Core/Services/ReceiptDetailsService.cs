@@ -22,19 +22,33 @@ public sealed class ReceiptDetailsService(CheckboxApiClient api, ISettingsServic
         if (!Guid.TryParse(id, out var actual) || !Guid.TryParse(expectedId, out var expected) || actual != expected)
             throw new JsonException("API повернуло деталі іншого чека.");
         var items = new List<OrderItem>();
+        var complete = false;
         if (root.TryGetProperty("goods", out var goods) && goods.ValueKind == JsonValueKind.Array)
         {
+            complete = goods.GetArrayLength() > 0;
             foreach (var item in goods.EnumerateArray())
             {
-                if (!item.TryGetProperty("good", out var good) || good.ValueKind != JsonValueKind.Object) continue;
+                if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("good", out var good) || good.ValueKind != JsonValueKind.Object)
+                { complete = false; continue; }
+                if (HasValues(item, "discounts") || (item.TryGetProperty("is_return", out var isReturn) && isReturn.ValueKind == JsonValueKind.True)) complete = false;
                 items.Add(new(Text(good, "name"), Text(good, "code"), Number(item, "quantity") / 1000m,
                     Number(good, "price") / 100m, Number(item, "sum") / 100m));
             }
         }
+        if (HasValues(root, "discounts") || HasValues(root, "pre_payment_relation_id") || Number(root, "round_sum") is not (null or 0)) complete = false;
+        if (Number(root, "total_sum") is not { } totalMinor || items.Any(item => item.Total is null) ||
+            items.Sum(item => item.Total ?? 0) != totalMinor / 100m) complete = false;
         return new(id, items, Text(root, "related_receipt_id"), Text(root, "order_id"),
-            root.TryGetProperty("context", out var context) && context.ValueKind == JsonValueKind.Object && context.EnumerateObject().Any());
+            root.TryGetProperty("context", out var context) && context.ValueKind == JsonValueKind.Object && context.EnumerateObject().Any(), complete);
     }
 
     private static string Text(JsonElement item, string field) => item.TryGetProperty(field, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
     private static decimal? Number(JsonElement item, string field) => item.TryGetProperty(field, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out var number) ? number : null;
+    private static bool HasValues(JsonElement item, string field) => item.TryGetProperty(field, out var value) && (value.ValueKind switch
+    {
+        JsonValueKind.Null or JsonValueKind.Undefined => false,
+        JsonValueKind.Array => value.GetArrayLength() > 0,
+        JsonValueKind.String => !string.IsNullOrEmpty(value.GetString()),
+        _ => true
+    });
 }

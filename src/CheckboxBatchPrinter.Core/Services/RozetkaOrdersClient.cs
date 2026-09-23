@@ -248,6 +248,7 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
             Total = ParseMoney(rawTotal), RawTotal = rawTotal, Currency = "", DeliveryMethod = carrier,
             Discount = amount.HasValue && discountedAmount.HasValue ? amount.Value - discountedAmount.Value : null,
             DeliveryCost = Money(delivery, "cost"), Items = items, Shipments = shipments,
+            ItemsComplete = purchases.ValueKind == JsonValueKind.Array && purchases.GetArrayLength() > 0 && items.Count == purchases.GetArrayLength(),
             FiscalReceiptNumbers = fiscalNumber.Length == 0 ? [] : [fiscalNumber],
             FiscalReceiptUrls = receiptUrl is null ? [] : [receiptUrl], ReceiptIds = [],
             FiscalReferences = CheckboxReceiptReference.FromRozetka(key, fiscalNumber,

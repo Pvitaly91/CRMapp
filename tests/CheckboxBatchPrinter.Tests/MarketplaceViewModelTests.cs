@@ -53,6 +53,15 @@ internal static class MarketplaceViewModelTests
         ("STA print and preview commands use only active tab selection", () => StaAsync(ActiveTabCommandsAsync)),
         ("STA changing tabs during confirmation and backend preserves one frozen job", () => StaAsync(SwitchDuringPrintAsync)),
         ("STA real Rozetka adapter fiscal URL auto-fills row without manual link and does not gate base print", () => StaAsync(FiscalAutomaticUiAsync)),
+        ("STA all marketplace orders load without Checkbox credentials or receipt rows", () => StaAsync(OrdersWithoutCheckboxAsync)),
+        ("STA no-Checkbox order refresh uses changed calendar dates and rejects incomplete ranges", () => StaAsync(OrderCalendarWithoutCheckboxAsync)),
+        ("STA marketplace order filters search and full order keys are independent of receipt tabs", () => StaAsync(IndependentOrderPanelAsync)),
+        ("STA selected order and receipt require explicit confirmation and survive F5 restart", () => StaAsync(SelectedOrderManualAsync)),
+        ("STA unique complete basket suggests a link without writing manual decisions", () => StaAsync(BasketSuggestedUiAsync)),
+        ("STA duplicate orders or competing receipts cannot create basket suggestions", () => StaAsync(BasketAmbiguousUiAsync)),
+        ("STA cached and partial marketplace orders remain visible without claiming checked links", () => StaAsync(PartialOrderPanelAsync)),
+        ("STA old account basket detail completion cannot populate the new account", () => StaAsync(StaleBasketDetailsAsync)),
+        ("STA basket continuation reaches unattempted receipts after one hundred detail failures", () => StaAsync(BasketContinuationAfterFailuresAsync)),
         ("STA Main Settings and OrderLink XAML initialize without showing windows", XamlSmokeProcessAsync)
     ];
 
@@ -876,6 +885,280 @@ internal static class MarketplaceViewModelTests
         Equal(ReceiptLinkState.Exact, main.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch!.State);
     }
 
+    private static async Task OrdersWithoutCheckboxAsync()
+    {
+        var fixture = new Fixture();
+        fixture.Settings.App.Login = "";
+        fixture.Authentication.IsStored = false;
+        fixture.ReceiptSource.Rows = [];
+        fixture.Source.Orders = [Order()];
+        fixture.Settings.Market.Connections.Add(new() { Id = "rz-test", Marketplace = MarketplaceKind.Rozetka, Enabled = true });
+        fixture.Rozetka.Orders = [Order() with { Key = new(MarketplaceKind.Rozetka, "rz-test", "41"), Number = "RZ-41" }];
+        var (main, workspace) = fixture.Create();
+        workspace.SetOrderDatesWithoutReceipts(new(2026, 9, 23), new(2026, 9, 24));
+        main.SelectedTabIndex = 1;
+        await main.PrepareOrdersAsync();
+        Equal(0, fixture.Source.FetchCalls); // Entering the tab remains local-only.
+        True(workspace.SyncCommand.CanExecute(null));
+        await workspace.SyncAsync();
+        Equal(2, workspace.Orders.Cast<object>().Count());
+        Equal(0, main.Receipts.Count); Equal(0, fixture.ReceiptSource.Calls); Equal(0, fixture.Details.Calls);
+        workspace.SelectedOrder = workspace.Orders.Cast<MarketplaceOrderRowViewModel>().First();
+        True(!workspace.LinkSelectedOrderCommand.CanExecute(null));
+        True(!main.PrintSelectedCommand.CanExecute(null));
+        Equal(0, fixture.Links.Loads); Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
+
+        // A successful empty Checkbox response is also allowed: orders do not depend on a receipt join.
+        fixture.Settings.App.Login = "test-cashier";
+        await main.RefreshAsync();
+        await main.PrepareOrdersAsync();
+        Equal(2, workspace.Orders.Cast<object>().Count());
+        Equal(0, main.Receipts.Count);
+    }
+
+    private static async Task OrderCalendarWithoutCheckboxAsync()
+    {
+        var fixture = new Fixture();
+        fixture.Settings.App.Login = "";
+        fixture.Authentication.IsStored = false;
+        fixture.ReceiptSource.Rows = [];
+        fixture.Source.Orders = [Order()];
+        var (main, workspace) = fixture.Create();
+        main.SelectedTabIndex = 1;
+        await main.PrepareOrdersAsync();
+        await workspace.SyncAsync();
+        Equal(1, fixture.Source.FetchCalls);
+        var priorRange = fixture.Source.LastRange;
+        var settingsReads = fixture.Settings.MarketplaceLoads;
+        var cacheReads = fixture.Cache.Loads;
+        var secretReads = fixture.Settings.SecretLoads;
+
+        // Stay on the open orders tab: no tab switch, successful Checkbox refresh or explicit PrepareOrders call.
+        main.DateFrom = new(2026, 10, 2);
+        main.DateTo = new(2026, 10, 3);
+        Equal(1, main.SelectedTabIndex);
+        Equal(settingsReads, fixture.Settings.MarketplaceLoads);
+        Equal(cacheReads, fixture.Cache.Loads); Equal(secretReads, fixture.Settings.SecretLoads);
+        Equal(1, fixture.Source.FetchCalls); Equal(0, fixture.ReceiptSource.Calls);
+        True(workspace.SyncCommand.CanExecute(null));
+        await workspace.SyncAsync();
+        Equal(2, fixture.Source.FetchCalls);
+        Equal(MarketplaceSyncService.BuildRange(new(2026, 10, 2), new(2026, 10, 3), fixture.Settings.Market.HistoryDays), fixture.Source.LastRange);
+        True(priorRange != fixture.Source.LastRange, "Changing the visible calendar must change the actual marketplace query range.");
+
+        main.DateFrom = null;
+        True(!workspace.SyncCommand.CanExecute(null));
+        main.DateFrom = new(2026, 10, 5); // Reversed compared with the existing October 3 end date.
+        True(!workspace.SyncCommand.CanExecute(null));
+        main.DateFrom = new(2026, 10, 2);
+        True(workspace.SyncCommand.CanExecute(null));
+        main.DateTo = null;
+        True(!workspace.SyncCommand.CanExecute(null));
+        main.DateTo = new(2026, 10, 3);
+        True(workspace.SyncCommand.CanExecute(null));
+        Equal(2, fixture.Source.FetchCalls); Equal(0, fixture.ReceiptSource.Calls);
+        Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
+    }
+
+    private static async Task IndependentOrderPanelAsync()
+    {
+        var fixture = new Fixture();
+        fixture.Settings.Market.Connections.Add(new() { Id = "prom-other", Marketplace = MarketplaceKind.Prom, Enabled = true, Name = "Second shop" });
+        fixture.Settings.Market.Connections.Add(new() { Id = "rz-test", Marketplace = MarketplaceKind.Rozetka, Enabled = true });
+        fixture.Source.Orders = [Order(), Order() with { Key = new(MarketplaceKind.Prom, "prom-other", "41"), StoreName = "Second shop" }];
+        fixture.Rozetka.Orders = [Order() with { Key = new(MarketplaceKind.Rozetka, "rz-test", "41"), Number = "RZ-41" }];
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync();
+        await OpenOrdersAsync(main, workspace);
+        Equal(3, workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Select(r => r.Key).Distinct().Count());
+        main.AllReceiptsTab.SearchText = "999";
+        main.OrdersReceiptsTab.SearchText = "FN-only";
+        workspace.Filter = "Без зв’язку";
+        workspace.OrderFilter = "Prom";
+        Equal(2, workspace.Orders.Cast<object>().Count());
+        workspace.SelectedOrder = workspace.Orders.Cast<MarketplaceOrderRowViewModel>().First();
+        workspace.OrderFilter = "Rozetka";
+        Equal(1, workspace.Orders.Cast<object>().Count());
+        True(workspace.SelectedOrder is null, "A now-hidden order must not remain an actionable selection.");
+        workspace.OrderSearch = "RZ-41";
+        Equal("rz-test", workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single().Key.ConnectionId);
+        workspace.OrderSearch = "does-not-exist";
+        Equal(0, workspace.Orders.Cast<object>().Count());
+        workspace.OrderSearch = ""; workspace.OrderFilter = "Усі";
+        Equal(3, workspace.Orders.Cast<object>().Count());
+        Equal("999", main.AllReceiptsTab.SearchText); Equal("FN-only", main.OrdersReceiptsTab.SearchText);
+        Equal("Без зв’язку", workspace.Filter); Equal(0, fixture.Links.Saves);
+        True(!ReferenceEquals(workspace.Orders, main.AllReceiptsTab.View) && !ReferenceEquals(workspace.Orders, main.OrdersReceiptsTab.View));
+    }
+
+    private static async Task SelectedOrderManualAsync()
+    {
+        var fixture = new Fixture();
+        var wanted = Order() with { Key = new(MarketplaceKind.Prom, "prom-test", "42"), Number = "ORDER-42" };
+        fixture.Source.Orders = [Order(), wanted];
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync();
+        await OpenOrdersAsync(main, workspace);
+        var receipt = main.Receipts.Single(r => r.Id == ReceiptOne);
+        workspace.SelectedReceipt = receipt;
+        workspace.SelectedOrder = workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single(r => r.Key == wanted.Key);
+        fixture.Dialogs.Choice = null;
+        await ExecuteAsync(workspace.LinkSelectedOrderCommand);
+        Equal(0, fixture.Links.Saves); Equal(1, fixture.Dialogs.ChoiceCalls);
+        Equal(ReceiptOne, fixture.Dialogs.ChoiceReceiptId);
+        True(fixture.Dialogs.ChoiceOrderKeys.SequenceEqual([wanted.Key]), "The confirmation must contain only the explicitly selected order.");
+        fixture.Dialogs.Choice = new(wanted.Key, false);
+        await ExecuteAsync(workspace.LinkSelectedOrderCommand);
+        Equal(1, fixture.Links.Saves); Equal(ReceiptLinkState.Manual, receipt.OrderMatch!.State);
+        Equal(wanted.Key, receipt.OrderMatch.Order!.Key);
+        True(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single(r => r.Key == wanted.Key).HasConfirmedLink);
+        True(!receipt.IsSelected && !receipt.IsSelectedForOrders, "Linking is not a print selection.");
+
+        await main.RefreshAsync();
+        await main.PrepareOrdersAsync();
+        Equal(ReceiptLinkState.Manual, main.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch!.State);
+        True(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single(r => r.Key == wanted.Key).HasConfirmedLink);
+        var (restarted, restartedWorkspace) = fixture.Create();
+        await restarted.RefreshAsync();
+        restarted.SelectedTabIndex = 1;
+        await restarted.PrepareOrdersAsync();
+        Equal(wanted.Key, restarted.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch!.Order!.Key);
+        True(restartedWorkspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single(r => r.Key == wanted.Key).HasConfirmedLink);
+        Equal(1, fixture.Source.FetchCalls); Equal(1, fixture.Links.Saves);
+        Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
+    }
+
+    private static MarketplaceOrder BasketOrder() => Order() with { Items = [new("Товар", "SKU", 1m, 100m, 100m)], ItemsComplete = true };
+
+    private static ReceiptDetails BasketDetails(string id) => ReceiptDetailsService.Parse($$"""
+        {"id":"{{id}}","type":"SELL","status":"DONE","total_sum":10000,"round_sum":0,"discounts":[],
+         "goods":[{"good":{"name":"Товар","code":"SKU","price":10000},"quantity":1000,"sum":10000,"is_return":false,"discounts":[]}]}
+        """, id);
+
+    private static async Task BasketSuggestedUiAsync()
+    {
+        var fixture = new Fixture();
+        fixture.Source.Orders = [BasketOrder()];
+        fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 10000), Receipt(ReceiptThree, 3, 99900)];
+        fixture.Details.Values[ReceiptOne] = BasketDetails(ReceiptOne);
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync();
+        await OpenOrdersAsync(main, workspace);
+        var receipt = main.Receipts.Single(r => r.Id == ReceiptOne);
+        Equal(ReceiptLinkState.Suggested, receipt.OrderMatch!.State);
+        Equal(BasketOrder().Key, receipt.OrderMatch.Order!.Key);
+        Equal(1, fixture.Details.Calls);
+        var order = workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single();
+        True(order.HasSuggestedLink && !order.HasConfirmedLink);
+        True(order.LinkStatus.Contains("Ймовір", StringComparison.OrdinalIgnoreCase));
+        Equal(0, fixture.Dialogs.ChoiceCalls); Equal(0, fixture.Links.Saves);
+        await workspace.AutoMatchAsync();
+        Equal(ReceiptLinkState.Suggested, receipt.OrderMatch.State); Equal(0, fixture.Links.Saves);
+        main.SelectedTabIndex = 0;
+        Equal(2, main.ReceiptsView.Cast<object>().Count());
+        True(!receipt.IsSelected && !receipt.IsSelectedForOrders);
+        Equal(PrintItemStatus.Done, main.Receipts.Single(r => r.Id == ReceiptThree).PrintStatus);
+        Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
+    }
+
+    private static async Task BasketAmbiguousUiAsync()
+    {
+        foreach (var duplicateOrders in new[] { true, false })
+        {
+            var fixture = new Fixture();
+            fixture.Source.Orders = duplicateOrders
+                ? [BasketOrder(), BasketOrder() with { Key = new(MarketplaceKind.Prom, "prom-test", "42"), Number = "ORDER-42" }]
+                : [BasketOrder()];
+            fixture.ReceiptSource.Rows = duplicateOrders ? [Receipt(ReceiptOne, 1, 10000)]
+                : [Receipt(ReceiptOne, 1, 10000), Receipt(ReceiptTwo, 2, 10000)];
+            fixture.Details.Values[ReceiptOne] = BasketDetails(ReceiptOne);
+            fixture.Details.Values[ReceiptTwo] = BasketDetails(ReceiptTwo);
+            var (main, workspace) = fixture.Create();
+            await main.RefreshAsync();
+            await OpenOrdersAsync(main, workspace);
+            True(main.Receipts.All(r => r.OrderMatch?.State != ReceiptLinkState.Suggested && r.OrderMatch?.Order is null));
+            True(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().All(r => !r.HasSuggestedLink && !r.HasConfirmedLink));
+            Equal(duplicateOrders ? 1 : 2, fixture.Details.Calls);
+            Equal(0, fixture.Links.Saves);
+        }
+    }
+
+    private static async Task PartialOrderPanelAsync()
+    {
+        var fixture = new Fixture();
+        var cached = BasketOrder();
+        var fresh = BasketOrder() with { Key = new(MarketplaceKind.Prom, "prom-test", "42"), Number = "ORDER-42" };
+        await fixture.Cache.SaveAsync(new([cached], []));
+        fixture.Source.Orders = [fresh]; fixture.Source.Complete = false;
+        fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 10000)];
+        fixture.Details.Values[ReceiptOne] = BasketDetails(ReceiptOne);
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync();
+        main.SelectedTabIndex = 1;
+        await main.PrepareOrdersAsync();
+        Equal(cached.Key, workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single().Key);
+        Equal(0, fixture.Source.FetchCalls);
+        await workspace.SyncAsync();
+        Equal(2, workspace.Orders.Cast<object>().Count());
+        True(main.Receipts.All(r => r.OrderMatch?.State is not (ReceiptLinkState.Exact or ReceiptLinkState.Suggested)));
+        True(!workspace.AutoMatchCommand.CanExecute(null));
+        True(fixture.Cache.Snapshot.States.All(s => !s.Complete));
+        Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
+    }
+
+    private static async Task StaleBasketDetailsAsync()
+    {
+        var fixture = new Fixture();
+        fixture.Source.Orders = [BasketOrder()];
+        fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 10000)];
+        fixture.Details.Values[ReceiptOne] = BasketDetails(ReceiptOne);
+        fixture.Details.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Details.IgnoreCancellation = true;
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync();
+        main.SelectedTabIndex = 1;
+        await main.PrepareOrdersAsync();
+        var pending = workspace.SyncAsync();
+        await fixture.Details.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        True(!main.IsBusy, "Optional basket detail reads must not block the Checkbox tab.");
+        workspace.InvalidateAccount();
+        await workspace.AttachAsync(main.Receipts.ToArray(), "new-account-context", new(2026, 9, 23), new(2026, 9, 23));
+        fixture.Details.Gate.SetResult(true);
+        await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        True(main.Receipts.All(r => r.OrderMatch?.State != ReceiptLinkState.Suggested));
+        Equal(0, fixture.Links.Saves); Equal(0, fixture.Dialogs.ChoiceCalls);
+        fixture.Details.Gate = null;
+        await workspace.SyncAsync();
+        Equal(2, fixture.Details.Calls); // Old-account completion did not seed the new account's detail cache.
+        Equal(ReceiptLinkState.Suggested, main.Receipts.Single().OrderMatch!.State);
+        Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
+    }
+
+    private static async Task BasketContinuationAfterFailuresAsync()
+    {
+        var fixture = new Fixture();
+        var ids = Enumerable.Range(1, 101).Select(i => "20000000-0000-0000-0000-" + i.ToString("D12")).ToArray();
+        fixture.Source.Orders = [BasketOrder()];
+        fixture.ReceiptSource.Rows = ids.Select(id => Receipt(id, 1, 10000)).ToArray();
+        foreach (var id in ids.Take(100)) fixture.Details.FailIds.Add(id);
+        fixture.Details.Values[ids[^1]] = BasketDetails(ids[^1]);
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync();
+        await OpenOrdersAsync(main, workspace);
+        Equal(100, fixture.Details.Calls);
+        True(fixture.Details.RequestedIds.SequenceEqual(ids.Take(100)));
+        True(!fixture.Details.RequestedIds.Contains(ids[^1]));
+        True(workspace.AutoMatchCommand.CanExecute(null));
+        await workspace.AutoMatchAsync();
+        True(fixture.Details.Calls > 100 && fixture.Details.Calls <= 200, "Each action must keep its own one-hundred-request bound.");
+        Equal(ids[^1], fixture.Details.RequestedIds[100]);
+        Equal(1, fixture.Details.RequestedIds.Count(id => id == ids[^1]));
+        // The accessible receipt is inspected but not assumed unique: one hundred competing baskets remain unknown.
+        True(main.Receipts.All(row => row.OrderMatch?.State != ReceiptLinkState.Suggested && row.OrderMatch?.Order is null));
+        True(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().All(row => !row.HasSuggestedLink && !row.HasConfirmedLink));
+        Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
+    }
+
     private static async Task XamlSmokeAsync()
     {
         _xamlCheckpoint = "initialize application";
@@ -887,7 +1170,8 @@ internal static class MarketplaceViewModelTests
         application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
         True(application.Resources["BoolToVisibility"] is BooleanToVisibilityConverter);
         var fixture = new Fixture();
-        var (main, _) = fixture.Create();
+        await fixture.Cache.SaveAsync(new([Order()], []));
+        var (main, workspace) = fixture.Create();
         await main.RefreshAsync();
         var mainWindow = new MainWindow { DataContext = main };
         var settingsWindow = new SettingsWindow();
@@ -910,12 +1194,14 @@ internal static class MarketplaceViewModelTests
             var tabs = (TabControl)mainWindow.FindName("ReceiptTabs");
             var allGrid = (DataGrid)mainWindow.FindName("AllReceiptsGrid");
             var ordersGrid = (DataGrid)mainWindow.FindName("OrdersReceiptsGrid");
-            True(tabs is not null && allGrid is not null && ordersGrid is not null);
+            var marketplaceOrdersGrid = (DataGrid)mainWindow.FindName("MarketplaceOrdersGrid");
+            True(tabs is not null && allGrid is not null && ordersGrid is not null && marketplaceOrdersGrid is not null);
             Equal(2, tabs!.Items.Count); Equal(0, tabs.SelectedIndex); Equal(0, main.SelectedTabIndex);
             Equal("Усі чеки", ((TabItem)tabs.Items[0]).Header?.ToString());
             Equal("Чеки та замовлення", ((TabItem)tabs.Items[1]).Header?.ToString());
             True(ReferenceEquals(main.AllReceiptsTab.View, allGrid!.ItemsSource));
             True(ReferenceEquals(main.OrdersReceiptsTab.View, ordersGrid!.ItemsSource));
+            True(ReferenceEquals(workspace.Orders, marketplaceOrdersGrid!.ItemsSource));
             True(!ReferenceEquals(allGrid.ItemsSource, ordersGrid.ItemsSource));
             Equal(3, allGrid.Items.Count);
             var first = main.Receipts.Single(r => r.Id == ReceiptOne);
@@ -944,6 +1230,14 @@ internal static class MarketplaceViewModelTests
             _xamlCheckpoint = "drain orders layout";
             await DrainDispatcherAsync();
             Equal(1, main.SelectedTabIndex);
+            Equal(1, marketplaceOrdersGrid.Items.Count);
+            var displayedOrder = workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single();
+            marketplaceOrdersGrid.SelectedItem = displayedOrder;
+            await DrainDispatcherAsync();
+            True(ReferenceEquals(displayedOrder, workspace.SelectedOrder));
+            marketplaceOrdersGrid.ScrollIntoView(displayedOrder); marketplaceOrdersGrid.UpdateLayout();
+            var marketplaceOrderRow = (DataGridRow)marketplaceOrdersGrid.ItemContainerGenerator.ContainerFromItem(displayedOrder);
+            True(VisualChildren<TextBlock>(marketplaceOrderRow).Any(text => text.Text == "ORDER-41"), "The real orders grid must render the unlinked cached order number.");
             Equal(0, main.SelectedCount); True(!main.PrintSelectedCommand.CanExecute(null));
             ordersGrid.SelectedItem = first;
             _xamlCheckpoint = "drain orders selection";
@@ -1192,16 +1486,18 @@ internal static class MarketplaceViewModelTests
         public MarketplaceKind Marketplace => kind;
         public IReadOnlyList<MarketplaceOrder> Orders = [];
         public bool Fail;
+        public bool Complete = true;
         public int FetchCalls;
+        public MarketplaceRange? LastRange;
         public TaskCompletionSource<bool>? Gate;
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task TestConnectionAsync(MarketplaceConnection c, MarketplaceCredentials s, CancellationToken ct = default) => Task.CompletedTask;
         public async Task<OrdersFetchResult> FetchAsync(MarketplaceConnection c, MarketplaceCredentials s, MarketplaceRange range, CancellationToken ct = default)
         {
-            FetchCalls++; Entered.TrySetResult();
+            FetchCalls++; LastRange = range; Entered.TrySetResult();
             if (Gate is not null) await Gate.Task.WaitAsync(ct);
             if (Fail) throw new MarketplaceApiException("API unavailable (test).");
-            return new(Orders, true);
+            return new(Orders, Complete, Complete ? "" : "Перевірка неповна (synthetic test).");
         }
         public Task<MarketplaceOrder?> GetOrderAsync(MarketplaceConnection c, MarketplaceCredentials s, string id, CancellationToken ct = default)
             => Task.FromResult(Orders.FirstOrDefault(o => o.Key.OrderId == id));
@@ -1282,13 +1578,18 @@ internal static class MarketplaceViewModelTests
     private sealed class Details : IReceiptDetailsService
     {
         public int Calls;
+        public Dictionary<string, ReceiptDetails> Values { get; } = [];
+        public HashSet<string> FailIds { get; } = [];
+        public List<string> RequestedIds { get; } = [];
+        public bool IgnoreCancellation;
         public TaskCompletionSource<bool>? Gate;
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public async Task<ReceiptDetails> GetAsync(string id, CancellationToken ct = default)
         {
-            Calls++; Entered.TrySetResult();
-            if (Gate is not null) await Gate.Task.WaitAsync(ct);
-            return new(id, [new("Товар", "SKU", 1m, 100m)]);
+            Calls++; RequestedIds.Add(id); Entered.TrySetResult();
+            if (Gate is not null) await Gate.Task.WaitAsync(IgnoreCancellation ? CancellationToken.None : ct);
+            if (FailIds.Contains(id)) throw new InvalidOperationException("Synthetic unavailable receipt details.");
+            return Values.GetValueOrDefault(id) ?? new(id, [new("Товар", "SKU", 1m, 100m)]);
         }
     }
     private sealed class Authentication : IAuthenticationService
@@ -1311,6 +1612,8 @@ internal static class MarketplaceViewModelTests
         public OrderLinkChoice? Choice;
         public string Copied = "";
         public int ChoiceCalls;
+        public string? ChoiceReceiptId;
+        public IReadOnlyList<OrderKey> ChoiceOrderKeys = [];
         public Action? AfterSettings;
         public PrintBatchConfirmation? Confirmation;
         public Action? DuringConfirmation;
@@ -1325,7 +1628,7 @@ internal static class MarketplaceViewModelTests
         { SettingsOpenedForMarketplace = marketplace; AfterSettings?.Invoke(); return Task.FromResult(false); }
         public void ShowPreview(byte[] png, ReceiptRowViewModel receipt) => PreviewId = receipt.Id;
         public OrderLinkChoice? ChooseOrder(ReceiptRowViewModel receipt, ReceiptDetails? details, IReadOnlyList<MarketplaceOrder> orders, IReadOnlyList<MarketplaceOrder> candidates)
-        { ChoiceCalls++; return Choice; }
+        { ChoiceCalls++; ChoiceReceiptId = receipt.Id; ChoiceOrderKeys = orders.Select(o => o.Key).ToArray(); return Choice; }
         public bool ConfirmUnlink() => true;
         public void CopyText(string text) => Copied = text;
     }

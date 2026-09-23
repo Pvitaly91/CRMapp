@@ -128,8 +128,6 @@
                             </WrapPanel>
                         </Border>
                         <WrapPanel>
-                            <TextBlock Text="Замовлення:" VerticalAlignment="Center" />
-                            <ComboBox Width="175" ItemsSource="{Binding Marketplace.Filters}" SelectedItem="{Binding Marketplace.Filter}" />
                             <Button Content="Оновити замовлення" Command="{Binding Marketplace.SyncCommand}" />
                             <Button Content="Розширити на 30 днів" Command="{Binding Marketplace.ExpandCommand}" />
                             <Button Content="Скасувати оновлення" Command="{Binding Marketplace.CancelCommand}" />
@@ -169,7 +167,82 @@
                         </Grid>
                     </Expander>
 
-                    <DataGrid x:Name="OrdersReceiptsGrid" ItemsSource="{Binding OrdersReceiptsTab.View}" Style="{StaticResource ReceiptGridStyle}"
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*" MinHeight="140" />
+                            <RowDefinition Height="7" />
+                            <RowDefinition Height="*" MinHeight="110" />
+                        </Grid.RowDefinitions>
+
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <DockPanel Margin="2,0,2,3">
+                                <TextBlock Text="Замовлення — усі завантажені" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Marketplace.OrderListSummary}" Foreground="#48566A" FontSize="11"
+                                           Margin="12,0,0,0" TextWrapping="Wrap" VerticalAlignment="Center" />
+                            </DockPanel>
+                            <WrapPanel Grid.Row="1" Margin="0,0,0,3">
+                                <TextBlock Text="Пошук замовлень:" VerticalAlignment="Center" Margin="3,0,5,0" />
+                                <TextBox x:Name="OrderSearchInput" Width="210"
+                                         Text="{Binding Marketplace.OrderSearch, UpdateSourceTrigger=PropertyChanged}"
+                                         ToolTip="Пошук лише серед завантажених замовлень — не приховує чеки нижче." />
+                                <ComboBox x:Name="OrderFilterInput" Width="150" ItemsSource="{Binding Marketplace.OrderFilters}"
+                                          SelectedItem="{Binding Marketplace.OrderFilter}" ToolTip="Фільтр лише замовлень" />
+                                <Button Content="Прив’язати вибрані" Command="{Binding Marketplace.LinkSelectedOrderCommand}"
+                                        ToolTip="Виберіть замовлення зверху та чек знизу. Прив’язку буде збережено лише після підтвердження." />
+                                <Button Content="Зіставити за товарами" Command="{Binding Marketplace.AutoMatchCommand}"
+                                        ToolTip="Завантажити деталі чеків лише для читання. Сума + повний склад товарів; неточні збіги потребують перевірки." />
+                            </WrapPanel>
+                            <DataGrid x:Name="MarketplaceOrdersGrid" Grid.Row="2" ItemsSource="{Binding Marketplace.Orders}"
+                                      SelectedItem="{Binding Marketplace.SelectedOrder, Mode=TwoWay}"
+                                      AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
+                                      IsReadOnly="True" SelectionMode="Single" HeadersVisibility="Column"
+                                      GridLinesVisibility="Horizontal" BorderBrush="#D9DEE7" AlternatingRowBackground="#F5F8FC">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Маркетплейс" Binding="{Binding Marketplace}" Width="100" />
+                                    <DataGridTextColumn Header="Магазин" Binding="{Binding StoreName}" Width="130" />
+                                    <DataGridTextColumn Header="№ замовлення" Binding="{Binding Number}" Width="125" />
+                                    <DataGridTextColumn Header="Дата" Binding="{Binding CreatedAt, StringFormat=dd.MM.yyyy HH:mm}" Width="135" />
+                                    <DataGridTextColumn Header="Сума / валюта" Binding="{Binding TotalDisplay}" Width="175">
+                                        <DataGridTextColumn.ElementStyle>
+                                            <Style TargetType="TextBlock"><Setter Property="ToolTip" Value="{Binding TotalDisplay}" /></Style>
+                                        </DataGridTextColumn.ElementStyle>
+                                    </DataGridTextColumn>
+                                    <DataGridTextColumn Header="Зв’язок із чеками" Binding="{Binding LinkStatus}" Width="175" />
+                                    <DataGridTextColumn Header="Пов’язані чеки" Binding="{Binding LinkedReceiptsDisplay}" Width="160">
+                                        <DataGridTextColumn.ElementStyle>
+                                            <Style TargetType="TextBlock"><Setter Property="ToolTip" Value="{Binding LinkedReceiptsDisplay}" /></Style>
+                                        </DataGridTextColumn.ElementStyle>
+                                    </DataGridTextColumn>
+                                    <DataGridTextColumn Header="Покупець" Binding="{Binding BuyerDisplay}" Width="180"
+                                        Visibility="{Binding IsChecked, Source={x:Reference ExtraOrderColumns}, Converter={StaticResource BoolToVisibility}}" />
+                                    <DataGridTextColumn Header="Статус замовлення" Binding="{Binding Status}" Width="150"
+                                        Visibility="{Binding IsChecked, Source={x:Reference ExtraOrderColumns}, Converter={StaticResource BoolToVisibility}}" />
+                                    <DataGridTextColumn Header="ТТН" Binding="{Binding TrackingDisplay}" Width="155"
+                                        Visibility="{Binding IsChecked, Source={x:Reference ExtraOrderColumns}, Converter={StaticResource BoolToVisibility}}" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
+
+                        <GridSplitter Grid.Row="1" Height="5" HorizontalAlignment="Stretch" VerticalAlignment="Center"
+                                      Background="#D9DEE7" ResizeDirection="Rows" ResizeBehavior="PreviousAndNext"
+                                      ToolTip="Змінити висоту таблиць замовлень і чеків" />
+
+                        <Grid Grid.Row="2">
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                            <WrapPanel Margin="2,0,2,3">
+                                <TextBlock Text="Чеки Checkbox" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,12,0" />
+                                <TextBlock Text="Зв’язки чеків:" VerticalAlignment="Center" />
+                                <ComboBox Width="175" ItemsSource="{Binding Marketplace.Filters}" SelectedItem="{Binding Marketplace.Filter}"
+                                          ToolTip="Фільтр лише чеків — не приховує замовлення зверху." />
+                                <TextBlock Text="Для ручної прив’язки виберіть рядок чека та замовлення." Foreground="#667085"
+                                           FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0" />
+                            </WrapPanel>
+                    <DataGrid x:Name="OrdersReceiptsGrid" Grid.Row="1" ItemsSource="{Binding OrdersReceiptsTab.View}" Style="{StaticResource ReceiptGridStyle}"
                               SelectedItem="{Binding OrdersReceiptsTab.SelectedReceipt, Mode=TwoWay}"
                               Sorting="DataGrid_Sorting" MouseDoubleClick="ReceiptsGrid_MouseDoubleClick">
                         <DataGrid.Columns>
@@ -209,6 +282,8 @@
                             </DataGridTemplateColumn>
                         </DataGrid.Columns>
                     </DataGrid>
+                        </Grid>
+                    </Grid>
                 </DockPanel>
             </TabItem>
         </TabControl>

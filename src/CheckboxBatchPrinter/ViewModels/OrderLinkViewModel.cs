@@ -43,6 +43,7 @@ public sealed class OrderLinkViewModel : ObservableObject
         Orders.Filter = MatchesFilter;
         LinkCommand = new RelayCommand(_ => Choose(false), _ => SelectedOrder is not null);
         RejectCommand = new RelayCommand(_ => Choose(true), _ => SelectedOrder?.IsCandidate == true);
+        if (_rows.Count == 1) SelectedOrder = _rows[0];
     }
 
     public event Action<OrderLinkChoice>? ChoiceRequested;

@@ -57,6 +57,7 @@ internal static class Program
         Tests.AddRange(RozetkaOrdersTests.All);
         Tests.AddRange(MarketplaceMatchingTests.All);
         Tests.AddRange(FiscalLinkTests.All);
+        Tests.AddRange(BasketMatchingTests.All);
         Tests.AddRange(MarketplaceSyncTests.All);
         Tests.AddRange(MarketplaceViewModelTests.All);
         var failed = 0;

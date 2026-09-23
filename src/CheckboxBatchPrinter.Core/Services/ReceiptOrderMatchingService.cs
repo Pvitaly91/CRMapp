@@ -2,12 +2,13 @@ using CheckboxBatchPrinter.Core.Models;
 
 namespace CheckboxBatchPrinter.Core.Services;
 
-/// <summary>Typed fiscal evidence proves a link. Similarity produces suggestions, never a link.</summary>
+/// <summary>Fiscal evidence proves a link; a mutually unique full basket can only suggest one.</summary>
 public sealed class ReceiptOrderMatchingService
 {
     public ReceiptOrderMatch Match(ReceiptRecord receipt, string accountContext,
         IReadOnlyList<MarketplaceOrder> orders, IReadOnlyList<ReceiptOrderDecision> decisions,
-        bool coverageComplete, ReceiptDetails? details = null, IReadOnlyList<ReceiptRecord>? receiptScope = null)
+        bool coverageComplete, ReceiptDetails? details = null, IReadOnlyList<ReceiptRecord>? receiptScope = null,
+        IReadOnlyDictionary<string, ReceiptDetails>? receiptDetailsScope = null)
     {
         ArgumentNullException.ThrowIfNull(receipt);
         ArgumentException.ThrowIfNullOrWhiteSpace(accountContext);
@@ -89,6 +90,15 @@ public sealed class ReceiptOrderMatchingService
         if (unresolvedFiscal.Length > 0)
             return new(ReceiptLinkState.Incomplete, null,
                 "Є фіскальний номер, але провайдер, контекст продавця/каси або однозначність ще не підтверджені. Друк чека доступний.", unresolvedFiscal);
+
+        if (coverageComplete && decision?.SuppressAutomatic != true && exact.Length == 0 &&
+            BasketReceiptMatching.TrySuggest(receipt, accountContext, available, decisions, rejected,
+                details, receiptScope, receiptDetailsScope) is { } suggested)
+            return new(ReceiptLinkState.Suggested, suggested,
+                "Ймовірний автозв’язок: увесь кошик (назви, кількість, ціни й суми рядків), загальна сума та час; " +
+                "взаємно однозначний лише серед завантажених даних. " +
+                (string.IsNullOrWhiteSpace(suggested.Currency) ? "Валюта API не підтверджена. " : "") +
+                "Це не фіскальне підтвердження; перевірте або відхиліть.", [suggested]);
 
         var candidates = allowedExact;
         if (receipt.Type == ReceiptTypes.Sell && receipt.DisplayDate is { } receiptDate)

@@ -105,7 +105,12 @@ public sealed class MainViewModel : ObservableObject
             if (value == 1) _ = PrepareOrdersAsync();
         }
     }
-    public Task PrepareOrdersAsync() => Marketplace?.EnsureAttachedAsync() ?? Task.CompletedTask;
+    public Task PrepareOrdersAsync()
+    {
+        if (Marketplace is null) return Task.CompletedTask;
+        UpdateOrderDatesWithoutReceipts();
+        return Marketplace.EnsureAttachedAsync();
+    }
     public ObservableCollection<ReceiptTypeOption> ReceiptTypes { get; }
     public MarketplaceWorkspaceViewModel? Marketplace { get; }
 
@@ -120,8 +125,10 @@ public sealed class MainViewModel : ObservableObject
     public ICommand SettingsCommand { get; }
     public ICommand MarketplaceSettingsCommand { get; }
 
-    public DateTime? DateFrom { get => _dateFrom; set => SetProperty(ref _dateFrom, value); }
-    public DateTime? DateTo { get => _dateTo; set => SetProperty(ref _dateTo, value); }
+    public DateTime? DateFrom { get => _dateFrom; set { if (SetProperty(ref _dateFrom, value)) UpdateOrderDatesWithoutReceipts(); } }
+    public DateTime? DateTo { get => _dateTo; set { if (SetProperty(ref _dateTo, value)) UpdateOrderDatesWithoutReceipts(); } }
+    private void UpdateOrderDatesWithoutReceipts() => Marketplace?.SetOrderDatesWithoutReceipts(
+        DateFrom is { } from ? DateOnly.FromDateTime(from) : null, DateTo is { } to ? DateOnly.FromDateTime(to) : null);
     public string SearchText
     {
         get => ActiveTab.SearchText;

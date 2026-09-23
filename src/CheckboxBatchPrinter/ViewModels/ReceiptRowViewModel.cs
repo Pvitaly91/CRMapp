@@ -48,6 +48,7 @@ public sealed class ReceiptRowViewModel : ObservableObject
     {
         ReceiptLinkState.Exact => OrderMatch.Explanation,
         ReceiptLinkState.Manual => "Прив’язано вручну",
+        ReceiptLinkState.Suggested => "Ймовірно: за товарами",
         ReceiptLinkState.Candidates => "Є кандидати",
         ReceiptLinkState.NotFound => "Не знайдено у діапазоні",
         ReceiptLinkState.Conflict => "Конфлікт",

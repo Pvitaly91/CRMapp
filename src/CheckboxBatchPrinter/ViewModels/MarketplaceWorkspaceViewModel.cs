@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Windows.Data;
 using System.Windows.Input;
 using CheckboxBatchPrinter.Core.Models;
 using CheckboxBatchPrinter.Core.Services;
@@ -21,6 +23,10 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     private MarketplaceSnapshot _snapshot = new([], []);
     private IReadOnlyList<ReceiptOrderDecision> _decisions = [];
     private readonly Dictionary<string, ReceiptDetails> _receiptDetails = [];
+    private readonly HashSet<string> _basketAttempted = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ObservableCollection<MarketplaceOrderRowViewModel> _orderRows = [];
+    private MarketplaceOrderRowViewModel? _selectedOrder;
+    private string _orderSearch = "", _orderFilter = "Усі";
     private const string SetupHint = "Інтеграції не налаштовані.\nУсі чеки доступні на вкладці “Усі чеки”.";
     private string _account = "", _status = SetupHint, _filter = "Усі";
     private bool _busy, _attaching, _configurationLoaded, _canApply, _coverageComplete;
@@ -29,10 +35,11 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     private Task? _activeSync;
     private Task? _attachment;
     private int _activeSyncGeneration = -1, _attachedGeneration = -1;
-    private DateOnly _from, _to;
+    private DateOnly _from = DateOnly.FromDateTime(DateRangeBuilder.TodayKyiv), _to = DateOnly.FromDateTime(DateRangeBuilder.TodayKyiv);
     private int _extraHistory;
     private ReceiptRowViewModel? _selected;
     private int _generation;
+    private bool _orderDatesValid = true;
 
     public MarketplaceWorkspaceViewModel(IMarketplaceSettingsStore settings, MarketplaceSyncService sync,
         IReceiptOrderLinkStore links, IReceiptDetailsService details, IOrderLinkDialogService dialogs,
@@ -40,16 +47,32 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     {
         _settings = settings; _sync = sync; _links = links; _details = details; _dialogs = dialogs;
         _fiscalVerifier = fiscalVerifier;
-        SyncCommand = new AsyncRelayCommand(_ => SyncAsync(), _ => !IsBusy && _account.Length > 0);
-        ExpandCommand = new AsyncRelayCommand(async _ => { _extraHistory = Math.Min(_extraHistory + 30, 3650); await SyncAsync(); }, _ => !IsBusy && _account.Length > 0);
+        Orders = new ListCollectionView(_orderRows) { Filter = MatchesOrderFilter };
+        Orders.SortDescriptions.Add(new(nameof(MarketplaceOrderRowViewModel.CreatedAt), ListSortDirection.Descending));
+        SyncCommand = new AsyncRelayCommand(_ => SyncAsync(), _ => !IsBusy && (_account.Length > 0 || _orderDatesValid));
+        ExpandCommand = new AsyncRelayCommand(async _ => { _extraHistory = Math.Min(_extraHistory + 30, 3650); await SyncAsync(); }, _ => !IsBusy && (_account.Length > 0 || _orderDatesValid));
         CancelCommand = new RelayCommand(_ => _cancel?.Cancel(), _ => IsBusy);
-        LinkCommand = new AsyncRelayCommand(_ => LinkAsync(), _ => _selected is not null && !IsBusy && _canApply && HasEnabledConnections);
+        LinkCommand = new AsyncRelayCommand(_ => LinkAsync(), _ => _account.Length > 0 && _selected is not null && !IsBusy && _canApply && HasEnabledConnections);
+        LinkSelectedOrderCommand = new AsyncRelayCommand(_ => LinkAsync(_selectedOrder?.Model), _ =>
+            _account.Length > 0 && _selected is not null && _selectedOrder is not null && Orders.Contains(_selectedOrder) && !IsBusy && _canApply && HasEnabledConnections);
+        AutoMatchCommand = new AsyncRelayCommand(_ => AutoMatchAsync(), _ => !IsBusy && _account.Length > 0 && _rows.Count > 0 && _coverageComplete);
         UnlinkCommand = new AsyncRelayCommand(_ => UnlinkAsync(), _ => _selected is not null && !IsBusy && _canApply && HasEnabledConnections &&
             (_selected.OrderMatch?.Order is not null || _decisions.Any(d => d.AccountContext == _account && d.ReceiptId == _selected.Id && d.ConfirmedOrder is not null)));
         CopyNumberCommand = new RelayCommand(_ => _dialogs.CopyText(_selected?.OrderMatch?.Order?.Number ?? ""));
         CopyTrackingCommand = new RelayCommand(_ => _dialogs.CopyText(_selected?.OrderMatch?.Order?.TrackingDisplay ?? ""));
     }
     public event EventHandler? MatchesChanged;
+    public ICollectionView Orders { get; }
+    public IReadOnlyList<string> OrderFilters { get; } = ["Усі", "Prom", "Rozetka", "Без чека", "Є чек", "Ймовірний зв’язок"];
+    public string OrderSearch { get => _orderSearch; set { if (SetProperty(ref _orderSearch, value ?? "")) RefreshOrdersView(); } }
+    public string OrderFilter { get => _orderFilter; set { if (SetProperty(ref _orderFilter, value)) RefreshOrdersView(); } }
+    public MarketplaceOrderRowViewModel? SelectedOrder
+    {
+        get => _selectedOrder;
+        set { if (SetProperty(ref _selectedOrder, value)) RaiseCommands(); }
+    }
+    public string OrderListSummary => $"Замовлень: {Orders.Cast<object>().Count()} із {_orderRows.Count}. " +
+        "Показано всі завантажені замовлення увімкнених магазинів, навіть без чека; дані з кешу можуть бути поза поточним періодом.";
     public IReadOnlyList<string> Filters { get; } = ["Усі", "Prom", "Rozetka", "Без зв’язку", "Потрібна перевірка"];
     public string Filter { get => _filter; set { if (SetProperty(ref _filter, value)) MatchesChanged?.Invoke(this, EventArgs.Empty); } }
     public bool ShowExtraColumns { get; set; }
@@ -63,6 +86,8 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     public ICommand ExpandCommand { get; }
     public ICommand CancelCommand { get; }
     public ICommand LinkCommand { get; }
+    public ICommand LinkSelectedOrderCommand { get; }
+    public ICommand AutoMatchCommand { get; }
     public ICommand UnlinkCommand { get; }
     public ICommand CopyNumberCommand { get; }
     public ICommand CopyTrackingCommand { get; }
@@ -94,9 +119,11 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
             foreach (var row in rows) row.OrderMatch = null;
         }
         _rows = rows; _account = account; _from = from; _to = to; _canApply = false;
+        _basketAttempted.Clear(); _orderDatesValid = to >= from;
         _coverageComplete = false;
         _configurationLoaded = false;
         _config = new(); _snapshot = new([], []); _decisions = [];
+        _orderRows.Clear(); SelectedOrder = null; RefreshOrdersView();
         FiscalSummary = "";
         SelectedReceipt = rows.FirstOrDefault(r => r.Id == selectedId);
         Status = "Замовлення можна перевірити на вкладці «Чеки та замовлення».";
@@ -107,6 +134,17 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     {
         SetReceiptScope(rows, account, from, to);
         await EnsureAttachedAsync();
+    }
+
+    // A marketplace order list does not require a successful Checkbox login or receipt query.
+    public void SetOrderDatesWithoutReceipts(DateOnly? from, DateOnly? to)
+    {
+        if (_account.Length > 0) return;
+        _orderDatesValid = from.HasValue && to.HasValue && to.Value >= from.Value;
+        if (_orderDatesValid && (_from != from!.Value || _to != to!.Value))
+            SetReceiptScope([], "", from.Value, to!.Value);
+        if (!_orderDatesValid) Status = "Оберіть коректні дати «від» і «до» для замовлень.";
+        RaiseCommands();
     }
 
     // Entering the optional tab loads local data only; only SyncAsync contacts APIs.
@@ -158,7 +196,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
 
     public Task SyncAsync()
     {
-        if (_account.Length == 0) return Task.CompletedTask;
+        if (_account.Length == 0 && !_orderDatesValid) return Task.CompletedTask;
         if (_activeSyncGeneration == _generation && _activeSync is { IsCompleted: false }) return _activeSync;
         var previous = _activeSync;
         _activeSyncGeneration = _generation;
@@ -190,7 +228,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
             token.ThrowIfCancellationRequested();
             if (generation != _generation) return;
             _snapshot = snapshot;
-            if (_fiscalVerifier is not null)
+            if (_fiscalVerifier is not null && _account.Length > 0)
             {
                 var verified = await _fiscalVerifier.VerifyAsync(ActiveOrders, _account, token);
                 token.ThrowIfCancellationRequested();
@@ -201,8 +239,9 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
             _coverageComplete = enabled.All(c => _snapshot.States.Any(s => s.ConnectionId == c.Id && s.Complete && s.Range == range));
             Status = $"Діапазон замовлень: {range.From:dd.MM.yyyy} — {range.ToExclusive.AddDays(-1):dd.MM.yyyy} (Київ). " +
                 string.Join(" | ", enabled.Select(c => { var s = _snapshot.States.FirstOrDefault(s => s.ConnectionId == c.Id); return $"{c.Name}: {s?.Message} Успішне оновлення: {s?.LastSuccessUtc?.ToLocalTime().ToString("dd.MM HH:mm") ?? "немає"}"; }));
+            ApplyMatches(); // Orders are visible before optional Checkbox detail reads finish.
             // Return receipts may carry a documented original receipt ID; fetch only these details.
-            foreach (var row in _rows.Where(r => r.RawType == ReceiptTypes.Return))
+            foreach (var row in _rows.Where(r => _account.Length > 0 && r.RawType == ReceiptTypes.Return))
             {
                 token.ThrowIfCancellationRequested();
                 try
@@ -219,6 +258,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
                     _coverageComplete = false; Status += " Деталі повернення недоступні.";
                 }
             }
+            if (_coverageComplete && _account.Length > 0) await LoadBasketDetailsAsync(generation, token);
             ApplyMatches();
         }
         catch (OperationCanceledException)
@@ -247,19 +287,127 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     private IReadOnlyList<MarketplaceOrder> ActiveOrders => _snapshot.Orders.Where(o =>
         _config.Connections.Any(c => c.Enabled && c.Id == o.Key.ConnectionId && c.Marketplace == o.Key.Marketplace)).ToArray();
 
+    private bool MatchesOrderFilter(object value)
+    {
+        if (value is not MarketplaceOrderRowViewModel row) return false;
+        var included = OrderFilter switch
+        {
+            "Prom" => row.Key.Marketplace == MarketplaceKind.Prom,
+            "Rozetka" => row.Key.Marketplace == MarketplaceKind.Rozetka,
+            "Без чека" => !row.HasConfirmedLink,
+            "Є чек" => row.HasConfirmedLink,
+            "Ймовірний зв’язок" => row.HasSuggestedLink,
+            _ => true
+        };
+        if (!included) return false;
+        var query = OrderSearch.Trim();
+        if (query.Length == 0) return true;
+        var order = row.Model;
+        return new[] { row.Number, row.Key.OrderId, row.Marketplace, row.StoreName, row.Status,
+            order.Buyer?.Name, order.Buyer?.Phone, order.Recipient?.Name, order.Recipient?.Phone, row.TrackingDisplay }
+            .Any(text => text?.Contains(query, StringComparison.CurrentCultureIgnoreCase) == true);
+    }
+
+    private void RefreshOrdersView()
+    {
+        Orders.Refresh();
+        if (_selectedOrder is not null && !Orders.Contains(_selectedOrder)) SelectedOrder = null;
+        OnPropertyChanged(nameof(OrderListSummary)); RaiseCommands();
+    }
+
+    private void RefreshOrderRows(IReadOnlyList<MarketplaceOrder> orders)
+    {
+        var unique = orders.DistinctBy(o => o.Key).ToArray();
+        var keys = unique.Select(o => o.Key).ToHashSet();
+        var existing = _orderRows.ToDictionary(r => r.Key);
+        // Keep the view queryable while WPF reevaluates selection/commands after collection changes.
+        for (var i = _orderRows.Count - 1; i >= 0; i--)
+            if (!keys.Contains(_orderRows[i].Key)) _orderRows.RemoveAt(i);
+        foreach (var order in unique)
+        {
+            if (!existing.TryGetValue(order.Key, out var row))
+            { row = new(order); _orderRows.Add(row); }
+            row.Update(order, _rows, _decisions);
+        }
+        RefreshOrdersView();
+    }
+
+    public Task AutoMatchAsync()
+    {
+        if (_account.Length == 0 || !_canApply || !_coverageComplete || !HasEnabledConnections) return Task.CompletedTask;
+        if (_activeSyncGeneration == _generation && _activeSync is { IsCompleted: false }) return _activeSync;
+        _activeSyncGeneration = _generation;
+        return _activeSync = AutoMatchCoreAsync(_generation);
+    }
+
+    private async Task AutoMatchCoreAsync(int generation)
+    {
+        IsBusy = true;
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(_scopeCancel.Token);
+        _cancel = cancel;
+        try
+        {
+            await LoadBasketDetailsAsync(generation, cancel.Token);
+            if (generation == _generation) ApplyMatches();
+        }
+        catch (OperationCanceledException)
+        {
+            if (generation == _generation) Status = "Зіставлення скасовано. Точні й ручні зв’язки збережено.";
+        }
+        catch (Exception)
+        {
+            if (generation == _generation) Status = "Товари чеків недоступні. Замовлення й звичайний друк залишаються доступними.";
+        }
+        finally
+        {
+            if (generation == _generation && ReferenceEquals(_cancel, cancel)) { _cancel = null; IsBusy = false; }
+        }
+    }
+
+    private async Task LoadBasketDetailsAsync(int generation, CancellationToken token)
+    {
+        var orders = ActiveOrders.Where(o => o.Items.Count > 0 && o.ItemsComplete).ToArray();
+        var targets = _rows.Where(row => row.RawType == ReceiptTypes.Sell && row.Model.DisplayDate is { } date &&
+            orders.Any(o => o.Total == row.Total && o.CreatedAt is { } created && created <= date && created >= date.AddDays(-30)))
+            .Where(row => !_receiptDetails.ContainsKey(row.Id))
+            .OrderBy(row => _basketAttempted.Contains(row.Id)).ToArray();
+        var failed = 0;
+        var priorStatus = Status;
+        var requested = 0;
+        foreach (var row in targets.Take(100))
+        {
+            token.ThrowIfCancellationRequested();
+            _basketAttempted.Add(row.Id);
+            Status = $"Зіставлення за товарами: {++requested}/{Math.Min(100, targets.Length)}. Друк доступний.";
+            try
+            {
+                var details = await _details.GetAsync(row.Id, token);
+                token.ThrowIfCancellationRequested();
+                if (generation != _generation) return;
+                _receiptDetails[row.Id] = details;
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            catch (Exception) { if (generation != _generation) return; failed++; }
+        }
+        if (generation != _generation) return;
+        Status = priorStatus + (failed > 0 ? $" Товари {failed} чеків недоступні; такі збіги не підтверджуються." : "") +
+            (targets.Length > 100 ? " Досягнуто межі 100 запитів деталей. Натисніть «Зіставити за товарами» для продовження." : "");
+    }
+
     private void ApplyMatches()
     {
         if (!_canApply) return;
         var orders = ActiveOrders;
         var scope = _rows.Select(row => row.Model).ToArray();
         foreach (var row in _rows)
-            row.OrderMatch = !HasEnabledConnections
+            row.OrderMatch = !HasEnabledConnections || _account.Length == 0
                 ? new(ReceiptLinkState.NotChecked, null, "Маркетплейси не підключено. Звичайний друк доступний.", [])
-                : _matcher.Match(row.Model, _account, orders, _decisions, _coverageComplete, _receiptDetails.GetValueOrDefault(row.Id), scope);
+                : _matcher.Match(row.Model, _account, orders, _decisions, _coverageComplete, _receiptDetails.GetValueOrDefault(row.Id), scope, _receiptDetails);
+        RefreshOrderRows(orders);
         var linked = _rows.Where(r => r.OrderMatch?.Order is not null).Select(r => r.OrderMatch!.Order!.Key).ToHashSet();
         var unmatchedKeys = orders.Count(o => o.FiscalReferences.Count > 0 && !linked.Contains(o.Key));
         var unavailable = orders.Count(o => o.FiscalDataStatus.Length > 0);
-        FiscalSummary = !HasEnabledConnections ? "" : $"Завантажено замовлень: {orders.Count}. Автоматичних зв’язків: {_rows.Count(r => r.OrderMatch?.State == ReceiptLinkState.Exact)}. " +
+        FiscalSummary = !HasEnabledConnections ? "" : $"Завантажено замовлень: {orders.Count}. Точних зв’язків: {_rows.Count(r => r.OrderMatch?.State == ReceiptLinkState.Exact)}. Ймовірних за товарами: {_rows.Count(r => r.OrderMatch?.State == ReceiptLinkState.Suggested)}. " +
             (unmatchedKeys > 0 ? $"Замовлень із непідтвердженими фіскальними ключами: {unmatchedKeys}. Перевірте контекст каси/продавця, період і права касира; це не означає, що чека немає. " : "") +
             (unavailable > 0 ? $"Фіскальні дані потребують перевірки: {unavailable}. " : "") +
             (orders.Any(o => o.Key.Marketplace == MarketplaceKind.Prom && o.FiscalReferences.Count == 0)
@@ -272,13 +420,13 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         "Prom" => row.OrderMatch?.Order?.Key.Marketplace == MarketplaceKind.Prom,
         "Rozetka" => row.OrderMatch?.Order?.Key.Marketplace == MarketplaceKind.Rozetka,
         "Без зв’язку" => row.OrderMatch?.Order is null,
-        "Потрібна перевірка" => row.OrderMatch?.State is ReceiptLinkState.Conflict or ReceiptLinkState.Incomplete or ReceiptLinkState.Candidates or ReceiptLinkState.NotChecked,
+        "Потрібна перевірка" => row.OrderMatch?.State is ReceiptLinkState.Conflict or ReceiptLinkState.Incomplete or ReceiptLinkState.Candidates or ReceiptLinkState.NotChecked or ReceiptLinkState.Suggested,
         _ => true
     };
 
-    private async Task LinkAsync()
+    private async Task LinkAsync(MarketplaceOrder? selectedOrder = null)
     {
-        if (_selected is not { } row || !_canApply || !HasEnabledConnections) return;
+        if (_account.Length == 0 || _selected is not { } row || !_rows.Contains(row) || !_canApply || !HasEnabledConnections) return;
         var generation = _generation;
         var account = _account;
         try
@@ -296,8 +444,11 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
                     Status = "Деталі чека недоступні. Можна порівняти номер, дату та суму.";
                 }
             if (generation != _generation) return;
-            var choice = _dialogs.ChooseOrder(row, _receiptDetails.GetValueOrDefault(row.Id), ActiveOrders, row.OrderMatch?.Candidates ?? []);
+            var allowed = selectedOrder is null ? ActiveOrders : ActiveOrders.Where(o => o.Key == selectedOrder.Key).ToArray();
+            var candidates = selectedOrder is null ? row.OrderMatch?.Candidates ?? [] : allowed;
+            var choice = _dialogs.ChooseOrder(row, _receiptDetails.GetValueOrDefault(row.Id), allowed, candidates);
             if (choice is null || generation != _generation) return;
+            if (!allowed.Any(order => order.Key == choice.Key)) return;
             var previous = _decisions.FirstOrDefault(d => d.ReceiptId == row.Id && d.AccountContext == account);
             var decision = new ReceiptOrderDecision { ReceiptId = row.Id, AccountContext = account,
                 ConfirmedOrder = previous?.ConfirmedOrder, SuppressAutomatic = previous?.SuppressAutomatic ?? false,
@@ -360,7 +511,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     }
     private void RaiseCommands()
     {
-        foreach (var command in new[] { SyncCommand, ExpandCommand, CancelCommand, LinkCommand, UnlinkCommand })
+        foreach (var command in new[] { SyncCommand, ExpandCommand, CancelCommand, LinkCommand, LinkSelectedOrderCommand, AutoMatchCommand, UnlinkCommand })
         { if (command is RelayCommand relay) relay.RaiseCanExecuteChanged(); if (command is AsyncRelayCommand asyncRelay) asyncRelay.RaiseCanExecuteChanged(); }
     }
 }

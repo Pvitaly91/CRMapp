@@ -58,6 +58,8 @@ public sealed record MarketplaceOrder
     public decimal? Discount { get; init; }
     public decimal? DeliveryCost { get; init; }
     public IReadOnlyList<OrderItem> Items { get; init; } = [];
+    // Old cache entries did not prove that the adapter retained every product. Refresh before guessing.
+    public bool ItemsComplete { get; init; }
     public IReadOnlyList<OrderShipment> Shipments { get; init; } = [];
     // Only IDs extracted from documented fields / strictly verified URL formats.
     public IReadOnlyList<string> ReceiptIds { get; init; } = [];
@@ -76,7 +78,7 @@ public sealed record ConnectionSyncState(string ConnectionId, MarketplaceRange R
     DateTimeOffset? LastSuccessUtc, string Message, DateTimeOffset AttemptedAtUtc);
 public sealed record MarketplaceSnapshot(IReadOnlyList<MarketplaceOrder> Orders, IReadOnlyList<ConnectionSyncState> States);
 
-public enum ReceiptLinkState { NotChecked, Exact, Manual, Candidates, NotFound, Conflict, Incomplete }
+public enum ReceiptLinkState { NotChecked, Exact, Manual, Candidates, NotFound, Conflict, Incomplete, Suggested }
 public sealed record ReceiptOrderMatch(ReceiptLinkState State, MarketplaceOrder? Order, string Explanation,
     IReadOnlyList<MarketplaceOrder> Candidates);
 
@@ -91,4 +93,4 @@ public sealed class ReceiptOrderDecision
 }
 
 public sealed record ReceiptDetails(string Id, IReadOnlyList<OrderItem> Items, string? RelatedReceiptId = null,
-    string? CheckboxOrderId = null, bool HasUnmappedContext = false);
+    string? CheckboxOrderId = null, bool HasUnmappedContext = false, bool ItemsComplete = true);
