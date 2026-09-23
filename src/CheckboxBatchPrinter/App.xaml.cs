@@ -32,10 +32,12 @@ public partial class App : Application
             var apiClient = new CheckboxApiClient(_httpClient, authentication, _logger);
             var receiptService = new ReceiptService(apiClient, settingsService);
             var imageService = new ReceiptImageService(apiClient, settingsService, Path.Combine(localData, "Cache"), _logger);
+            var printHistoryStore = new JsonPrintHistoryStore(Path.Combine(localData, "printed-receipts.json"));
             var printService = new WindowsPrintService();
             var dialogs = new UiDialogService(settingsService, authentication, imageService, printService, _logger);
             _logger.Info("app.viewmodel.create");
-            var viewModel = new MainViewModel(receiptService, imageService, settingsService, authentication, printService, dialogs, _logger);
+            var viewModel = new MainViewModel(receiptService, imageService, settingsService, authentication,
+                printHistoryStore, printService, dialogs, _logger);
             _logger.Info("app.window.create");
             var window = new MainWindow { DataContext = viewModel };
             _logger.Info("app.window.created");

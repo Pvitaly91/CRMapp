@@ -42,3 +42,16 @@ public interface IReceiptImageService
     Task<int> ClearCacheAsync(CancellationToken cancellationToken = default);
     Task CleanupAsync(CancellationToken cancellationToken = default);
 }
+
+public interface IPrintHistoryStore
+{
+    Task<IReadOnlyDictionary<string, PrintedReceiptRecord>> LoadAsync(
+        string accountContext,
+        CancellationToken cancellationToken = default);
+
+    Task MarkPrintedAsync(
+        string accountContext,
+        IReadOnlyCollection<string> receiptIds,
+        string printerName,
+        CancellationToken cancellationToken = default);
+}

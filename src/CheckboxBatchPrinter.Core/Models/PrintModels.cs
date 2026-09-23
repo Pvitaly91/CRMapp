@@ -17,6 +17,12 @@ public sealed record BatchResult<T>(IReadOnlyList<BatchItemResult<T>> Items)
     public int ErrorCount => Items.Count - SuccessCount;
 }
 
+public sealed record PrintedReceiptRecord(
+    string AccountContext,
+    string ReceiptId,
+    string PrinterName,
+    DateTimeOffset PrintedAtUtc);
+
 public readonly record struct PrintGeometry(double WidthDip, double HeightDip, double MarginDip)
 {
     private const double DipPerMillimeter = 96d / 25.4d;

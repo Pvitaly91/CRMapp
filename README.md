@@ -26,6 +26,8 @@ dotnet publish src/CheckboxBatchPrinter/CheckboxBatchPrinter.csproj -c Release -
 
 Пароль зберігається у `%LOCALAPPDATA%\CheckboxBatchPrinter\credential.bin` через Windows DPAPI. Налаштування, кеш і логи також залишаються лише в `%LOCALAPPDATA%\CheckboxBatchPrinter`.
 
+Історія успішно переданих на друк чеків зберігається у `%LOCALAPPDATA%\CheckboxBatchPrinter\printed-receipts.json`, тому не втрачається після оновлення або перенесення exe. Записи ізольовано за обліковим контекстом касира та автоматично видаляються через 365 днів. Файл містить лише хеш контексту, ID чека, назву принтера і час; PNG, пароль, токен та дані покупця не записуються.
+
 ## Фізична перевірка
 
 Для end-to-end перевірки потрібні реальні облікові дані Checkbox та встановлений Windows-драйвер принтера. У «Налаштування → Діагностика» доступні перевірка API і тестовий друк. Жоден automated test не виконує фіскальних операцій.

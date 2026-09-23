@@ -70,6 +70,7 @@
                                 <Setter Property="Background" Value="#C7F2D4" />
                                 <Setter Property="Foreground" Value="#075E3A" />
                                 <Setter Property="FontWeight" Value="SemiBold" />
+                                <Setter Property="ToolTip" Value="{Binding PrintError}" />
                             </DataTrigger>
                             <DataTrigger Binding="{Binding PrintStatus}" Value="Error"><Setter Property="ToolTip" Value="{Binding PrintError}" /></DataTrigger>
                         </Style.Triggers>

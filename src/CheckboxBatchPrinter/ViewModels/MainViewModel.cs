@@ -15,6 +15,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly IReceiptImageService _imageService;
     private readonly ISettingsService _settingsService;
     private readonly IAuthenticationService _authentication;
+    private readonly IPrintHistoryStore _printHistoryStore;
     private readonly IPrintService _printService;
     private readonly IUiDialogService _dialogs;
     private readonly IAppLogger _logger;
@@ -26,12 +27,14 @@ public sealed class MainViewModel : ObservableObject
     private string _statusText = "Готово";
     private string _progressText = string.Empty;
     private bool _isBusy;
+    private string? _loadedAccountContext;
 
     public MainViewModel(
         IReceiptService receiptService,
         IReceiptImageService imageService,
         ISettingsService settingsService,
         IAuthenticationService authentication,
+        IPrintHistoryStore printHistoryStore,
         IPrintService printService,
         IUiDialogService dialogs,
         IAppLogger logger)
@@ -40,6 +43,7 @@ public sealed class MainViewModel : ObservableObject
         _imageService = imageService;
         _settingsService = settingsService;
         _authentication = authentication;
+        _printHistoryStore = printHistoryStore;
         _printService = printService;
         _dialogs = dialogs;
         _logger = logger;
@@ -143,6 +147,9 @@ public sealed class MainViewModel : ObservableObject
         ProgressText = string.Empty;
         try
         {
+            var settings = await _settingsService.LoadAsync(_operationCancellation.Token);
+            var accountContext = PrintAccountContext.Create(settings);
+            var printedReceipts = await _printHistoryStore.LoadAsync(accountContext, _operationCancellation.Token);
             var items = await _receiptService.GetReceiptsAsync(
                 DateOnly.FromDateTime(DateFrom.Value), DateOnly.FromDateTime(DateTo.Value), _operationCancellation.Token);
             foreach (var old in Receipts) old.SelectionChanged -= OnSelectionChanged;
@@ -150,9 +157,15 @@ public sealed class MainViewModel : ObservableObject
             foreach (var model in items)
             {
                 var row = new ReceiptRowViewModel(model);
+                if (printedReceipts.TryGetValue(model.Id, out var history))
+                {
+                    row.PrintStatus = PrintItemStatus.Done;
+                    row.PrintError = $"Надруковано {history.PrintedAtUtc.ToLocalTime():dd.MM.yyyy HH:mm:ss} на «{history.PrinterName}».";
+                }
                 row.SelectionChanged += OnSelectionChanged;
                 Receipts.Add(row);
             }
+            _loadedAccountContext = accountContext;
             StatusText = items.Count == 0 ? "Чеків за обраний період не знайдено" : $"Завантажено чеків: {items.Count}";
             OnSelectionChanged(this, EventArgs.Empty);
         }
@@ -199,6 +212,12 @@ public sealed class MainViewModel : ObservableObject
         if (string.IsNullOrWhiteSpace(settings.PrinterName) || !_printService.PrinterExists(settings.PrinterName))
         {
             _dialogs.ShowError("Оберіть доступний принтер у Налаштуваннях → Друк.");
+            return;
+        }
+        var accountContext = PrintAccountContext.Create(settings);
+        if (!string.Equals(_loadedAccountContext, accountContext, StringComparison.Ordinal))
+        {
+            _dialogs.ShowError("Касира Checkbox змінено. Натисніть «Оновити» перед друком.");
             return;
         }
         if (!_dialogs.ConfirmPrint(selected.Length, settings.PrinterName)) return;
@@ -258,10 +277,33 @@ public sealed class MainViewModel : ObservableObject
                     success = loaded.Count;
                 }
             }
-            StatusText = $"Друк завершено. Успішно: {success}. Помилки: {errors}.";
+            var printedRows = selected.Where(row => row.PrintStatus == PrintItemStatus.Done).ToArray();
+            string? historyWarning = null;
+            if (printedRows.Length > 0)
+            {
+                try
+                {
+                    await _printHistoryStore.MarkPrintedAsync(
+                        accountContext,
+                        printedRows.Select(row => row.Id).ToArray(),
+                        settings.PrinterName);
+                }
+                catch (Exception exception)
+                {
+                    historyWarning = "Не вдалося зберегти локальну історію друку.";
+                    foreach (var row in printedRows) row.PrintError = historyWarning;
+                    _logger.Error("print.history.save", exception);
+                }
+            }
+
+            StatusText = historyWarning is null
+                ? $"Друк завершено. Успішно: {success}. Помилки: {errors}."
+                : $"Друк завершено, але історію не збережено. Успішно: {success}.";
             ProgressText = string.Empty;
             OnPropertyChanged(nameof(FailedCount));
-            _dialogs.ShowInfo($"Успішно: {success}\nПомилки: {errors}", "Пакетний друк завершено");
+            var summary = $"Успішно: {success}\nПомилки: {errors}";
+            if (historyWarning is not null) summary += $"\n\n{historyWarning}";
+            _dialogs.ShowInfo(summary, "Пакетний друк завершено");
         }
         catch (Exception exception)
         {

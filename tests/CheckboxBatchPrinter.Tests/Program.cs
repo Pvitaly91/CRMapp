@@ -23,6 +23,7 @@ internal static class Program
         ("image scaling", TestImageScalingAsync),
         ("printable size", TestPrintableSizeAsync),
         ("batch print uses one continuous page with compact separators", TestBatchPrintPageAsync),
+        ("printed receipt history survives restart and is account scoped", TestPrintHistoryPersistenceAsync),
         ("print queue continues after error", TestBatchQueueAsync),
         ("retry", TestRetryAsync),
         ("API errors", TestApiErrorAsync),
@@ -163,6 +164,42 @@ internal static class Program
         thread.Join();
         if (failure is not null) throw failure;
         return Task.CompletedTask;
+    }
+
+    private static async Task TestPrintHistoryPersistenceAsync()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"checkbox-print-history-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "printed-receipts.json");
+        try
+        {
+            var now = new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero);
+            var clock = new MutableTimeProvider(now);
+            var settingsA = new AppSettings { Login = "cashier-a@example.test" };
+            var settingsB = new AppSettings { Login = "cashier-b@example.test" };
+            var contextA = PrintAccountContext.Create(settingsA);
+            var contextB = PrintAccountContext.Create(settingsB);
+
+            var firstRun = new JsonPrintHistoryStore(path, TimeSpan.FromDays(365), clock);
+            await firstRun.MarkPrintedAsync(contextA, ["receipt-1", "receipt-2"], "Test printer");
+
+            var restarted = new JsonPrintHistoryStore(path, TimeSpan.FromDays(365), clock);
+            var restored = await restarted.LoadAsync(contextA);
+            Equal(2, restored.Count);
+            Equal("Test printer", restored["receipt-1"].PrinterName);
+            Equal(0, (await restarted.LoadAsync(contextB)).Count);
+
+            var json = await File.ReadAllTextAsync(path);
+            True(!json.Contains(settingsA.Login, StringComparison.OrdinalIgnoreCase));
+            True(!json.Contains("password", StringComparison.OrdinalIgnoreCase));
+            True(!json.Contains("access_token", StringComparison.OrdinalIgnoreCase));
+
+            clock.UtcNow = now.AddDays(366);
+            Equal(0, (await restarted.LoadAsync(contextA)).Count);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static byte[] CreatePng(int width, int height)
@@ -311,6 +348,12 @@ internal static class Program
             _password = null;
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public DateTimeOffset UtcNow { get; set; } = utcNow;
+        public override DateTimeOffset GetUtcNow() => UtcNow;
     }
 
     private sealed class NullLogger : IAppLogger
