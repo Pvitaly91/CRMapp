@@ -77,7 +77,16 @@
                     </Style>
                 </DataGrid.RowStyle>
                 <DataGrid.Columns>
-                    <DataGridCheckBoxColumn Header="✓" Binding="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}" Width="42" CanUserSort="False" />
+                    <DataGridTemplateColumn Header="✓" Width="42" CanUserSort="False">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                          HorizontalAlignment="Center"
+                                          VerticalAlignment="Center"
+                                          Focusable="False" />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
                     <DataGridTextColumn Header="Дата" Binding="{Binding LocalDate, StringFormat=dd.MM.yyyy}" Width="100" IsReadOnly="True" SortMemberPath="LocalDate" />
                     <DataGridTextColumn Header="Час" Binding="{Binding LocalTime}" Width="80" IsReadOnly="True" />
                     <DataGridTextColumn Header="Тип чека" Binding="{Binding Type}" Width="150" IsReadOnly="True" />
