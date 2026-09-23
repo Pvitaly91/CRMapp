@@ -18,7 +18,9 @@ internal static class Program
         ("printable size", TestPrintableSizeAsync),
         ("print queue continues after error", TestBatchQueueAsync),
         ("retry", TestRetryAsync),
-        ("API errors", TestApiErrorAsync)
+        ("API errors", TestApiErrorAsync),
+        ("cashier sign-in rejects credentials without storing them", TestCashierSignInErrorAsync),
+        ("cashier sign-in stores credentials only after success", TestCashierSignInSuccessAsync)
     ];
 
     public static async Task<int> Main()
@@ -167,6 +169,45 @@ internal static class Program
         throw new Exception("ApiException was not thrown.");
     }
 
+    private static async Task TestCashierSignInErrorAsync()
+    {
+        var credentials = new MemoryCredentialStore();
+        using var client = new HttpClient(new StubHandler(request =>
+        {
+            Equal(HttpMethod.Post, request.Method);
+            Equal("https://api.checkbox.ua/api/v1/cashier/signin", request.RequestUri?.ToString());
+            return new HttpResponseMessage(HttpStatusCode.Forbidden)
+            {
+                Content = new StringContent("{\"message\":\"Невірний логін або пароль\"}")
+            };
+        }));
+        var authentication = new AuthenticationService(client,
+            new MemorySettingsService(new AppSettings()), credentials, new NullLogger());
+        try { await authentication.SignInAndStoreAsync("cashier-test", "incorrect-test-password"); }
+        catch (ApiException exception)
+        {
+            Equal(HttpStatusCode.Forbidden, exception.StatusCode);
+            True(exception.ToUserMessage().Contains("пароль касира", StringComparison.Ordinal));
+            True(!credentials.HasPassword);
+            var unrelated = new ApiException("auth", HttpStatusCode.Forbidden, "password=secret-test-value");
+            True(!unrelated.ToUserMessage().Contains("secret-test-value", StringComparison.Ordinal));
+            return;
+        }
+        throw new Exception("Cashier sign-in should have failed.");
+    }
+
+    private static async Task TestCashierSignInSuccessAsync()
+    {
+        var credentials = new MemoryCredentialStore();
+        var settings = new MemorySettingsService(new AppSettings());
+        using var client = new HttpClient(new StubHandler(_ => JsonResponse(new { access_token = "test-access-token" })));
+        var authentication = new AuthenticationService(client, settings, credentials, new NullLogger());
+        await authentication.SignInAndStoreAsync(" cashier-test ", "test-password");
+        Equal("cashier-test", (await settings.LoadAsync()).Login);
+        Equal("test-password", await credentials.LoadPasswordAsync());
+        Equal("test-access-token", await authentication.GetAccessTokenAsync());
+    }
+
     private static HttpResponseMessage JsonResponse<T>(T value) => new(HttpStatusCode.OK)
     {
         Content = new StringContent(JsonSerializer.Serialize(value), Encoding.UTF8, "application/json")
@@ -201,6 +242,23 @@ internal static class Program
     {
         public Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(value);
         public Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default) { value = settings; return Task.CompletedTask; }
+    }
+
+    private sealed class MemoryCredentialStore : ISecureCredentialStore
+    {
+        private string? _password;
+        public bool HasPassword => _password is not null;
+        public Task SavePasswordAsync(string password, CancellationToken cancellationToken = default)
+        {
+            _password = password;
+            return Task.CompletedTask;
+        }
+        public Task<string?> LoadPasswordAsync(CancellationToken cancellationToken = default) => Task.FromResult(_password);
+        public Task ClearAsync(CancellationToken cancellationToken = default)
+        {
+            _password = null;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class NullLogger : IAppLogger

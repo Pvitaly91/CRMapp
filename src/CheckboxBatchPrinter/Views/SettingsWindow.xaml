@@ -18,12 +18,12 @@
                     </Grid.RowDefinitions>
                     <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="Read-only доступ до вже існуючих чеків. Програма не створює та не фіскалізує чеки."
                                TextWrapping="Wrap" Padding="10" Background="#EDF6FF" Margin="0,0,0,14" />
-                    <TextBlock Grid.Row="1" Text="Login" VerticalAlignment="Center" />
+                    <TextBlock Grid.Row="1" Text="Логін касира" VerticalAlignment="Center" />
                     <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Login, UpdateSourceTrigger=PropertyChanged}" />
-                    <TextBlock Grid.Row="2" Text="Password" VerticalAlignment="Center" />
+                    <TextBlock Grid.Row="2" Text="Пароль касира" VerticalAlignment="Center" />
                     <PasswordBox x:Name="PasswordInput" Grid.Row="2" Grid.Column="1" PasswordChanged="PasswordInput_PasswordChanged" Margin="3" Padding="6,4" />
-                    <TextBlock Grid.Row="3" Grid.Column="1" Text="Залиште порожнім, щоб не змінювати збережений DPAPI-пароль."
-                               Foreground="#667085" FontSize="11" Margin="5,0,0,8" />
+                    <TextBlock Grid.Row="3" Grid.Column="1" Text="Потрібні дані касира Checkbox, не обов’язково дані входу до кабінету. Залиште пароль порожнім, щоб не змінювати збережений."
+                               Foreground="#667085" FontSize="11" TextWrapping="Wrap" Margin="5,0,0,8" />
                     <Button Grid.Row="4" Grid.Column="1" Content="Перевірити підключення" HorizontalAlignment="Left" Click="TestApi_Click" />
                 </Grid>
             </TabItem>

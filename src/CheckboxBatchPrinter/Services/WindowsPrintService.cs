@@ -73,23 +73,42 @@ public sealed class WindowsPrintService : IPrintService
             cancellationToken.ThrowIfCancellationRequested();
             using var server = new LocalPrintServer();
             using var queue = FindQueue(server, settings.PrinterName);
-            var width = MillimetersToDip(settings.EffectivePaperWidthMm);
-            var height = MillimetersToDip(45);
+            var width = MillimetersToDip(settings.PrintableWidthMm);
+            var edgeLabels = new Grid { Width = width };
+            edgeLabels.ColumnDefinitions.Add(new ColumnDefinition());
+            edgeLabels.ColumnDefinitions.Add(new ColumnDefinition());
+            edgeLabels.Children.Add(new TextBlock { Text = "ЛІВИЙ КРАЙ", FontSize = 8, FontWeight = FontWeights.Bold });
+            var rightLabel = new TextBlock { Text = "ПРАВИЙ КРАЙ", FontSize = 8, FontWeight = FontWeights.Bold, TextAlignment = TextAlignment.Right };
+            Grid.SetColumn(rightLabel, 1);
+            edgeLabels.Children.Add(rightLabel);
             var panel = new StackPanel
             {
                 Width = width,
-                Height = height,
                 Background = Brushes.White,
                 Children =
                 {
+                    new Border { Width = width, Height = MillimetersToDip(0.5), Background = Brushes.Black },
+                    edgeLabels,
                     new TextBlock { Text = "CHECKBOX BATCH PRINTER", FontSize = 14, FontWeight = FontWeights.Bold, TextAlignment = TextAlignment.Center, Margin = new Thickness(3, 6, 3, 2) },
                     new TextBlock { Text = "Тестовий друк", FontSize = 12, TextAlignment = TextAlignment.Center, Margin = new Thickness(3) },
                     new TextBlock { Text = DateTime.Now.ToString("dd.MM.yyyy HH:mm:ss"), FontSize = 10, TextAlignment = TextAlignment.Center, Margin = new Thickness(3) },
-                    new TextBlock { Text = $"Папір: {settings.EffectivePaperWidthMm:0.#} мм\nОбласть: {settings.PrintableWidthMm:0.#} мм", FontSize = 9, TextAlignment = TextAlignment.Center, Margin = new Thickness(3) }
+                    new TextBlock { Text = $"Папір: {settings.EffectivePaperWidthMm:0.#} мм\nОбласть: {settings.PrintableWidthMm:0.#} мм", FontSize = 9, TextAlignment = TextAlignment.Center, Margin = new Thickness(3) },
+                    new Border { Width = width, Height = MillimetersToDip(0.5), Background = Brushes.Black }
                 }
             };
+            panel.Measure(new Size(width, double.PositiveInfinity));
+            // Leave only enough paper to separate the print from the tear edge.
+            // A fixed 45 mm page left a large blank area after the test content.
+            var height = panel.DesiredSize.Height + MillimetersToDip(2);
+            var page = new FixedPage { Width = width, Height = height, Background = Brushes.White };
+            FixedPage.SetLeft(panel, 0);
+            FixedPage.SetTop(panel, 0);
+            page.Children.Add(panel);
+            page.Measure(new Size(width, height));
+            page.Arrange(new Rect(0, 0, width, height));
+            page.UpdateLayout();
             var ticket = BuildTicket(queue, width, height);
-            new PrintDialog { PrintQueue = queue, PrintTicket = ticket }.PrintVisual(panel, "Checkbox Batch Printer — тест");
+            new PrintDialog { PrintQueue = queue, PrintTicket = ticket }.PrintVisual(page, "Checkbox Batch Printer — тест");
         }).Task;
 
     private static PrintQueue FindQueue(LocalPrintServer server, string printerName)
@@ -104,9 +123,10 @@ public sealed class WindowsPrintService : IPrintService
     private static FixedPage BuildPage(BitmapSource source, AppSettings settings, out double pageWidth, out double pageHeight)
     {
         var geometry = PrintGeometry.Calculate(source.PixelWidth, source.PixelHeight, settings.PrintableWidthMm, settings.EffectivePaperWidthMm);
-        pageWidth = MillimetersToDip(settings.EffectivePaperWidthMm);
+        // Size the print ticket to the printable head width. The physical roll
+        // can be wider, but centering on that width shifts or clips the image.
+        pageWidth = geometry.WidthDip;
         pageHeight = geometry.HeightDip + geometry.MarginDip * 2;
-        var horizontalOffset = Math.Max(0, (pageWidth - geometry.WidthDip) / 2);
         var image = new Image
         {
             Source = source,
@@ -116,7 +136,7 @@ public sealed class WindowsPrintService : IPrintService
             SnapsToDevicePixels = true
         };
         RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
-        FixedPage.SetLeft(image, horizontalOffset);
+        FixedPage.SetLeft(image, 0);
         FixedPage.SetTop(image, geometry.MarginDip);
         var page = new FixedPage { Width = pageWidth, Height = pageHeight, Background = Brushes.White };
         page.Children.Add(image);
