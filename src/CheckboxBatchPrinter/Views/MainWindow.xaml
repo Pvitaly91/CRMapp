@@ -52,7 +52,7 @@
             <Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
             <DataGrid x:Name="ReceiptsGrid" Grid.Row="0" ItemsSource="{Binding ReceiptsView}" AutoGenerateColumns="False"
                       CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="False" SelectionMode="Single"
-                      HeadersVisibility="Column" GridLinesVisibility="Horizontal" AlternatingRowBackground="#FAFBFC"
+                      HeadersVisibility="Column" GridLinesVisibility="Horizontal"
                       BorderBrush="#D9DEE7" Sorting="DataGrid_Sorting" MouseDoubleClick="ReceiptsGrid_MouseDoubleClick">
                 <DataGrid.RowStyle>
                     <Style TargetType="DataGridRow">
