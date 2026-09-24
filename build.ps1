@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot 'artifacts\win-x64')
+    [string]$OutputDirectory = 'artifacts\win-x64'
 )
 
 Set-StrictMode -Version Latest
