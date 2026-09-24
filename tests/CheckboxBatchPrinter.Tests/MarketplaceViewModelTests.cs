@@ -56,6 +56,10 @@ internal static class MarketplaceViewModelTests
         ("STA all marketplace orders load without Checkbox credentials or receipt rows", () => StaAsync(OrdersWithoutCheckboxAsync)),
         ("STA no-Checkbox order refresh uses changed calendar dates and rejects incomplete ranges", () => StaAsync(OrderCalendarWithoutCheckboxAsync)),
         ("STA marketplace order filters search and full order keys are independent of receipt tabs", () => StaAsync(IndependentOrderPanelAsync)),
+        ("STA identical Prom connections show one cached order while preserving legacy manual links after F5 and restart", () => StaAsync(DuplicateCachedManualAsync)),
+        ("STA duplicate Prom copies do not block probable matching or bypass rejected links", () => StaAsync(DuplicateBasketAsync)),
+        ("STA changing a duplicate connection token restores separate orders and original link identity", () => StaAsync(DuplicateTokenChangeAsync)),
+        ("duplicate projection retains fiscal contradictions and does not infer identity from names", DuplicateEvidenceAsync),
         ("STA selected order and receipt require explicit confirmation and survive F5 restart", () => StaAsync(SelectedOrderManualAsync)),
         ("STA unique complete basket suggests a link without writing manual decisions", () => StaAsync(BasketSuggestedUiAsync)),
         ("STA duplicate orders or competing receipts cannot create basket suggestions", () => StaAsync(BasketAmbiguousUiAsync)),
@@ -1003,6 +1007,114 @@ internal static class MarketplaceViewModelTests
         True(!ReferenceEquals(workspace.Orders, main.AllReceiptsTab.View) && !ReferenceEquals(workspace.Orders, main.OrdersReceiptsTab.View));
     }
 
+    private const string DuplicatePromId = "prom-z-duplicate";
+    private static Fixture DuplicateFixture()
+    {
+        var fixture = new Fixture();
+        fixture.Settings.Market.Connections.Add(new() { Id = DuplicatePromId, Marketplace = MarketplaceKind.Prom, Enabled = true, Name = "Test shop" });
+        fixture.Settings.Secrets["prom-test"] = new(Token: "synthetic-same-account");
+        fixture.Settings.Secrets[DuplicatePromId] = new(Token: "synthetic-same-account");
+        var order = BasketOrder();
+        fixture.Source.Orders = [order, order with { Key = order.Key with { ConnectionId = DuplicatePromId } }];
+        fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 10000)];
+        fixture.Details.Values[ReceiptOne] = BasketDetails(ReceiptOne);
+        return fixture;
+    }
+
+    private static async Task DuplicateCachedManualAsync()
+    {
+        var fixture = DuplicateFixture();
+        await fixture.Cache.SaveAsync(new(fixture.Source.Orders, []));
+        var account = PrintAccountContext.Create(fixture.Settings.App);
+        var originalKey = fixture.Source.Orders[1].Key;
+        await fixture.Links.SaveDecisionAsync(new() { AccountContext = account, ReceiptId = ReceiptOne,
+            ConfirmedOrder = originalKey, UpdatedAtUtc = DateTimeOffset.UtcNow });
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync();
+        main.SelectedTabIndex = 1;
+        await main.PrepareOrdersAsync();
+        Equal(1, workspace.Orders.Cast<object>().Count());
+        Equal(ReceiptLinkState.Manual, main.Receipts.Single().OrderMatch!.State);
+        True(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single().HasConfirmedLink);
+        Equal("prom-test", main.Receipts.Single().OrderMatch!.Order!.Key.ConnectionId);
+        main.Receipts.Single().IsSelectedForOrders = true;
+        await main.RefreshAsync(); await main.PrepareOrdersAsync();
+        Equal(1, workspace.Orders.Cast<object>().Count());
+        True(main.Receipts.Single().IsSelectedForOrders);
+        var (restarted, restored) = fixture.Create();
+        await restarted.RefreshAsync(); restarted.SelectedTabIndex = 1; await restarted.PrepareOrdersAsync();
+        Equal(1, restored.Orders.Cast<object>().Count());
+        Equal(ReceiptLinkState.Manual, restarted.Receipts.Single().OrderMatch!.State);
+        Equal(originalKey, (await fixture.Links.LoadAsync(account)).Single().ConfirmedOrder);
+        Equal(2, fixture.Cache.Snapshot.Orders.Count); Equal(1, fixture.Links.Saves);
+        Equal(0, fixture.Source.FetchCalls); Equal(0, fixture.Settings.SecretSaves); Equal(0, fixture.Settings.MarketplaceSaves);
+    }
+
+    private static async Task DuplicateBasketAsync()
+    {
+        foreach (var rejected in new[] { false, true })
+        {
+            var fixture = DuplicateFixture();
+            var account = PrintAccountContext.Create(fixture.Settings.App);
+            if (rejected) await fixture.Links.SaveDecisionAsync(new() { AccountContext = account, ReceiptId = ReceiptOne,
+                RejectedOrders = [fixture.Source.Orders[1].Key], UpdatedAtUtc = DateTimeOffset.UtcNow });
+            var (main, workspace) = fixture.Create(autoLinkEnabled: true);
+            await main.RefreshAsync(); main.SelectedTabIndex = 1; await main.PrepareOrdersAsync();
+            Equal(1, workspace.Orders.Cast<object>().Count());
+            Equal(2, fixture.Cache.Snapshot.Orders.Count); // Projection never destroys original source keys.
+            var row = main.Receipts.Single();
+            if (rejected) True(row.OrderMatch?.Order is null && row.OrderMatch?.State != ReceiptLinkState.Suggested);
+            else Equal(ReceiptLinkState.Suggested, row.OrderMatch!.State);
+            Equal(rejected ? 1 : 0, fixture.Links.Saves);
+            Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
+        }
+    }
+
+    private static async Task DuplicateTokenChangeAsync()
+    {
+        var fixture = DuplicateFixture();
+        var account = PrintAccountContext.Create(fixture.Settings.App);
+        var originalKey = fixture.Source.Orders[1].Key;
+        await fixture.Links.SaveDecisionAsync(new() { AccountContext = account, ReceiptId = ReceiptOne, ConfirmedOrder = originalKey });
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync(); main.SelectedTabIndex = 1; await main.PrepareOrdersAsync(); await workspace.SyncAsync();
+        Equal(1, workspace.Orders.Cast<object>().Count());
+        fixture.Settings.Secrets[DuplicatePromId] = new(Token: "synthetic-other-account");
+        await workspace.SyncAsync();
+        Equal(2, workspace.Orders.Cast<object>().Count());
+        Equal(originalKey, main.Receipts.Single().OrderMatch!.Order!.Key);
+        Equal(originalKey, (await fixture.Links.LoadAsync(account)).Single().ConfirmedOrder);
+        Equal(1, fixture.Links.Saves);
+    }
+
+    private static async Task DuplicateEvidenceAsync()
+    {
+        var fixture = DuplicateFixture();
+        var identity = await MarketplaceOrderDeduplication.ResolveAsync(fixture.Settings.Market, fixture.Settings);
+        var first = fixture.Source.Orders[0]; var second = fixture.Source.Orders[1];
+        var firstRef = new FiscalDocumentReference(FiscalDocumentKeyKind.CheckboxReceiptUuid, ReceiptOne,
+            "synthetic", first.Key, "checkbox", "same-document");
+        var secondRef = firstRef with { Order = second.Key, Value = ReceiptTwo };
+        var projected = identity.Merge([first with { FiscalReferences = [firstRef], RetrievedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-1) },
+            second with { FiscalReferences = [secondRef], Total = 123m, RetrievedAtUtc = DateTimeOffset.UtcNow }]);
+        Equal(1, projected.Count); Equal(123m, projected[0].Total);
+        Equal(2, projected[0].FiscalReferences.Count);
+        True(projected[0].FiscalReferences.All(r => r.Order == projected[0].Key));
+        Equal(ReceiptLinkState.Conflict, new ReceiptOrderMatchingService().Match(Receipt(ReceiptOne, 1, 10000),
+            "account", projected, [], true, receiptScope: [Receipt(ReceiptOne, 1, 10000)]).State);
+        fixture.Settings.Secrets[DuplicatePromId] = new(Token: "");
+        var unknown = await MarketplaceOrderDeduplication.ResolveAsync(fixture.Settings.Market, fixture.Settings);
+        Equal(2, unknown.Merge(fixture.Source.Orders).Count);
+        fixture.Settings.Secrets[DuplicatePromId] = new(Token: "different");
+        Equal(2, (await MarketplaceOrderDeduplication.ResolveAsync(fixture.Settings.Market, fixture.Settings)).Merge(fixture.Source.Orders).Count);
+        fixture.Settings.Secrets[DuplicatePromId] = new(Token: "synthetic-same-account\n");
+        Equal(2, (await MarketplaceOrderDeduplication.ResolveAsync(fixture.Settings.Market, fixture.Settings)).Merge(fixture.Source.Orders).Count);
+        fixture.Settings.Market.Connections.ForEach(c => c.Enabled = false);
+        var reads = fixture.Settings.SecretLoads;
+        await MarketplaceOrderDeduplication.ResolveAsync(fixture.Settings.Market, fixture.Settings);
+        Equal(reads, fixture.Settings.SecretLoads);
+    }
+
     private static async Task SelectedOrderManualAsync()
     {
         var fixture = new Fixture();
@@ -1824,7 +1936,7 @@ internal static class MarketplaceViewModelTests
         public Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default) { AppSaves++; return Task.CompletedTask; }
         public Task SaveAsync(MarketplaceSettings settings, CancellationToken cancellationToken = default) { MarketplaceSaves++; return Task.CompletedTask; }
         public Task<MarketplaceCredentials?> LoadAsync(string id, CancellationToken cancellationToken = default)
-        { SecretLoads++; return Task.FromResult<MarketplaceCredentials?>(Secrets.GetValueOrDefault(id) ?? new(Token: "synthetic")); }
+        { SecretLoads++; return Task.FromResult<MarketplaceCredentials?>(Secrets.GetValueOrDefault(id) ?? new(Token: "synthetic-" + id)); }
         public Task SaveAsync(string id, MarketplaceCredentials value, CancellationToken cancellationToken = default)
         { SecretSaves++; Secrets[id] = value; return Task.CompletedTask; }
     }

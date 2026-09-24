@@ -22,6 +22,8 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     private MarketplaceSettings _config = new();
     private MarketplaceSnapshot _snapshot = new([], []);
     private IReadOnlyList<ReceiptOrderDecision> _decisions = [];
+    private MarketplaceOrderDeduplication _deduplication = new();
+    private IReadOnlyList<ReceiptOrderDecision> ActiveDecisions => _deduplication.NormalizeDecisions(_decisions);
     private readonly Dictionary<string, ReceiptDetails> _receiptDetails = [];
     private readonly HashSet<string> _basketAttempted = new(StringComparer.OrdinalIgnoreCase);
     private readonly ObservableCollection<MarketplaceOrderRowViewModel> _orderRows = [];
@@ -142,6 +144,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         _coverageComplete = false;
         _configurationLoaded = false;
         _config = new(); _snapshot = new([], []); _decisions = [];
+        _deduplication = new();
         _orderRows.Clear(); SelectedOrder = null; RefreshOrdersView();
         FiscalSummary = "";
         SelectedReceipt = rows.FirstOrDefault(r => r.Id == selectedId);
@@ -234,6 +237,9 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
                 _attachedGeneration = generation; Status = SetupHint; ApplyMatches();
                 return;
             }
+            var deduplication = await _sync.ResolveDuplicateConnectionsAsync(config, token);
+            if (generation != _generation || token.IsCancellationRequested) return;
+            _deduplication = deduplication;
             var snapshot = await _sync.LoadCachedAsync(config.CacheDays, token);
             if (generation != _generation || token.IsCancellationRequested) return;
             var decisions = account.Length > 0 ? await _links.LoadAsync(account, token) : [];
@@ -281,6 +287,9 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
             await EnsureAttachedAsync();
             if (generation != _generation || token.IsCancellationRequested || !_canApply) return;
             if (!HasEnabledConnections) { Status = SetupHint; return; }
+            var deduplication = await _sync.ResolveDuplicateConnectionsAsync(_config, token);
+            if (generation != _generation || token.IsCancellationRequested) return;
+            _deduplication = deduplication;
             // A cancelled backend may finish late. Wait only in this optional operation,
             // never in SetReceiptScope or the Checkbox refresh path.
             if (previous is { IsCompleted: false }) await previous.WaitAsync(token);
@@ -350,8 +359,8 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         SelectedReceipt = null; Status = "Касира змінено. Оновіть список чеків."; RaiseCommands();
     }
 
-    private IReadOnlyList<MarketplaceOrder> ActiveOrders => _snapshot.Orders.Where(o =>
-        _config.Connections.Any(c => c.Enabled && c.Id == o.Key.ConnectionId && c.Marketplace == o.Key.Marketplace)).ToArray();
+    private IReadOnlyList<MarketplaceOrder> ActiveOrders => _deduplication.Merge(_snapshot.Orders.Where(o =>
+        _config.Connections.Any(c => c.Enabled && c.Id == o.Key.ConnectionId && c.Marketplace == o.Key.Marketplace)));
 
     private bool MatchesOrderFilter(object value)
     {
@@ -383,6 +392,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
 
     private void RefreshOrderRows(IReadOnlyList<MarketplaceOrder> orders)
     {
+        var decisions = ActiveDecisions;
         var unique = orders.DistinctBy(o => o.Key).ToArray();
         var keys = unique.Select(o => o.Key).ToHashSet();
         var existing = _orderRows.ToDictionary(r => r.Key);
@@ -393,7 +403,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         {
             if (!existing.TryGetValue(order.Key, out var row))
             { row = new(order); _orderRows.Add(row); }
-            row.Update(order, _rows, _decisions);
+            row.Update(order, _rows, decisions);
         }
         RefreshOrdersView();
     }
@@ -464,11 +474,12 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     {
         if (!_canApply) return;
         var orders = ActiveOrders;
+        var decisions = ActiveDecisions;
         var scope = _rows.Select(row => row.Model).ToArray();
         foreach (var row in _rows)
             row.OrderMatch = !HasEnabledConnections || _account.Length == 0
                 ? new(ReceiptLinkState.NotChecked, null, "Маркетплейси не підключено. Звичайний друк доступний.", [])
-                : _matcher.Match(row.Model, _account, orders, _decisions, _coverageComplete, _receiptDetails.GetValueOrDefault(row.Id), scope, _receiptDetails);
+                : _matcher.Match(row.Model, _account, orders, decisions, _coverageComplete, _receiptDetails.GetValueOrDefault(row.Id), scope, _receiptDetails);
         RefreshOrderRows(orders);
         var linked = _rows.Where(r => r.OrderMatch?.Order is not null).Select(r => r.OrderMatch!.Order!.Key).ToHashSet();
         var unmatchedKeys = orders.Count(o => o.FiscalReferences.Count > 0 && !linked.Contains(o.Key));
@@ -518,7 +529,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
             var choice = _dialogs.ChooseOrder(row, _receiptDetails.GetValueOrDefault(row.Id), allowed, candidates);
             if (choice is null || generation != _generation) return;
             if (!allowed.Any(order => order.Key == choice.Key)) return;
-            var previous = _decisions.FirstOrDefault(d => d.ReceiptId == row.Id && d.AccountContext == account);
+            var previous = ActiveDecisions.FirstOrDefault(d => d.ReceiptId == row.Id && d.AccountContext == account);
             var decision = new ReceiptOrderDecision { ReceiptId = row.Id, AccountContext = account,
                 ConfirmedOrder = previous?.ConfirmedOrder, SuppressAutomatic = previous?.SuppressAutomatic ?? false,
                 RejectedOrders = previous?.RejectedOrders.ToList() ?? [] };
@@ -543,7 +554,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         if (!_dialogs.ConfirmUnlink() || generation != _generation) return;
         try
         {
-            var previous = _decisions.FirstOrDefault(d => d.ReceiptId == row.Id && d.AccountContext == account);
+            var previous = ActiveDecisions.FirstOrDefault(d => d.ReceiptId == row.Id && d.AccountContext == account);
             var rejected = previous?.RejectedOrders.ToList() ?? [];
             if (row.OrderMatch?.Order is { } order) rejected.Add(order.Key);
             await _links.SaveDecisionAsync(new() { AccountContext = account, ReceiptId = row.Id, SuppressAutomatic = true,

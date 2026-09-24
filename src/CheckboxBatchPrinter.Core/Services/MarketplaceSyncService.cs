@@ -14,6 +14,9 @@ public sealed class MarketplaceSyncService(
 
     public Task<MarketplaceSnapshot> LoadCachedAsync(int retentionDays, CancellationToken ct = default) => cache.LoadAsync(retentionDays, ct);
 
+    public Task<MarketplaceOrderDeduplication> ResolveDuplicateConnectionsAsync(MarketplaceSettings settings, CancellationToken ct = default) =>
+        MarketplaceOrderDeduplication.ResolveAsync(settings, secrets, ct);
+
     public Task TestConnectionAsync(MarketplaceConnection connection, MarketplaceCredentials credentials, CancellationToken ct = default) =>
         _clients[connection.Marketplace].TestConnectionAsync(connection, credentials, ct);
 
