@@ -171,33 +171,33 @@
                         </Grid>
                     </Expander>
 
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="*" MinHeight="140" />
-                            <RowDefinition Height="7" />
-                            <RowDefinition Height="*" MinHeight="110" />
-                        </Grid.RowDefinitions>
+                    <Grid x:Name="OrdersSplitLayout">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" MinWidth="320" />
+                            <ColumnDefinition Width="7" />
+                            <ColumnDefinition Width="*" MinWidth="320" />
+                        </Grid.ColumnDefinitions>
 
-                        <Grid>
+                        <Grid x:Name="MarketplaceOrdersPane" Grid.Column="0">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
-                            <DockPanel Margin="2,0,2,3">
+                            <StackPanel Margin="2,0,2,3">
                                 <TextBlock Text="Замовлення — усі завантажені" FontWeight="SemiBold" VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding Marketplace.OrderListSummary}" Foreground="#48566A" FontSize="11"
-                                           Margin="12,0,0,0" TextWrapping="Wrap" VerticalAlignment="Center" />
-                            </DockPanel>
+                                           Margin="0,3,0,0" TextWrapping="Wrap" VerticalAlignment="Center" />
+                            </StackPanel>
                             <WrapPanel Grid.Row="1" Margin="0,0,0,3">
                                 <TextBlock Text="Пошук замовлень:" VerticalAlignment="Center" Margin="3,0,5,0" />
                                 <TextBox x:Name="OrderSearchInput" Width="210"
                                          Text="{Binding Marketplace.OrderSearch, UpdateSourceTrigger=PropertyChanged}"
-                                         ToolTip="Пошук лише серед завантажених замовлень — не приховує чеки нижче." />
+                                         ToolTip="Пошук лише серед завантажених замовлень — не приховує чеки праворуч." />
                                 <ComboBox x:Name="OrderFilterInput" Width="150" ItemsSource="{Binding Marketplace.OrderFilters}"
                                           SelectedItem="{Binding Marketplace.OrderFilter}" ToolTip="Фільтр лише замовлень" />
                                 <Button Content="Прив’язати вибрані" Command="{Binding Marketplace.LinkSelectedOrderCommand}"
-                                        ToolTip="Виберіть замовлення зверху та чек знизу. Прив’язку буде збережено лише після підтвердження." />
+                                        ToolTip="Виберіть замовлення ліворуч та чек праворуч. Прив’язку буде збережено лише після підтвердження." />
                                 <Button Content="Зіставити за товарами" Command="{Binding Marketplace.AutoMatchCommand}"
                                         ToolTip="Завантажити деталі чеків лише для читання. Сума + повний склад товарів; неточні збіги потребують перевірки." />
                             </WrapPanel>
@@ -232,17 +232,18 @@
                             </DataGrid>
                         </Grid>
 
-                        <GridSplitter Grid.Row="1" Height="5" HorizontalAlignment="Stretch" VerticalAlignment="Center"
-                                      Background="#D9DEE7" ResizeDirection="Rows" ResizeBehavior="PreviousAndNext"
-                                      ToolTip="Змінити висоту таблиць замовлень і чеків" />
+                        <GridSplitter x:Name="OrdersVerticalSplitter" Grid.Column="1" Width="5"
+                                      HorizontalAlignment="Center" VerticalAlignment="Stretch"
+                                      Background="#D9DEE7" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"
+                                      ToolTip="Перетягніть ліворуч або праворуч, щоб змінити ширину таблиць" />
 
-                        <Grid Grid.Row="2">
+                        <Grid x:Name="CheckboxReceiptsPane" Grid.Column="2">
                             <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
                             <WrapPanel Margin="2,0,2,3">
                                 <TextBlock Text="Чеки Checkbox" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,12,0" />
                                 <TextBlock Text="Зв’язки чеків:" VerticalAlignment="Center" />
                                 <ComboBox Width="175" ItemsSource="{Binding Marketplace.Filters}" SelectedItem="{Binding Marketplace.Filter}"
-                                          ToolTip="Фільтр лише чеків — не приховує замовлення зверху." />
+                                          ToolTip="Фільтр лише чеків — не приховує замовлення ліворуч." />
                                 <TextBlock Text="Для ручної прив’язки виберіть рядок чека та замовлення." Foreground="#667085"
                                            FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0" />
                             </WrapPanel>

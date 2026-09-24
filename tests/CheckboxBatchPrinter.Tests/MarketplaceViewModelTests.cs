@@ -1508,6 +1508,25 @@ internal static class MarketplaceViewModelTests
             _xamlCheckpoint = "drain orders layout";
             await DrainDispatcherAsync();
             Equal(1, main.SelectedTabIndex);
+            var split = (Grid)mainWindow.FindName("OrdersSplitLayout");
+            var leftPane = (Grid)mainWindow.FindName("MarketplaceOrdersPane");
+            var rightPane = (Grid)mainWindow.FindName("CheckboxReceiptsPane");
+            var splitter = (GridSplitter)mainWindow.FindName("OrdersVerticalSplitter");
+            Equal(3, split.ColumnDefinitions.Count);
+            Equal(GridResizeDirection.Columns, splitter.ResizeDirection);
+            Equal(GridResizeBehavior.PreviousAndNext, splitter.ResizeBehavior);
+            var leftOrigin = leftPane.TranslatePoint(new Point(), split);
+            var rightOrigin = rightPane.TranslatePoint(new Point(), split);
+            True(rightOrigin.X >= leftOrigin.X + leftPane.ActualWidth && Math.Abs(leftOrigin.Y - rightOrigin.Y) < 1,
+                "Orders and receipts must be side by side, not stacked.");
+            var leftWidth = leftPane.ActualWidth;
+            var rightWidth = rightPane.ActualWidth;
+            DragSplitter(splitter, 40);
+            LayoutContent(mainWindow);
+            True(leftPane.ActualWidth > leftWidth + 20 && rightPane.ActualWidth < rightWidth - 20,
+                "Dragging the real vertical splitter must resize both table panes horizontally.");
+            DragSplitter(splitter, -40);
+            LayoutContent(mainWindow);
             Equal(1, marketplaceOrdersGrid.Items.Count);
             var displayedOrder = workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single();
             marketplaceOrdersGrid.SelectedItem = displayedOrder;
@@ -1604,6 +1623,16 @@ internal static class MarketplaceViewModelTests
         // UI Automation provider for a deliberately hidden test window.
         var click = typeof(CheckBox).GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic)!;
         click.Invoke(checkBox, null);
+    }
+
+    private static void DragSplitter(GridSplitter splitter, double horizontalChange)
+    {
+        splitter.RaiseEvent(new System.Windows.Controls.Primitives.DragStartedEventArgs(0, 0)
+            { RoutedEvent = System.Windows.Controls.Primitives.Thumb.DragStartedEvent });
+        splitter.RaiseEvent(new System.Windows.Controls.Primitives.DragDeltaEventArgs(horizontalChange, 0)
+            { RoutedEvent = System.Windows.Controls.Primitives.Thumb.DragDeltaEvent });
+        splitter.RaiseEvent(new System.Windows.Controls.Primitives.DragCompletedEventArgs(horizontalChange, 0, false)
+            { RoutedEvent = System.Windows.Controls.Primitives.Thumb.DragCompletedEvent });
     }
 
     private static void RenderSyntheticContent(Window window, string name)
