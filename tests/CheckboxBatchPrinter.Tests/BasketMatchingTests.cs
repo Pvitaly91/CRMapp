@@ -17,13 +17,15 @@ internal static class BasketMatchingTests
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
         ("basket API-to-matcher: full Prom products and Checkbox goods suggest but never prove", AdapterToMatcherAsync),
+        ("basket API-to-matcher: identical name and price lines aggregate without bypassing ambiguity", SplitBasketAdapterAsync),
+        ("basket API-to-matcher: typography normalizes but product codes and punctuation stay distinct", TypographyAdapterAsync),
         ("basket matching: complete details of every competing receipt are required", CompetingReceiptsAsync),
         ("basket matching: two orders stay ambiguous even after one is rejected", CompetingOrdersAsync),
         ("basket matching: sum or SKU alone and incomplete or altered lines never link", FullBasketAsync),
         ("basket matching: time bounds currency type status and coverage are fail closed", BoundariesAsync),
         ("basket matching: saved manual rejected and suppression decisions take priority", DecisionsAsync),
         ("basket matching: fiscal keys and fiscal contradictions are never bypassed", FiscalPriorityAsync),
-        ("basket matching: explicit discounts invalid totals and duplicate line counts do not link", AdjustmentsAsync),
+        ("basket matching: discounts invalid totals extra quantities and differing prices do not link", AdjustmentsAsync),
         ("basket parser safety: incomplete or adjusted live-shaped DTOs and old cache cannot suggest", ParserSafetyAsync)
     ];
 
@@ -88,6 +90,85 @@ internal static class BasketMatchingTests
         True(result.Explanation.Contains("Валюта API не підтверджена", StringComparison.Ordinal));
         True(result.Explanation.Contains("не фіскальне підтвердження", StringComparison.Ordinal));
         Equal(0, order.ReceiptIds.Count);
+    }
+
+    private static async Task<MarketplaceOrder> ParsePromProductsAsync(IReadOnlyList<OrderItem> products)
+    {
+        using var http = new HttpClient(new Handler(request =>
+        {
+            Equal(HttpMethod.Get, request.Method);
+            Equal("https://my.prom.ua/api/v1/orders/429000001", request.RequestUri!.AbsoluteUri);
+            return new(HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new
+                {
+                    order = new
+                    {
+                        id = 429000001, price = "250.00", date_created = Time.AddHours(-1).ToString("O"), status = "accepted",
+                        products = products.Select(product => new
+                        {
+                            name = product.Name, sku = product.Sku, quantity = product.Quantity,
+                            price = product.UnitPrice, total_price = product.Total
+                        }).ToArray()
+                    }
+                }), Encoding.UTF8, "application/json")
+            };
+        }));
+        return (await new PromOrdersClient(new MarketplaceHttpTransport(http)).GetOrderAsync(
+            new() { Id = "synthetic-store", Marketplace = MarketplaceKind.Prom },
+            new(Token: "synthetic"), "429000001"))!;
+    }
+
+    private static async Task SplitBasketAdapterAsync()
+    {
+        OrderItem[] split =
+        [
+            new("Датчик руху", "unrelated-sku", 1m, 100m, 100m), Products[1],
+            new("  ДАТЧИК\u00a0руху ", "another-sku", 1m, 100m, 100m)
+        ];
+        // Parse real adapter-shaped Prom products and raw Checkbox goods in both directions.
+        var splitOrder = await ParsePromProductsAsync(split);
+        var combinedOrder = await ParsePromProductsAsync(Products);
+        var splitDetails = Details(products: split);
+        True(splitOrder.ItemsComplete); True(splitDetails.ItemsComplete);
+        Equal(ReceiptLinkState.Suggested, Match([splitOrder], details: Details()).State);
+        Equal(ReceiptLinkState.Suggested, Match([combinedOrder], details: splitDetails).State);
+        Equal(ReceiptLinkState.Suggested, Match([splitOrder], details: splitDetails).State);
+        var duplicate = combinedOrder with { Key = new(MarketplaceKind.Prom, "synthetic-store", "429000002") };
+        NotSuggested(Match([splitOrder, duplicate]));
+        NotSuggested(Match([splitOrder, duplicate], decisions:
+            [new() { AccountContext = "account", ReceiptId = Id, RejectedOrders = [duplicate.Key] }]));
+        // A second receipt with another line representation is still a real competitor.
+        NotSuggested(Match([combinedOrder], scope: [Receipt(), Receipt(OtherId)], detailsScope:
+            new Dictionary<string, ReceiptDetails> { [Id] = Details(), [OtherId] = Details(OtherId, split) }));
+
+        var unequalPrices = await ParsePromProductsAsync(
+            [new("Датчик руху", "sku-1", 1m, 75m, 75m), new("Датчик руху", "sku-1", 1m, 125m, 125m), Products[1]]);
+        // Same name, total quantity, average price and order sum are insufficient.
+        NotSuggested(Match([unequalPrices]));
+        NotSuggested(Match([combinedOrder], details: Details(products: unequalPrices.Items)));
+    }
+
+    private static async Task TypographyAdapterAsync()
+    {
+        const string name = "PIR DC-9/60 \"12/24V\" O'Ring";
+        var details = Details(products: [Products[0] with { Name = name }, Products[1]]);
+        var normalized = await ParsePromProductsAsync(
+            [Products[0] with { Name = "  pir\u00a0DC\u20139/60\u2003\u00ab12/24V\u00bb\tO\u2019Ring  " }, Products[1]]);
+        Equal(ReceiptLinkState.Suggested, Match([normalized], details: details).State);
+        foreach (var changed in new[]
+                 {
+                     "PIR DC-9/60 \"12/48V\" O'Ring", // Different model digits.
+                     "PIR DC9/60 \"12/24V\" O'Ring",  // Punctuation is not removed.
+                     "PIR DC-9-60 \"12/24V\" O'Ring", // Slash is not a dash variant.
+                     "PIR DC-9/60 12/24V O'Ring",      // Quotes are normalized, not removed.
+                     "PIR DC-9/60 \"12/24V\" ORing",
+                     "DC-9/60 \"12/24V\" O'Ring"      // Partial names cannot match.
+                 })
+        {
+            var different = await ParsePromProductsAsync([Products[0] with { Name = changed }, Products[1]]);
+            NotSuggested(Match([different], details: details));
+        }
     }
 
     private static Task CompetingReceiptsAsync()
@@ -203,8 +284,9 @@ internal static class BasketMatchingTests
         NotSuggested(Match([Order() with { Items = [Products[0] with { Total = 199m }, Products[1]] }]));
         NotSuggested(Match([Order() with { Total = 249m }]));
         Equal(ReceiptLinkState.Suggested, Match([Order() with { Items = Products.Select(p => p with { Total = null }).ToArray() }]).State);
-        // No merging duplicate lines: a different position split remains a candidate for review.
-        NotSuggested(Match([Order() with { Items = [new("Датчик руху", "sku-1", 1m, 100m, 100m), new("Датчик руху", "sku-1", 1m, 100m, 100m), Products[1]] }]));
+        Equal(ReceiptLinkState.Suggested, Match([Order() with { Items = [new("Датчик руху", "sku-1", 1m, 100m, 100m), new("Датчик руху", "sku-1", 1m, 100m, 100m), Products[1]] }]).State);
+        NotSuggested(Match([Order() with { Items = [Products[0], new("Датчик руху", "sku-1", 1m, 100m, 100m), Products[1]] }]));
+        NotSuggested(Match([Order() with { Items = [Products[0], Products[1], new("extra", "sku-extra", 1m, 0m, 0m)] }]));
         NotSuggested(Match([Order() with { Items = [new("Датчик руху", "sku-1", decimal.MaxValue, 100m), Products[1]] }]));
         return Task.CompletedTask;
     }

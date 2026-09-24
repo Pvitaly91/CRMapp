@@ -34,6 +34,10 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     private CancellationTokenSource? _cancel;
     private Task? _activeSync;
     private Task? _attachment;
+    private Task? _automaticTask;
+    private CancellationTokenSource? _automaticCancel;
+    private bool _active, _autoLinkEnabled;
+    private int _automaticGeneration = -1;
     private int _activeSyncGeneration = -1, _attachedGeneration = -1;
     private DateOnly _from = DateOnly.FromDateTime(DateRangeBuilder.TodayKyiv), _to = DateOnly.FromDateTime(DateRangeBuilder.TodayKyiv);
     private int _extraHistory;
@@ -43,10 +47,11 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
 
     public MarketplaceWorkspaceViewModel(IMarketplaceSettingsStore settings, MarketplaceSyncService sync,
         IReceiptOrderLinkStore links, IReceiptDetailsService details, IOrderLinkDialogService dialogs,
-        IFiscalReferenceVerifier? fiscalVerifier = null)
+        IFiscalReferenceVerifier? fiscalVerifier = null, bool autoLinkEnabled = true)
     {
         _settings = settings; _sync = sync; _links = links; _details = details; _dialogs = dialogs;
         _fiscalVerifier = fiscalVerifier;
+        _autoLinkEnabled = autoLinkEnabled;
         Orders = new ListCollectionView(_orderRows) { Filter = MatchesOrderFilter };
         Orders.SortDescriptions.Add(new(nameof(MarketplaceOrderRowViewModel.CreatedAt), ListSortDirection.Descending));
         SyncCommand = new AsyncRelayCommand(_ => SyncAsync(), _ => !IsBusy && (_account.Length > 0 || _orderDatesValid));
@@ -76,6 +81,20 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     public IReadOnlyList<string> Filters { get; } = ["Усі", "Prom", "Rozetka", "Без зв’язку", "Потрібна перевірка"];
     public string Filter { get => _filter; set { if (SetProperty(ref _filter, value)) MatchesChanged?.Invoke(this, EventArgs.Empty); } }
     public bool ShowExtraColumns { get; set; }
+    public bool AutoLinkEnabled
+    {
+        get => _autoLinkEnabled;
+        set
+        {
+            if (!SetProperty(ref _autoLinkEnabled, value)) return;
+            if (!value) _automaticCancel?.Cancel();
+            else
+            {
+                _automaticGeneration = -1;
+                if (_active) _ = OpenAsync();
+            }
+        }
+    }
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
     private string _fiscalSummary = "";
     public string FiscalSummary { get => _fiscalSummary; private set => SetProperty(ref _fiscalSummary, value); }
@@ -140,14 +159,59 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     public void SetOrderDatesWithoutReceipts(DateOnly? from, DateOnly? to)
     {
         if (_account.Length > 0) return;
-        _orderDatesValid = from.HasValue && to.HasValue && to.Value >= from.Value;
+        var valid = from.HasValue && to.HasValue && to.Value >= from.Value;
+        // Clearing a date while an automatic order-only request is running must
+        // invalidate its result, even if that backend ignores cancellation.
+        if (!valid && _orderDatesValid) SetReceiptScope([], "", _from, _to);
+        _orderDatesValid = valid;
         if (_orderDatesValid && (_from != from!.Value || _to != to!.Value))
             SetReceiptScope([], "", from.Value, to!.Value);
         if (!_orderDatesValid) Status = "Оберіть коректні дати «від» і «до» для замовлень.";
         RaiseCommands();
     }
 
-    // Entering the optional tab loads local data only; only SyncAsync contacts APIs.
+    public void SetActive(bool active)
+    {
+        _active = active;
+        if (!active) _automaticCancel?.Cancel();
+    }
+
+    // Only the optional tab opts into network work. One automatic attempt per
+    // receipt generation prevents repeated tab events or API errors causing a retry storm.
+    public Task OpenAsync()
+    {
+        if (!_active || !AutoLinkEnabled || (_account.Length == 0 && !_orderDatesValid)) return EnsureAttachedAsync();
+        if (_automaticGeneration == _generation) return _automaticTask ?? Task.CompletedTask;
+        _automaticGeneration = _generation;
+        var previous = _automaticTask;
+        var cancel = CancellationTokenSource.CreateLinkedTokenSource(_scopeCancel.Token);
+        _automaticCancel = cancel;
+        return _automaticTask = OpenAutomaticallyAsync(previous, _generation, cancel);
+    }
+
+    private async Task OpenAutomaticallyAsync(Task? previous, int generation, CancellationTokenSource cancel)
+    {
+        using (cancel)
+        {
+            try
+            {
+                // A quick off/on toggle must not reuse an already cancelled sync.
+                if (previous is { IsCompleted: false }) await previous.WaitAsync(cancel.Token);
+                if (generation != _generation || cancel.IsCancellationRequested || !_active || !AutoLinkEnabled) return;
+                await EnsureAttachedAsync();
+                if (generation != _generation || cancel.IsCancellationRequested || !_active ||
+                    !AutoLinkEnabled || !_canApply || !HasEnabledConnections) return;
+                await StartSyncAsync(cancel.Token);
+            }
+            catch (OperationCanceledException) when (cancel.IsCancellationRequested) { }
+            finally
+            {
+                if (ReferenceEquals(_automaticCancel, cancel)) _automaticCancel = null;
+            }
+        }
+    }
+
+    // Local attachment stays separate: manual mode and Checkbox refresh do not contact APIs.
     public Task EnsureAttachedAsync()
     {
         if (_attachedGeneration == _generation) return Task.CompletedTask;
@@ -194,20 +258,22 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         }
     }
 
-    public Task SyncAsync()
+    public Task SyncAsync() => StartSyncAsync(CancellationToken.None);
+
+    private Task StartSyncAsync(CancellationToken automaticCancellation)
     {
         if (_account.Length == 0 && !_orderDatesValid) return Task.CompletedTask;
         if (_activeSyncGeneration == _generation && _activeSync is { IsCompleted: false }) return _activeSync;
         var previous = _activeSync;
         _activeSyncGeneration = _generation;
-        _activeSync = SyncCoreAsync(previous, _generation);
+        _activeSync = SyncCoreAsync(previous, _generation, automaticCancellation);
         return _activeSync;
     }
 
-    private async Task SyncCoreAsync(Task? previous, int generation)
+    private async Task SyncCoreAsync(Task? previous, int generation, CancellationToken automaticCancellation)
     {
         IsBusy = true;
-        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(_scopeCancel.Token);
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(_scopeCancel.Token, automaticCancellation);
         _cancel = cancel;
         var token = cancel.Token;
         try
@@ -407,9 +473,12 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         var linked = _rows.Where(r => r.OrderMatch?.Order is not null).Select(r => r.OrderMatch!.Order!.Key).ToHashSet();
         var unmatchedKeys = orders.Count(o => o.FiscalReferences.Count > 0 && !linked.Contains(o.Key));
         var unavailable = orders.Count(o => o.FiscalDataStatus.Length > 0);
+        var repeatedIds = orders.GroupBy(o => (o.Key.Marketplace, o.Key.OrderId))
+            .Count(group => group.Select(o => o.Key.ConnectionId).Distinct().Skip(1).Any());
         FiscalSummary = !HasEnabledConnections ? "" : $"Завантажено замовлень: {orders.Count}. Точних зв’язків: {_rows.Count(r => r.OrderMatch?.State == ReceiptLinkState.Exact)}. Ймовірних за товарами: {_rows.Count(r => r.OrderMatch?.State == ReceiptLinkState.Suggested)}. " +
             (unmatchedKeys > 0 ? $"Замовлень із непідтвердженими фіскальними ключами: {unmatchedKeys}. Перевірте контекст каси/продавця, період і права касира; це не означає, що чека немає. " : "") +
             (unavailable > 0 ? $"Фіскальні дані потребують перевірки: {unavailable}. " : "") +
+            (repeatedIds > 0 ? "Є однакові API-ID замовлень у різних підключеннях. Перевірте, чи той самий магазин не додано двічі; такі записи не об’єднуються автоматично. " : "") +
             (orders.Any(o => o.Key.Marketplace == MarketplaceKind.Prom && o.FiscalReferences.Count == 0)
                 ? "Prom: API не надав точного фіскального ключа для частини замовлень; сума/дата не є автоматичною прив’язкою." : "");
         NotifyDetails(); MatchesChanged?.Invoke(this, EventArgs.Empty); RaiseCommands();

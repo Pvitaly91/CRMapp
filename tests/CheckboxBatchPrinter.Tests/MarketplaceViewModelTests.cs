@@ -62,6 +62,15 @@ internal static class MarketplaceViewModelTests
         ("STA cached and partial marketplace orders remain visible without claiming checked links", () => StaAsync(PartialOrderPanelAsync)),
         ("STA old account basket detail completion cannot populate the new account", () => StaAsync(StaleBasketDetailsAsync)),
         ("STA basket continuation reaches unattempted receipts after one hundred detail failures", () => StaAsync(BasketContinuationAfterFailuresAsync)),
+        ("STA automatic orders activation suggests without buttons and restores after Checkbox F5", () => StaAsync(AutomaticBasketActivationAsync)),
+        ("STA enabled automatic linking never contacts optional stores from All Receipts refresh", () => StaAsync(AutomaticBasketAllTabIsolationAsync)),
+        ("STA repeated automatic tab preparations share one in-flight refresh", () => StaAsync(AutomaticBasketDeduplicationAsync)),
+        ("STA tab exit and automatic toggle cancel background linking without retries while inactive", () => StaAsync(AutomaticBasketCancellationAsync)),
+        ("STA automatic linking with absent or disabled integrations never reads secrets or APIs", () => StaAsync(AutomaticBasketNoIntegrationsAsync)),
+        ("STA automatic old-account item completion cannot seed a new account", () => StaAsync(AutomaticBasketAccountChangeAsync)),
+        ("STA quick automatic off-on waits for cancelled details and starts one fresh check", () => StaAsync(AutomaticBasketRapidToggleAsync)),
+        ("STA explicitly started marketplace sync survives tab exit and automatic cancellation", () => StaAsync(AutomaticBasketManualSyncAsync)),
+        ("STA invalid no-Checkbox dates cancel automatic refresh and restored dates allow one new attempt", () => StaAsync(AutomaticBasketInvalidDatesAsync)),
         ("STA Main Settings and OrderLink XAML initialize without showing windows", XamlSmokeProcessAsync)
     ];
 
@@ -971,6 +980,9 @@ internal static class MarketplaceViewModelTests
         await main.RefreshAsync();
         await OpenOrdersAsync(main, workspace);
         Equal(3, workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Select(r => r.Key).Distinct().Count());
+        True(workspace.FiscalSummary.Contains("однакові API-ID замовлень у різних підключеннях", StringComparison.Ordinal));
+        True(main.Receipts.All(row => row.OrderMatch?.State is not (ReceiptLinkState.Suggested or ReceiptLinkState.Exact)));
+        True(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().All(row => !row.HasSuggestedLink && !row.HasConfirmedLink));
         main.AllReceiptsTab.SearchText = "999";
         main.OrdersReceiptsTab.SearchText = "FN-only";
         workspace.Filter = "Без зв’язку";
@@ -1159,6 +1171,272 @@ internal static class MarketplaceViewModelTests
         Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
     }
 
+    private static Fixture AutomaticBasketFixture()
+    {
+        var fixture = new Fixture();
+        fixture.Source.Orders = [BasketOrder()];
+        fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 10000), Receipt(ReceiptThree, 3, 99900)];
+        fixture.Details.Values[ReceiptOne] = BasketDetails(ReceiptOne);
+        return fixture;
+    }
+
+    private static async Task AutomaticBasketActivationAsync()
+    {
+        var fixture = AutomaticBasketFixture();
+        var (main, workspace) = fixture.Create(autoLinkEnabled: true);
+        True(workspace.AutoLinkEnabled);
+        await main.RefreshAsync();
+        Equal(0, fixture.Source.FetchCalls); Equal(0, fixture.Details.Calls);
+
+        // Only activate the tab: no Sync, AutoMatch or manual-link command is invoked.
+        main.SelectedTabIndex = 1;
+        await main.PrepareOrdersAsync();
+        var beforeRefresh = main.Receipts.Single(r => r.Id == ReceiptOne);
+        Equal(ReceiptLinkState.Suggested, beforeRefresh.OrderMatch!.State);
+        Equal(BasketOrder().Key, beforeRefresh.OrderMatch.Order!.Key);
+        Equal(1, fixture.Source.FetchCalls); Equal(1, fixture.Details.Calls);
+        True(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single().HasSuggestedLink);
+        beforeRefresh.IsSelectedForOrders = true;
+
+        await main.RefreshAsync();
+        await main.PrepareOrdersAsync(); // Await the automatic operation started by the open tab's F5.
+        var afterRefresh = main.Receipts.Single(r => r.Id == ReceiptOne);
+        True(!ReferenceEquals(beforeRefresh, afterRefresh), "F5 must exercise replacement receipt rows.");
+        Equal(ReceiptLinkState.Suggested, afterRefresh.OrderMatch!.State);
+        Equal(BasketOrder().Key, afterRefresh.OrderMatch.Order!.Key);
+        True(afterRefresh.IsSelectedForOrders, "Automatic linking must not clear receipt check marks.");
+        Equal(2, fixture.Source.FetchCalls);
+        Equal(1, fixture.Details.Calls); // Completed immutable details remain scoped to this cashier.
+        Equal(PrintItemStatus.Done, main.Receipts.Single(r => r.Id == ReceiptThree).PrintStatus);
+        Equal(0, fixture.Links.Saves); Equal(0, fixture.Dialogs.ChoiceCalls);
+        Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
+    }
+
+    private static async Task AutomaticBasketAllTabIsolationAsync()
+    {
+        var fixture = AutomaticBasketFixture();
+        fixture.Settings.ThrowOnMarketplaceLoad = true;
+        fixture.Cache.ThrowOnLoad = true; fixture.Links.ThrowOnLoad = true;
+        var (main, workspace) = fixture.Create(autoLinkEnabled: true);
+        True(workspace.AutoLinkEnabled); Equal(0, main.SelectedTabIndex);
+        await main.RefreshAsync();
+        await ExecuteAsync(main.RefreshCommand);
+        main.DateFrom = new(2026, 9, 22);
+        await main.RefreshAsync();
+        Equal(3, fixture.ReceiptSource.Calls);
+        Equal(0, fixture.Settings.MarketplaceLoads); Equal(0, fixture.Settings.SecretLoads);
+        Equal(0, fixture.Cache.Loads); Equal(0, fixture.Links.Loads);
+        Equal(0, fixture.Source.FetchCalls); Equal(0, fixture.Rozetka.FetchCalls); Equal(0, fixture.Details.Calls);
+        main.AllReceiptsTab.SelectedReceipt = main.Receipts.Single(r => r.Id == ReceiptOne);
+        await ExecuteAsync(main.PreviewCommand);
+        Equal(ReceiptOne, fixture.Dialogs.PreviewId);
+        main.Receipts.Single(r => r.Id == ReceiptOne).IsSelected = true;
+        await ExecuteAsync(main.PrintSelectedCommand);
+        AssertConfirmation(fixture, [ReceiptOne]);
+        Equal(1, fixture.Printer.Calls);
+        Equal(0, fixture.Settings.MarketplaceLoads); Equal(0, fixture.Source.FetchCalls);
+    }
+
+    private static async Task AutomaticBasketDeduplicationAsync()
+    {
+        var fixture = AutomaticBasketFixture();
+        fixture.Source.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (main, workspace) = fixture.Create(autoLinkEnabled: true);
+        await main.RefreshAsync();
+        main.SelectedTabIndex = 1;
+        await fixture.Source.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var first = main.PrepareOrdersAsync();
+        var second = main.PrepareOrdersAsync();
+        var third = workspace.OpenAsync();
+        Equal(1, fixture.Source.FetchCalls);
+        True(!main.IsBusy, "An automatic optional refresh cannot make Checkbox busy.");
+        fixture.Source.Gate.SetResult(true);
+        await Task.WhenAll(first, second, third).WaitAsync(TimeSpan.FromSeconds(5));
+        Equal(ReceiptLinkState.Suggested, main.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch!.State);
+        Equal(1, fixture.Source.FetchCalls); Equal(1, fixture.Details.Calls);
+        main.SelectedTabIndex = 0;
+        main.SelectedTabIndex = 1;
+        await main.PrepareOrdersAsync();
+        Equal(1, fixture.Source.FetchCalls); Equal(1, fixture.Details.Calls);
+        Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
+    }
+
+    private static async Task AutomaticBasketCancellationAsync()
+    {
+        foreach (var leaveTab in new[] { true, false })
+        {
+            var fixture = AutomaticBasketFixture();
+            fixture.Source.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            var (main, workspace) = fixture.Create(autoLinkEnabled: true);
+            await main.RefreshAsync();
+            main.SelectedTabIndex = 1;
+            await fixture.Source.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var pending = main.PrepareOrdersAsync();
+            if (leaveTab) main.SelectedTabIndex = 0;
+            else workspace.AutoLinkEnabled = false;
+            await pending.WaitAsync(TimeSpan.FromSeconds(5));
+            True(!workspace.IsBusy, "Leaving the tab or disabling automatic linking must cancel its pending API.");
+            Equal(1, fixture.Source.FetchCalls); Equal(0, fixture.Details.Calls);
+            fixture.Source.Gate.SetResult(true);
+            await DrainDispatcherAsync();
+            await main.PrepareOrdersAsync();
+            await main.PrepareOrdersAsync();
+            Equal(1, fixture.Source.FetchCalls);
+            True(main.Receipts.All(r => r.OrderMatch?.State != ReceiptLinkState.Suggested));
+            if (!leaveTab)
+            {
+                workspace.AutoLinkEnabled = true;
+                await main.PrepareOrdersAsync();
+                Equal(2, fixture.Source.FetchCalls);
+                Equal(ReceiptLinkState.Suggested, main.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch!.State);
+            }
+            Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
+        }
+
+        // A failed API must not turn repeated binding/tab preparation calls into an automatic retry loop.
+        var failed = AutomaticBasketFixture();
+        failed.Source.Fail = true;
+        var (failedMain, failedWorkspace) = failed.Create(autoLinkEnabled: true);
+        await failedMain.RefreshAsync();
+        failedMain.SelectedTabIndex = 1;
+        await failedMain.PrepareOrdersAsync();
+        await failedMain.PrepareOrdersAsync();
+        await failedWorkspace.OpenAsync();
+        Equal(1, failed.Source.FetchCalls); Equal(0, failed.Details.Calls);
+        True(!failedWorkspace.IsBusy);
+        True(failedMain.Receipts.All(r => r.OrderMatch?.State != ReceiptLinkState.Suggested));
+        Equal(0, failed.Links.Saves); Equal(0, failed.Printer.Calls);
+    }
+
+    private static async Task AutomaticBasketNoIntegrationsAsync()
+    {
+        foreach (var disabled in new[] { false, true })
+        {
+            var fixture = AutomaticBasketFixture();
+            if (disabled) fixture.Settings.Market.Connections.Single().Enabled = false;
+            else fixture.Settings.Market.Connections.Clear();
+            var (main, workspace) = fixture.Create(autoLinkEnabled: true);
+            await main.RefreshAsync();
+            main.SelectedTabIndex = 1;
+            await main.PrepareOrdersAsync();
+            await main.PrepareOrdersAsync();
+            True(workspace.ShowSetupHint);
+            Equal(0, fixture.Settings.SecretLoads); Equal(0, fixture.Cache.Loads); Equal(0, fixture.Links.Loads);
+            Equal(0, fixture.Source.FetchCalls); Equal(0, fixture.Rozetka.FetchCalls); Equal(0, fixture.Details.Calls);
+            True(!workspace.IsBusy); Equal(0, fixture.Printer.Calls); Equal(0, fixture.Links.Saves);
+        }
+    }
+
+    private static async Task AutomaticBasketAccountChangeAsync()
+    {
+        var fixture = AutomaticBasketFixture();
+        fixture.Details.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Details.IgnoreCancellation = true;
+        var (main, workspace) = fixture.Create(autoLinkEnabled: true);
+        await main.RefreshAsync();
+        main.SelectedTabIndex = 1;
+        await fixture.Details.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var pending = main.PrepareOrdersAsync();
+        workspace.InvalidateAccount();
+        await workspace.AttachAsync(main.Receipts.ToArray(), "new-account-context", new(2026, 9, 23), new(2026, 9, 23));
+        fixture.Details.Gate.SetResult(true);
+        await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        True(main.Receipts.All(r => r.OrderMatch?.State != ReceiptLinkState.Suggested));
+        Equal(1, fixture.Details.Calls);
+        fixture.Details.Gate = null;
+        await workspace.OpenAsync();
+        Equal(2, fixture.Details.Calls); // A stale completion cannot populate a different account's details.
+        Equal(ReceiptLinkState.Suggested, main.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch!.State);
+        Equal(0, fixture.Links.Saves); Equal(0, fixture.Dialogs.ChoiceCalls);
+        Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
+    }
+
+    private static async Task AutomaticBasketRapidToggleAsync()
+    {
+        var fixture = AutomaticBasketFixture();
+        fixture.Details.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Details.IgnoreCancellation = true;
+        var (main, workspace) = fixture.Create(autoLinkEnabled: true);
+        await main.RefreshAsync();
+        main.SelectedTabIndex = 1;
+        await fixture.Details.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var cancelled = main.PrepareOrdersAsync();
+        workspace.AutoLinkEnabled = false;
+        workspace.AutoLinkEnabled = true; // No dispatcher yield: the first cancelled backend still owns its task.
+        var restarted = main.PrepareOrdersAsync();
+        var duplicate = workspace.OpenAsync();
+        Equal(1, fixture.Source.FetchCalls); Equal(1, fixture.Details.Calls);
+        True(!cancelled.IsCompleted && !restarted.IsCompleted);
+        fixture.Details.Gate.SetResult(true);
+        await Task.WhenAll(cancelled, restarted, duplicate).WaitAsync(TimeSpan.FromSeconds(5));
+        Equal(2, fixture.Source.FetchCalls); Equal(2, fixture.Details.Calls);
+        Equal(ReceiptLinkState.Suggested, main.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch!.State);
+        await main.PrepareOrdersAsync();
+        Equal(2, fixture.Source.FetchCalls); Equal(2, fixture.Details.Calls);
+        True(!workspace.IsBusy);
+        Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
+    }
+
+    private static async Task AutomaticBasketManualSyncAsync()
+    {
+        var fixture = AutomaticBasketFixture();
+        fixture.Source.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (main, workspace) = fixture.Create(autoLinkEnabled: true);
+        workspace.AutoLinkEnabled = false;
+        await main.RefreshAsync();
+        main.SelectedTabIndex = 1;
+        await main.PrepareOrdersAsync();
+        Equal(0, fixture.Source.FetchCalls);
+        var manual = workspace.SyncAsync();
+        await fixture.Source.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Enabling the automatic wrapper must not transfer ownership of an existing explicit refresh.
+        workspace.AutoLinkEnabled = true;
+        var automaticWrapper = main.PrepareOrdersAsync();
+        main.SelectedTabIndex = 0;
+        workspace.AutoLinkEnabled = false;
+        await DrainDispatcherAsync();
+        Equal(1, fixture.Source.FetchCalls);
+        True(!manual.IsCompleted && workspace.IsBusy, "A tab switch must not cancel a manually started marketplace refresh.");
+        True(!main.IsBusy);
+        fixture.Source.Gate.SetResult(true);
+        await Task.WhenAll(manual, automaticWrapper).WaitAsync(TimeSpan.FromSeconds(5));
+        Equal(1, fixture.Source.FetchCalls); Equal(1, fixture.Details.Calls);
+        Equal(ReceiptLinkState.Suggested, main.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch!.State);
+        True(!workspace.IsBusy); Equal(0, main.SelectedTabIndex);
+        Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
+    }
+
+    private static async Task AutomaticBasketInvalidDatesAsync()
+    {
+        var fixture = AutomaticBasketFixture();
+        fixture.Authentication.IsStored = false;
+        fixture.Source.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (main, workspace) = fixture.Create(autoLinkEnabled: true);
+        Equal(0, main.Receipts.Count); // Marketplace orders need not wait for Checkbox login.
+        main.SelectedTabIndex = 1;
+        await fixture.Source.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var pending = main.PrepareOrdersAsync();
+        main.DateTo = null;
+        await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        True(!workspace.IsBusy);
+        True(!workspace.SyncCommand.CanExecute(null));
+        Equal(0, workspace.Orders.Cast<object>().Count());
+        fixture.Source.Gate.SetResult(true);
+        await main.PrepareOrdersAsync();
+        await main.PrepareOrdersAsync();
+        Equal(1, fixture.Source.FetchCalls);
+
+        // Restore the original dates, not a different range: invalid preparations must not consume its automatic attempt.
+        main.DateTo = new(2026, 9, 23);
+        await main.PrepareOrdersAsync();
+        Equal(2, fixture.Source.FetchCalls);
+        Equal(1, workspace.Orders.Cast<object>().Count());
+        True(workspace.SyncCommand.CanExecute(null));
+        Equal(0, fixture.ReceiptSource.Calls); Equal(0, fixture.Details.Calls);
+        Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
+    }
+
     private static async Task XamlSmokeAsync()
     {
         _xamlCheckpoint = "initialize application";
@@ -1262,6 +1540,22 @@ internal static class MarketplaceViewModelTests
             await DrainDispatcherAsync();
             Equal(0, main.SelectedTabIndex); Equal(1, main.SelectedCount);
             True(ReferenceEquals(second, allGrid.SelectedItem));
+            _xamlCheckpoint = "automatic checkbox binding";
+            var automaticLinks = (CheckBox)mainWindow.FindName("AutomaticOrderLinks");
+            True(automaticLinks is not null, "Compiled XAML must expose the automatic-linking switch.");
+            var automaticBinding = BindingOperations.GetBinding(automaticLinks!, CheckBox.IsCheckedProperty);
+            True(automaticBinding is not null);
+            Equal("Marketplace.AutoLinkEnabled", automaticBinding!.Path.Path);
+            Equal(BindingMode.TwoWay, automaticBinding.Mode);
+            Equal(UpdateSourceTrigger.PropertyChanged, automaticBinding.UpdateSourceTrigger);
+            Equal<bool?>(false, automaticLinks!.IsChecked);
+            workspace.AutoLinkEnabled = true; // Changing the hidden optional control never activates the All tab's APIs.
+            await DrainDispatcherAsync();
+            Equal<bool?>(true, automaticLinks.IsChecked);
+            ClickCheckBox(automaticLinks);
+            await DrainDispatcherAsync();
+            True(!workspace.AutoLinkEnabled, "One actual checkbox click must disable automatic linking through the compiled binding.");
+            Equal<bool?>(false, automaticLinks.IsChecked);
             Equal(0, fixture.Source.FetchCalls);
             Equal(0, fixture.Printer.Calls);
             True(bindingFailures.Messages.Count == 0, "Compiled XAML binding errors: " + string.Join("\n", bindingFailures.Messages));
@@ -1451,10 +1745,11 @@ internal static class MarketplaceViewModelTests
             var account = PrintAccountContext.Create(Settings.App);
             History.Records[ReceiptThree] = new(account, ReceiptThree, "mock-printer", DateTimeOffset.UtcNow);
         }
-        public (MainViewModel Main, MarketplaceWorkspaceViewModel Workspace) Create()
+        public (MainViewModel Main, MarketplaceWorkspaceViewModel Workspace) Create(bool autoLinkEnabled = false)
         {
             var sync = new MarketplaceSyncService([Source, Rozetka], Settings, Cache);
-            var workspace = new MarketplaceWorkspaceViewModel(Settings, sync, Links, Details, Dialogs);
+            // Existing scenarios explicitly use manual refresh mode; separate activation scenarios cover the production default.
+            var workspace = new MarketplaceWorkspaceViewModel(Settings, sync, Links, Details, Dialogs, autoLinkEnabled: autoLinkEnabled);
             var main = new MainViewModel(ReceiptSource, Images, Settings, Authentication, History,
                 Printer, Dialogs, new Logger(), workspace) { DateFrom = new(2026, 9, 23), DateTo = new(2026, 9, 23) };
             return (main, workspace);

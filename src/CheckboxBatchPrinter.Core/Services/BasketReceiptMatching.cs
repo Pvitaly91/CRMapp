@@ -88,17 +88,31 @@ internal static class BasketReceiptMatching
                 result.Add(new(name, quantity, price, lineTotal));
             }
             if (result.Sum(line => line.Total) != total) return false;
+            // APIs may split identical units into separate positions. Aggregate only identical
+            // full names AND unit prices; quantities and totals are still compared exactly.
+            lines = result.GroupBy(line => (line.Name, line.Price))
+                .Select(group => new Line(group.Key.Name, group.Sum(line => line.Quantity),
+                    group.Key.Price, group.Sum(line => line.Total)))
+                .OrderBy(line => line.Name, StringComparer.Ordinal).ThenBy(line => line.Price)
+                .ThenBy(line => line.Quantity).ThenBy(line => line.Total).ToArray();
         }
         catch (OverflowException) { return false; }
-        lines = result.OrderBy(line => line.Name, StringComparer.Ordinal).ThenBy(line => line.Quantity)
-            .ThenBy(line => line.Price).ThenBy(line => line.Total).ToArray();
         return true;
     }
 
-    // Whitespace, casing and Unicode composition only. No transliteration, punctuation removal,
-    // partial words or SKU cross-store assumptions. Duplicate lines retain their multiplicity.
-    private static string NormalizeName(string name) => string.Join(" ", name.Normalize(NormalizationForm.FormC)
-        .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToUpperInvariant();
+    // Presentation-only normalization. Do not strip punctuation, numbers or model codes, guess
+    // translations, compare partial words, or assume SKU namespaces are shared between stores.
+    private static string NormalizeName(string name)
+    {
+        var normalized = new string(name.Normalize(NormalizationForm.FormC).Select(character => character switch
+        {
+            '\u2010' or '\u2011' or '\u2012' or '\u2013' or '\u2014' => '-',
+            '\u2018' or '\u2019' or '\u201a' or '\u201b' => '\'',
+            '\u201c' or '\u201d' or '\u201e' or '\u201f' or '\u00ab' or '\u00bb' => '"',
+            _ => character
+        }).ToArray());
+        return string.Join(" ", normalized.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToUpperInvariant();
+    }
     private static string NormalizeId(string value) => Guid.TryParse(value, out var id) ? id.ToString("D") : value;
     private static bool SameId(string left, string right) => NormalizeId(left) == NormalizeId(right);
 }

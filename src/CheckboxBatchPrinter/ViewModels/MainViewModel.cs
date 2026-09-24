@@ -102,6 +102,7 @@ public sealed class MainViewModel : ObservableObject
             OnPropertyChanged(nameof(SearchText));
             OnPropertyChanged(nameof(SelectedType));
             OnSelectionChanged(this, EventArgs.Empty);
+            Marketplace?.SetActive(value == 1);
             if (value == 1) _ = PrepareOrdersAsync();
         }
     }
@@ -109,7 +110,7 @@ public sealed class MainViewModel : ObservableObject
     {
         if (Marketplace is null) return Task.CompletedTask;
         UpdateOrderDatesWithoutReceipts();
-        return Marketplace.EnsureAttachedAsync();
+        return SelectedTabIndex == 1 ? Marketplace.OpenAsync() : Marketplace.EnsureAttachedAsync();
     }
     public ObservableCollection<ReceiptTypeOption> ReceiptTypes { get; }
     public MarketplaceWorkspaceViewModel? Marketplace { get; }
