@@ -30,7 +30,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "$channel tests failed." }
     }
     $app = Join-Path $release 'app'
-    & dotnet publish $project -c Release -r win-x64 --self-contained false -p:PublishProfile=Production-FDD -p:AppChannel=Production "-p:SourceRevisionId=$sha" --artifacts-path (Join-Path $intermediate 'publish') -o $app
+    & dotnet publish $project -c Release -r win-x64 --self-contained false -p:PublishProfile=Production-FDD -p:AppChannel=Production -p:DebugType=embedded "-p:SourceRevisionId=$sha" --artifacts-path (Join-Path $intermediate 'publish') -o $app
     if ($LASTEXITCODE -ne 0) { throw 'Production publish failed.' }
     $files = @(Get-ChildItem -LiteralPath $app -Recurse -File)
     if ($files.Count -ne 1 -or $files[0].Name -ne 'CheckboxBatchPrinter.exe') { throw 'Unexpected publish payload. Inspect dependencies; do not remove files to fake single-file output.' }
