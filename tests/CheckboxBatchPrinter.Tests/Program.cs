@@ -54,6 +54,7 @@ internal static class Program
     private static async Task<int> RunAllAsync()
     {
         Tests.AddRange(PromOrdersTests.All);
+        Tests.AddRange(AppEnvironmentTests.All);
         Tests.AddRange(RozetkaOrdersTests.All);
         Tests.AddRange(MarketplaceMatchingTests.All);
         Tests.AddRange(FiscalLinkTests.All);

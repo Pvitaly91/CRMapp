@@ -6,6 +6,7 @@ using CheckboxBatchPrinter.Core.Services;
 using CheckboxBatchPrinter.Services;
 using CheckboxBatchPrinter.ViewModels;
 using CheckboxBatchPrinter.Views;
+using CheckboxBatchPrinter.Infrastructure;
 
 namespace CheckboxBatchPrinter;
 
@@ -17,11 +18,19 @@ public partial class App : Application
 
     protected override async void OnStartup(StartupEventArgs e)
     {
+        // Explicit offline packaging diagnostic. Never loads real settings/credentials,
+        // constructs API clients or enumerates/submits to printers.
+        if (e.Args.Length > 0 && e.Args[0] == "--verify-package")
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            Shutdown(await PackageVerification.RunAsync(e.Args));
+            return;
+        }
         base.OnStartup(e);
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         try
         {
-            var localData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CheckboxBatchPrinter");
+            var localData = AppEnvironment.DataRoot;
             Directory.CreateDirectory(localData);
             var settingsService = new JsonSettingsService(Path.Combine(localData, "settings.json"));
             var settings = await settingsService.LoadAsync();

@@ -90,6 +90,8 @@
                 <StackPanel Margin="16">
                     <TextBlock Text="Версія програми" FontWeight="SemiBold" />
                     <TextBlock Text="{Binding AppVersion}" Margin="0,2,0,12" />
+                    <TextBlock Text="Папка даних" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding DataDirectory}" TextWrapping="Wrap" Margin="0,2,0,12" />
                     <TextBlock Text="Версія API" FontWeight="SemiBold" />
                     <TextBlock Text="{Binding ApiVersion}" Margin="0,2,0,12" />
                     <TextBlock Text="Папка логів" FontWeight="SemiBold" />

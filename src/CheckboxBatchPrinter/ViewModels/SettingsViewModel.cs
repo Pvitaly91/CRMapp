@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
-using System.Reflection;
 using CheckboxBatchPrinter.Core.Models;
 using CheckboxBatchPrinter.Core.Services;
 using CheckboxBatchPrinter.Infrastructure;
@@ -58,7 +57,8 @@ public sealed class SettingsViewModel : ObservableObject
     public bool SeparatePrintJobPerReceipt { get => _separatePrintJob; set => SetProperty(ref _separatePrintJob, value); }
     public string DiagnosticStatus { get => _diagnosticStatus; private set => SetProperty(ref _diagnosticStatus, value); }
     public bool IsBusy { get => _isBusy; private set => SetProperty(ref _isBusy, value); }
-    public string AppVersion => Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "1.0.0";
+    public string AppVersion => AppEnvironment.DisplayVersion;
+    public string DataDirectory => AppEnvironment.DataRoot;
     public string ApiVersion => "Checkbox API 2.107.0+7e00a4c6 (перевірено 21.09.2026)";
     public string LogDirectory => _logger.LogDirectory;
 

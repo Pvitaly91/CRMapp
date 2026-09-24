@@ -13,6 +13,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Title = Infrastructure.AppEnvironment.WindowTitle;
         Loaded += OnLoaded;
     }
 
