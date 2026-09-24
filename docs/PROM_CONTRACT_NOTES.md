@@ -49,7 +49,7 @@ Failures retain successfully read orders and explicitly report an incomplete res
 | Source/display status | `status` / `status_name` | Raw custom statuses preserved |
 | Buyer | `client_last_name`, `client_first_name`, `client_second_name`, `phone` | Nullable, no invented recipient |
 | Amount | `price` | String amount **excluding delivery**, raw text preserved |
-| Currency | Not present in the published Order schema | Empty/unknown, never assumed UAH |
+| Currency | No separate field in the published Order schema | UAH only from an explicit supported `price` suffix; otherwise unknown |
 | Item | `products[].name`, `.sku`, `.quantity`, `.price`, `.total_price` | Nullable decimal values |
 | Payment | `payment_option.name`, `payment_data.status` | Unknown/custom text preserved |
 | Delivery | `delivery_option.name`, `delivery_cost` | Nullable |
@@ -59,7 +59,9 @@ Failures retain successfully read orders and explicitly report an incomplete res
 | Fiscal receipt linkage | Not documented in GET Order | Empty reference lists |
 | Seller deep link | Not documented | No fabricated URL |
 
-`price` and product monetary values are documented as strings; quantity is an ordinary float count of units. They are **not** Checkbox's integer kopecks / thousandths of quantity. The parser accepts invariant decimal text and exact JSON numeric decimals; a currency suffix, comma, grouping separator or unrecognized syntax remains unknown. It does not parse an unknown amount as zero, scale it by 100, assume a currency, or infer a discount from totals. `full_price` is documented as optionally including delivery; it is not silently substituted for merchandise `price`.
+`price` and product monetary values are documented as strings; quantity is an ordinary float count of units. They are **not** Checkbox's integer kopecks / thousandths of quantity. Correction on 2026-09-24: local API-derived cache actually contains `price` strings such as `300 грн`; rejecting all currency suffixes was an adapter bug. Monetary strings now support dot/comma decimals (one or two fractional digits), correctly grouped thousands using space/NBSP/narrow NBSP, and explicit `грн`, `грн.`, `UAH`, `₴` suffixes. Only a supported suffix establishes UAH; plain numeric text/JSON numbers do not establish currency. Mixed/ambiguous separators, unknown currencies, text/ranges, overflow and malformed grouping remain unknown, never zero. Quantity parsing is separate and retains fractional unit counts. The application does not infer discounts or substitute `full_price` (which may include delivery) for merchandise `price`.
+
+Old encrypted cache entries retain `RawTotal`: recognized Prom totals are recovered in memory on load without updating timestamps, completeness or links, or overwriting already-known totals. Raw product prices were not retained in older cache: refresh orders to retrieve missing item prices. Recovery alone never proves basket completeness or an exact fiscal link.
 
 The Order schema has no `required` list. Optional objects may be missing/null. `delivery_provider_data` is explicitly nullable for unsupported providers. Documented providers are `nova_poshta`, `justin`, `delivery_auto`, `ukrposhta`; unknown strings are retained rather than rejected. `recipient_warehouse_id` identifies a delivery branch, not a person.
 

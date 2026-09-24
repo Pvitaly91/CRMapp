@@ -16,7 +16,8 @@ internal static class BasketMatchingTests
     private static readonly OrderItem[] Products = [new("Датчик руху", "sku-1", 2m, 100m, 200m), new("Кабель", "sku-2", 1m, 50m, 50m)];
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
-        ("basket API-to-matcher: full Prom products and Checkbox goods suggest but never prove", AdapterToMatcherAsync),
+        ("basket API-to-matcher: full Prom products and Checkbox goods suggest but never prove", () => AdapterToMatcherAsync(false)),
+        ("basket API-to-matcher: localized Prom hryvnia totals and product prices permit probable links", () => AdapterToMatcherAsync(true)),
         ("basket API-to-matcher: identical name and price lines aggregate without bypassing ambiguity", SplitBasketAdapterAsync),
         ("basket API-to-matcher: typography normalizes but product codes and punctuation stay distinct", TypographyAdapterAsync),
         ("basket matching: complete details of every competing receipt are required", CompetingReceiptsAsync),
@@ -58,7 +59,7 @@ internal static class BasketMatchingTests
             complete, details, scope ?? [receipt], detailsScope ?? new Dictionary<string, ReceiptDetails> { [receipt.Id] = details });
     }
 
-    private static async Task AdapterToMatcherAsync()
+    private static async Task AdapterToMatcherAsync(bool localized)
     {
         var calls = 0;
         using var http = new HttpClient(new Handler(request =>
@@ -72,11 +73,11 @@ internal static class BasketMatchingTests
                 {
                     order = new
                     {
-                        id = 429000001, price = "250.00", date_created = Time.AddHours(-1).ToString("O"), status = "accepted",
+                        id = 429000001, price = localized ? "250 грн" : "250.00", date_created = Time.AddHours(-1).ToString("O"), status = "accepted",
                         products = new[]
                         {
-                            new { name = " кабель ", sku = "other-namespace", quantity = 1, price = "50.00", total_price = "50.00" },
-                            new { name = "ДАТЧИК   руху", sku = "other-code", quantity = 2, price = "100.00", total_price = "200.00" }
+                            new { name = " кабель ", sku = "other-namespace", quantity = 1, price = localized ? "50,00 грн" : "50.00", total_price = localized ? "50 грн" : "50.00" },
+                            new { name = "ДАТЧИК   руху", sku = "other-code", quantity = 2, price = localized ? "100 грн" : "100.00", total_price = localized ? "200 грн" : "200.00" }
                         }
                     }
                 }), Encoding.UTF8, "application/json")
@@ -87,7 +88,8 @@ internal static class BasketMatchingTests
             new(Token: "synthetic"), "429000001");
         var result = Match([order!]);
         Equal(1, calls); Equal(ReceiptLinkState.Suggested, result.State); Equal(order!.Key, result.Order!.Key);
-        True(result.Explanation.Contains("Валюта API не підтверджена", StringComparison.Ordinal));
+        Equal(localized ? "UAH" : "", order.Currency);
+        Equal(!localized, result.Explanation.Contains("Валюта API не підтверджена", StringComparison.Ordinal));
         True(result.Explanation.Contains("не фіскальне підтвердження", StringComparison.Ordinal));
         Equal(0, order.ReceiptIds.Count);
     }

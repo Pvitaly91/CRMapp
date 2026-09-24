@@ -85,7 +85,8 @@ public sealed class DpapiMarketplaceCacheStore(string path, TimeProvider? timePr
         var cutoff = _clock.GetUtcNow().AddDays(-retentionDays);
         var expiredConnections = snapshot.Orders.Where(order => order.RetrievedAtUtc < cutoff)
             .Select(order => order.Key.ConnectionId).ToHashSet(StringComparer.Ordinal);
-        var orders = snapshot.Orders.Where(order => order.RetrievedAtUtc >= cutoff).ToArray();
+        var orders = snapshot.Orders.Where(order => order.RetrievedAtUtc >= cutoff)
+            .Select(PromMoney.RestoreCachedTotal).ToArray();
         var states = snapshot.States.Where(state => state.AttemptedAtUtc >= cutoff)
             .Select(state => expiredConnections.Contains(state.ConnectionId)
                 ? state with { Complete = false, Message = "Частина кешу прострочена; потрібне оновлення." }

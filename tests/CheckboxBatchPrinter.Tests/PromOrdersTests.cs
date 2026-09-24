@@ -1,9 +1,11 @@
 using System.Net;
+using System.IO;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using CheckboxBatchPrinter.Core.Models;
 using CheckboxBatchPrinter.Core.Services;
+using CheckboxBatchPrinter.ViewModels;
 
 namespace CheckboxBatchPrinter.Tests;
 
@@ -15,6 +17,8 @@ internal static class PromOrdersTests
         ("Prom exclusive cursor and short pages are fully scanned", ExclusiveCursorAsync),
         ("Prom normalizes documented detail fields without guessing currency or receipts", DetailAsync),
         ("Prom preserves unknown amounts and tolerates null optional data", NullAndMoneyAsync),
+        ("Prom localized money reaches totals item prices and UI without guessing malformed amounts", LocalizedMoneyAsync),
+        ("Prom old encrypted cache restores raw totals without rewriting or changing freshness", CachedMoneyAsync),
         ("Prom preserves partial data on repeated pages, HTTP errors and page limits", IncompleteAsync),
         ("Prom cancellation interrupts paging and is not reported as an empty success", CancellationAsync),
         ("Prom rejects invalid response envelopes and order identifiers", InvalidContractAsync)
@@ -120,11 +124,85 @@ internal static class PromOrdersTests
         var result = await Client(http).FetchAsync(Connection, Credentials, Range);
         Assert(result.Complete && result.Orders.Count == 3, "Nullable fields or local range filter failed.");
         var unknown = result.Orders.Single(o => o.Number == "104");
-        Assert(unknown.Total is null && unknown.RawTotal == "1 234,50 грн" && unknown.Currency == "", "Unknown money was guessed.");
+        Assert(unknown.Total == 1234.50m && unknown.RawTotal == "1 234,50 грн" && unknown.Currency == "UAH", "Localized money was not normalized.");
         Assert(unknown.Items.Count == 0 && unknown.Shipments.Count == 0 && unknown.Buyer is null && unknown.Recipient is null, "Null fields were not tolerated.");
         Assert(result.Orders.Single(o => o.Number == "103").Total is null, "Null total became zero.");
         var numeric = result.Orders.Single(o => o.Number == "102");
         Assert(numeric.Total == 1234.50m && numeric.Items.Single().Quantity == 0.125m, "Decimal precision was lost.");
+    }
+
+    private static async Task LocalizedMoneyAsync()
+    {
+        (object? Raw, decimal? Amount, string Currency)[] cases =
+        [
+            ("300 грн", 300m, "UAH"), ("300,50 грн.", 300.50m, "UAH"),
+            ("1 234,50 грн", 1234.50m, "UAH"), ("1\u00a0234.50 ₴", 1234.50m, "UAH"),
+            ("1\u202f234\u202f567,89 UAH", 1234567.89m, "UAH"), (" 0 грн ", 0m, "UAH"),
+            ("1234.50", 1234.50m, ""), ("1234,50", 1234.50m, ""), (300.25m, 300.25m, ""),
+            (null, null, ""), ("", null, ""), ("12 34 грн", null, ""), ("1,234 грн", null, ""),
+            ("1,234.50 грн", null, ""), ("1.234,50 грн", null, ""), ("300 USD", null, ""),
+            ("300-400 грн", null, ""), ("від 300 грн", null, ""), ("1e3 грн", null, ""),
+            ("300 грн USD", null, ""), ("300\nгрн", null, ""), (new string('9', 129), null, "")
+        ];
+        var previousCulture = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            foreach (var culture in new[] { "uk-UA", "en-US" })
+            {
+                System.Globalization.CultureInfo.CurrentCulture = new(culture);
+                foreach (var example in cases)
+                {
+                    using var http = Http((_, _) => Task.FromResult(Json(JsonSerializer.Serialize(new
+                    {
+                        order = new { id = 104, price = example.Raw, delivery_cost = example.Raw,
+                            products = new[] { new { name = "Товар", quantity = "0.125", price = example.Raw, total_price = example.Raw } } }
+                    }))));
+                    var order = (await Client(http).GetOrderAsync(Connection, Credentials, "104"))!;
+                    Assert(order.Total == example.Amount && order.Currency == example.Currency, "Localized amount/currency mismatch.");
+                    Assert(order.DeliveryCost == example.Amount && order.Items.Single().UnitPrice == example.Amount &&
+                        order.Items.Single().Total == example.Amount, "Product/delivery money differs from order normalization.");
+                    Assert(order.Items.Single().Quantity == 0.125m, "Money parsing changed quantity units.");
+                    var row = new MarketplaceOrderRowViewModel(order);
+                    Assert(row.TotalDisplay.Contains("Сума не надана") == !example.Amount.HasValue, "UI did not receive parsed total.");
+                }
+            }
+            using var badLine = Http((_, _) => Task.FromResult(Json("""
+                {"order":{"id":104,"price":"300 грн","products":[{"name":"Товар","quantity":1,"price":"300 грн","total_price":"300 USD"}]}}
+                """)));
+            Assert(!(await Client(badLine).GetOrderAsync(Connection, Credentials, "104"))!.ItemsComplete,
+                "An unsupported explicit line total must not silently become quantity times price.");
+        }
+        finally { System.Globalization.CultureInfo.CurrentCulture = previousCulture; }
+    }
+
+    private static async Task CachedMoneyAsync()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "checkbox-money-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "orders.dpapi");
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var store = Guid.NewGuid().ToString("N");
+            var legacy = new MarketplaceOrder { Key = new(MarketplaceKind.Prom, store, "1"), RawTotal = "1\u00a0234,50 грн",
+                ItemsComplete = false, RetrievedAtUtc = now, ReceiptIds = ["unchanged"] };
+            var snapshot = new MarketplaceSnapshot([legacy,
+                legacy with { Key = new(MarketplaceKind.Prom, store, "2"), RawTotal = "300 USD" },
+                legacy with { Key = new(MarketplaceKind.Rozetka, store, "3") },
+                legacy with { Key = new(MarketplaceKind.Prom, store, "4"), Total = 99m, Currency = "USD" },
+                legacy with { Key = new(MarketplaceKind.Prom, store, "5"), Currency = "USD" }], []);
+            await new DpapiCredentialStore(path).SavePasswordAsync(JsonSerializer.Serialize(snapshot));
+            var bytes = await File.ReadAllBytesAsync(path);
+            var loaded = await new DpapiMarketplaceCacheStore(path).LoadAsync(30);
+            var restored = loaded.Orders.Single(o => o.Key.OrderId == "1");
+            Assert(restored.Total == 1234.50m && restored.Currency == "UAH" && restored.RawTotal == legacy.RawTotal, "Old raw price was not restored.");
+            Assert(restored.RetrievedAtUtc == now && !restored.ItemsComplete && restored.ReceiptIds.SequenceEqual(legacy.ReceiptIds), "Restoration fabricated freshness/items/fiscal evidence.");
+            Assert(loaded.Orders.Where(o => o.Key.OrderId is "2" or "3" or "5").All(o => o.Total is null), "Unknown/foreign/provider data changed.");
+            Assert(loaded.Orders.Single(o => o.Key.OrderId == "4").Total == 99m, "Known total overwritten.");
+            Assert(bytes.SequenceEqual(await File.ReadAllBytesAsync(path)), "In-memory recovery rewrote existing cache.");
+            Assert((await new DpapiMarketplaceCacheStore(path).LoadAsync(30)).Orders[0].Total == 1234.50m, "Recovery was not repeatable.");
+        }
+        finally { File.Delete(path); Directory.Delete(directory); }
     }
 
     private static async Task IncompleteAsync()

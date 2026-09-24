@@ -162,14 +162,24 @@ public sealed class PromOrdersClient : IMarketplaceOrdersClient
         var delivery = Property(order, "delivery_provider_data");
         var deliveryOption = Property(order, "delivery_option");
         var rawTotal = Text(order, "price");
+        var money = PromMoney.Parse(Property(order, "price"));
         var rawCreatedAt = Text(order, "date_created");
         var items = new List<OrderItem>();
+        var itemMoneyComplete = true;
         if (TryProperty(order, "products", out var products) && products.ValueKind == JsonValueKind.Array)
             foreach (var product in products.EnumerateArray())
                 if (product.ValueKind == JsonValueKind.Object)
+                {
+                    var price = PromMoney.Parse(Property(product, "price"));
+                    var rawLineTotal = Property(product, "total_price");
+                    var lineTotal = PromMoney.Parse(rawLineTotal);
+                    // Missing totals may be calculated from quantity and price; an
+                    // explicitly supplied unsupported total must not be ignored.
+                    itemMoneyComplete &= price.Amount.HasValue &&
+                        (rawLineTotal.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined || lineTotal.Amount.HasValue);
                     items.Add(new OrderItem(Text(product, "name"), Text(product, "sku"),
-                        DecimalValue(Property(product, "quantity")), DecimalValue(Property(product, "price")),
-                        DecimalValue(Property(product, "total_price"))));
+                        DecimalValue(Property(product, "quantity")), price.Amount, lineTotal.Amount));
+                }
 
         var buyerName = string.Join(" ", new[] { Text(order, "client_last_name"), Text(order, "client_first_name"),
             Text(order, "client_second_name") }.Where(part => part.Length > 0));
@@ -188,16 +198,16 @@ public sealed class PromOrdersClient : IMarketplaceOrdersClient
             SourceStatus = rawStatus,
             PaymentStatus = Text(payment, "status"),
             Buyer = buyerName.Length == 0 && phone.Length == 0 ? null : new OrderPerson(buyerName, phone),
-            // The GET contract has no distinct recipient or currency field; do not invent either.
+            // No distinct recipient. Currency is known only from an explicit supported price suffix.
             Recipient = null,
-            Total = DecimalValue(Property(order, "price")),
+            Total = money.Amount,
             RawTotal = rawTotal,
-            Currency = "",
+            Currency = money.Currency,
             PaymentMethod = Text(Property(order, "payment_option"), "name"),
             DeliveryMethod = Text(deliveryOption, "name"),
-            DeliveryCost = DecimalValue(Property(order, "delivery_cost")),
+            DeliveryCost = PromMoney.Parse(Property(order, "delivery_cost")).Amount,
             Items = items,
-            ItemsComplete = products.ValueKind == JsonValueKind.Array && products.GetArrayLength() > 0 &&
+            ItemsComplete = itemMoneyComplete && products.ValueKind == JsonValueKind.Array && products.GetArrayLength() > 0 &&
                 items.Count == products.GetArrayLength() && products.EnumerateArray().All(p =>
                     !TryProperty(p, "discount_types", out var discounts) || discounts.ValueKind == JsonValueKind.Null ||
                         (discounts.ValueKind == JsonValueKind.Array && discounts.GetArrayLength() == 0)),
@@ -214,8 +224,7 @@ public sealed class PromOrdersClient : IMarketplaceOrdersClient
     private static DateTimeOffset? ParseDate(string value) =>
         DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var date) ? date : null;
 
-    // Monetary strings are major-unit decimal text, not Checkbox's integer kopecks. A currency
-    // suffix, comma, thousands separator or unknown syntax remains unknown rather than guessed.
+    // Quantities are unit counts, not money; a currency suffix is never allowed here.
     private static decimal? DecimalValue(JsonElement value)
     {
         if (value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out var number)) return number;
