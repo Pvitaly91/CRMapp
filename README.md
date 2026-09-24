@@ -72,6 +72,26 @@ API-контракти, джерела та непідтверджені мом�
 
 ## Збірка та тести
 
+### Відновлення з GitHub на чистому комп’ютері
+
+Потрібні **Windows 10/11 x64**, Git і **.NET SDK 8.0.425** (версію закріплено в `global.json`; дозволено новіші patch-релізи тієї самої SDK-серії). Visual Studio не обов’язкова. Під час першої збірки потрібен інтернет для завантаження компонентів .NET. Ніякі файли зі старого білду, локального кешу, токени або паролі для збірки й автоматичних тестів не потрібні.
+
+Актуальний код міститься у гілці **`codex/checkbox-marketplace-orders`**, не в `main`:
+
+```powershell
+git clone --branch codex/checkbox-marketplace-orders --single-branch https://github.com/Pvitaly91/CRMapp.git
+cd CRMapp
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
+```
+
+Скрипт збирає Release, запускає весь консольний набір регресійних тестів (включно з Windows/WPF/STA) і лише після успіху створює self-contained `win-x64` у `artifacts\win-x64`. На комп’ютері користувача .NET встановлювати не потрібно: переносіть **усю папку збірки**, запускайте `CheckboxBatchPrinter.exe`. Автоматичні тести використовують підставні API/дані й не запускають фізичний друк.
+
+Скрипт не перезаписує непорожню папку. Для повторної збірки задайте нову: `powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -OutputDirectory artifacts\win-x64-new`. Щоб відновити конкретну ревізію, перед збіркою виконайте `git checkout <commit>` у цій окремій чистій копії.
+
+У Git збережено вихідний код, WPF/XAML-ресурси, проєкти, тести й конфігурацію SDK. Згенеровані `bin`, `obj`, `artifacts`, облікові дані та історія не публікуються. Відновлення **програми** із сорскодів не відновлює особисті дані: їх резервну копію потрібно зберігати окремо. Оновлення папки EXE не видаляє `%LOCALAPPDATA%\CheckboxBatchPrinter`; не видаляйте цю папку під час прибирання старих білдів. DPAPI-секрети прив’язані до облікового запису Windows.
+
+Окремі команди, якщо скрипт не потрібен:
+
 ```powershell
 dotnet build CheckboxBatchPrinter.sln -c Release
 dotnet run --project tests/CheckboxBatchPrinter.Tests -c Release
