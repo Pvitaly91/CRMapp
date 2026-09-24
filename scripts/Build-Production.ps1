@@ -34,7 +34,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Production publish failed.' }
     $files = @(Get-ChildItem -LiteralPath $app -Recurse -File)
     if ($files.Count -ne 1 -or $files[0].Name -ne 'CheckboxBatchPrinter.exe') { throw 'Unexpected publish payload. Inspect dependencies; do not remove files to fake single-file output.' }
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Test-ProductionPackage.ps1') -Executable $files[0].FullName -ExpectedCommit $sha
+    $developmentExe = Join-Path $intermediate 'Development\bin\CheckboxBatchPrinter\release\CheckboxBatchPrinter.exe'
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Test-ProductionPackage.ps1') -Executable $files[0].FullName -ExpectedCommit $sha -DevelopmentExecutable $developmentExe
     if ($LASTEXITCODE -ne 0) { throw 'Copied EXE verification failed; no ZIP created.' }
     $publishedHash = (Get-FileHash -LiteralPath $files[0].FullName -Algorithm SHA256).Hash
     # A normal Release build (no production profile or AppChannel) must not replace the release.
