@@ -150,6 +150,7 @@
                                         <TextBlock Text="{Binding Marketplace.Status}" TextWrapping="Wrap" Margin="3" />
                                         <TextBlock Text="{Binding Marketplace.FiscalSummary}" TextWrapping="Wrap" Margin="3" />
                                         <TextBlock Text="{Binding Marketplace.ReceiptScopeText}" TextWrapping="Wrap" Margin="3" />
+                                        <TextBlock Text="{Binding Marketplace.OrderListSummary}" TextWrapping="Wrap" Margin="3" />
                                     </StackPanel>
                                 </ToolTip>
                             </Button.ToolTip>
@@ -194,27 +195,26 @@
                         <Grid x:Name="MarketplaceOrdersPane" Grid.Column="0">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
-                            <StackPanel Margin="2,0,2,3">
-                                <TextBlock Text="Замовлення — усі завантажені" FontWeight="SemiBold" VerticalAlignment="Center" />
-                                <TextBlock Text="{Binding Marketplace.OrderListSummary}" Foreground="#48566A" FontSize="11"
-                                           Margin="0,3,0,0" TextWrapping="Wrap" VerticalAlignment="Center" />
-                            </StackPanel>
-                            <WrapPanel Grid.Row="1" Margin="0,0,0,3">
-                                <TextBlock Text="Пошук замовлень:" VerticalAlignment="Center" Margin="3,0,5,0" />
-                                <TextBox x:Name="OrderSearchInput" Width="210"
+                            <ScrollViewer x:Name="OrderToolbarScroll" HorizontalScrollBarVisibility="Auto"
+                                          VerticalScrollBarVisibility="Disabled" Margin="0,0,0,3">
+                            <StackPanel x:Name="OrderToolbar" Orientation="Horizontal">
+                                <TextBox x:Name="OrderSearchInput" Width="150" VerticalAlignment="Center"
+                                         AutomationProperties.Name="Пошук замовлень"
                                          Text="{Binding Marketplace.OrderSearch, UpdateSourceTrigger=PropertyChanged}"
                                          ToolTip="Пошук лише серед завантажених замовлень — не приховує чеки праворуч." />
-                                <ComboBox x:Name="OrderFilterInput" Width="150" ItemsSource="{Binding Marketplace.OrderFilters}"
+                                <ComboBox x:Name="OrderFilterInput" Width="110" VerticalAlignment="Center" ItemsSource="{Binding Marketplace.OrderFilters}"
                                           SelectedItem="{Binding Marketplace.OrderFilter}" ToolTip="Фільтр лише замовлень" />
-                                <Button Content="Прив’язати вибрані" Command="{Binding Marketplace.LinkSelectedOrderCommand}"
+                                <Button x:Name="LinkSelectedOrderButton" Content="Прив’язати вибрані" Padding="8,6" VerticalAlignment="Center"
+                                        Command="{Binding Marketplace.LinkSelectedOrderCommand}"
                                         ToolTip="Виберіть замовлення ліворуч та чек праворуч. Прив’язку буде збережено лише після підтвердження." />
-                                <Button Content="Зіставити за товарами" Command="{Binding Marketplace.AutoMatchCommand}"
+                                <Button x:Name="MatchProductsButton" Content="Зіставити за товарами" Padding="8,6" VerticalAlignment="Center"
+                                        Command="{Binding Marketplace.AutoMatchCommand}"
                                         ToolTip="Завантажити деталі чеків лише для читання. Сума + повний склад товарів; неточні збіги потребують перевірки." />
-                            </WrapPanel>
-                            <DataGrid x:Name="MarketplaceOrdersGrid" Grid.Row="2" ItemsSource="{Binding Marketplace.Orders}"
+                            </StackPanel>
+                            </ScrollViewer>
+                            <DataGrid x:Name="MarketplaceOrdersGrid" Grid.Row="1" ItemsSource="{Binding Marketplace.Orders}"
                                       SelectedItem="{Binding Marketplace.SelectedOrder, Mode=TwoWay}"
                                       AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
                                       IsReadOnly="True" SelectionMode="Single" HeadersVisibility="Column"

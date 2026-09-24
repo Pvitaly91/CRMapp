@@ -1518,9 +1518,19 @@ internal static class MarketplaceViewModelTests
             True(infoText.Any(text => text.Text == workspace.Status));
             True(infoText.Any(text => text.Text == workspace.FiscalSummary));
             True(infoText.Any(text => text.Text == workspace.ReceiptScopeText));
+            True(infoText.Any(text => text.Text == workspace.OrderListSummary));
             True(!VisualChildren<TextBlock>((FrameworkElement)mainWindow.Content).Any(text =>
-                text.Text == workspace.Status || text.Text == workspace.FiscalSummary || text.Text == workspace.ReceiptScopeText),
+                text.Text == workspace.Status || text.Text == workspace.FiscalSummary || text.Text == workspace.ReceiptScopeText ||
+                text.Text == workspace.OrderListSummary || text.Text == "Замовлення — усі завантажені"),
                 "Long marketplace explanations must not occupy table space while the tooltip is closed.");
+            var orderToolbar = (StackPanel)mainWindow.FindName("OrderToolbar");
+            var toolbarScroll = (ScrollViewer)mainWindow.FindName("OrderToolbarScroll");
+            Equal(Orientation.Horizontal, orderToolbar.Orientation);
+            Equal(ScrollBarVisibility.Auto, toolbarScroll.HorizontalScrollBarVisibility);
+            var centers = orderToolbar.Children.Cast<FrameworkElement>()
+                .Select(child => child.TranslatePoint(new Point(0, child.ActualHeight / 2), orderToolbar).Y).ToArray();
+            True(centers.Max() - centers.Min() < 1, "Order search, filter and both buttons must share one row.");
+            True(toolbarScroll.ScrollableWidth < 1, "The compact toolbar must fit the default half-width pane.");
             var split = (Grid)mainWindow.FindName("OrdersSplitLayout");
             var leftPane = (Grid)mainWindow.FindName("MarketplaceOrdersPane");
             var rightPane = (Grid)mainWindow.FindName("CheckboxReceiptsPane");
