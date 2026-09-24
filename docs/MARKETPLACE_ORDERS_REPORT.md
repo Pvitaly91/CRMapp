@@ -307,3 +307,9 @@ Exit code 0.
 Змінено лише XAML, відповідні UI-тести й документацію. API, parser сум, прив’язка, друк та історія не змінені. Release build — **0 warnings / 0 errors**; усі **126/126 тести PASS**. Розширений compiled XAML/Windows STA-тест перевіряє фактичну геометрію поруч і DragStarted/DragDelta/DragCompleted справжнього GridSplitter: ліва панель розширюється, права звужується, потім розміри відновлюються. Рендер 1280×720 оглянуто; прив’язки, вибір і одноклікові галочки залишаються працездатними.
 
 Self-contained win-x64 publish успішний: `D:\Portable Soft\POS\CRMapp\artifacts\win-x64-vertical-layout\CheckboxBatchPrinter.exe`. Попередні білди не перезаписано. Production App, реальні API й фізичний принтер для цієї UI-зміни не запускалися.
+
+## Компактна підказка замість службового блока — 24.09.2026
+
+Поверх чистого `8ffc093` великі `Status`, `FiscalSummary`, `ReceiptScopeText` перенесено з панелі над таблицями до hover-підказки кнопки **ⓘ** біля автоприв’язки. Прапорець залишився доступним. Повідомлення не видалено: Tooltip явно отримує актуальний DataContext через PlacementTarget, підтримує перенесення рядків і показує також помилки/неповноту перевірки та обмеження касира. Друк, API, кеш, історія й алгоритми зв’язку не змінені.
+
+Release — **0 warnings / 0 errors**, повний набір — **126/126 PASS**. Compiled XAML/Windows STA перевіряє bindings усіх трьох повідомлень у Tooltip і відсутність цих довгих текстів у видимому дереві основного вікна. Сам popup у тесті не відкривається; його PlacementTarget встановлюється як при наведенні. Синтетичний рендер 1280×720 оглянуто. Self-contained win-x64 publish успішний: `D:\Portable Soft\POS\CRMapp\artifacts\win-x64-compact-info\CheckboxBatchPrinter.exe`. Попередні білди не перезаписані; реальні API, production App та фізичний друк не запускалися.

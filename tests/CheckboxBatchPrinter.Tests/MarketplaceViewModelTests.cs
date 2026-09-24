@@ -1508,6 +1508,19 @@ internal static class MarketplaceViewModelTests
             _xamlCheckpoint = "drain orders layout";
             await DrainDispatcherAsync();
             Equal(1, main.SelectedTabIndex);
+            var infoButton = (Button)mainWindow.FindName("MarketplaceInfoButton");
+            True(infoButton.ToolTip is ToolTip, "Marketplace explanations must be available on hover.");
+            var infoTip = (ToolTip)infoButton.ToolTip;
+            infoTip.PlacementTarget = infoButton; // WPF sets this on hover; exercise bindings without showing a popup.
+            infoTip.GetBindingExpression(FrameworkElement.DataContextProperty)!.UpdateTarget();
+            await DrainDispatcherAsync();
+            var infoText = ((StackPanel)infoTip.Content).Children.OfType<TextBlock>().ToArray();
+            True(infoText.Any(text => text.Text == workspace.Status));
+            True(infoText.Any(text => text.Text == workspace.FiscalSummary));
+            True(infoText.Any(text => text.Text == workspace.ReceiptScopeText));
+            True(!VisualChildren<TextBlock>((FrameworkElement)mainWindow.Content).Any(text =>
+                text.Text == workspace.Status || text.Text == workspace.FiscalSummary || text.Text == workspace.ReceiptScopeText),
+                "Long marketplace explanations must not occupy table space while the tooltip is closed.");
             var split = (Grid)mainWindow.FindName("OrdersSplitLayout");
             var leftPane = (Grid)mainWindow.FindName("MarketplaceOrdersPane");
             var rightPane = (Grid)mainWindow.FindName("CheckboxReceiptsPane");

@@ -135,13 +135,26 @@
                                     Visibility="{Binding Marketplace.HasEnabledConnections, Converter={StaticResource BoolToVisibility}}" />
                             <CheckBox x:Name="ExtraOrderColumns" Content="Покупець, статус, ТТН у таблиці" VerticalAlignment="Center" Margin="12,0" />
                         </WrapPanel>
+                        <WrapPanel>
                         <CheckBox x:Name="AutomaticOrderLinks" Content="Автоматично шукати ймовірні зв’язки за товарами"
                                   IsChecked="{Binding Marketplace.AutoLinkEnabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                  Margin="3,6,3,3"
+                                  Margin="3,6,9,3" VerticalAlignment="Center"
                                   ToolTip="При відкритті цієї вкладки та після оновлення чеків тут: завантажити замовлення й порівняти товари, кількість, ціни, суму та час. Ймовірний зв’язок не є підтвердженням фіскального документа. Налаштування діє до закриття програми." />
-                        <TextBlock Text="{Binding Marketplace.Status}" TextWrapping="Wrap" FontSize="11" Foreground="#48566A" Margin="3" MaxHeight="55" />
-                        <TextBlock Text="{Binding Marketplace.FiscalSummary}" TextWrapping="Wrap" FontSize="11" Foreground="#48566A" Margin="3" />
-                        <TextBlock Text="{Binding Marketplace.ReceiptScopeText}" Foreground="#667085" FontSize="11" Margin="3" />
+                        <Button x:Name="MarketplaceInfoButton" Content="ⓘ" Width="30" Padding="3" FontSize="16"
+                                AutomationProperties.Name="Стан оновлення та пояснення прив’язок"
+                                ToolTipService.InitialShowDelay="150" ToolTipService.ShowDuration="60000">
+                            <Button.ToolTip>
+                                <ToolTip DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}" MaxWidth="620">
+                                    <StackPanel>
+                                        <TextBlock Text="Стан оновлення та пояснення" FontWeight="SemiBold" Margin="3,3,3,7" />
+                                        <TextBlock Text="{Binding Marketplace.Status}" TextWrapping="Wrap" Margin="3" />
+                                        <TextBlock Text="{Binding Marketplace.FiscalSummary}" TextWrapping="Wrap" Margin="3" />
+                                        <TextBlock Text="{Binding Marketplace.ReceiptScopeText}" TextWrapping="Wrap" Margin="3" />
+                                    </StackPanel>
+                                </ToolTip>
+                            </Button.ToolTip>
+                        </Button>
+                        </WrapPanel>
                     </StackPanel>
 
                     <Expander DockPanel.Dock="Bottom" Header="Пов’язане замовлення" IsExpanded="False" Margin="2,6,2,2">
