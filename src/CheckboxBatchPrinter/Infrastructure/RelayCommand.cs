@@ -14,6 +14,8 @@ public sealed class AsyncRelayCommand(Func<object?, Task> execute, Func<object?,
 {
     private bool _isExecuting;
 
+    public bool IsExecuting => _isExecuting;
+
     public event EventHandler? CanExecuteChanged;
     public bool CanExecute(object? parameter) => !_isExecuting && (canExecute?.Invoke(parameter) ?? true);
 

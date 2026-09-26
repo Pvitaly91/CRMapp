@@ -29,6 +29,9 @@ internal static class MarketplaceViewModelTests
     [
         ("STA selected Prom hidden by Rozetka filter never enters printer backend", () => StaAsync(FilteredPrintAsync)),
         ("STA clear all selection includes hidden rows and hidden-only selection disables print", () => StaAsync(HiddenSelectionAsync)),
+        ("STA Today button resets filters and requests today's Kyiv receipts without marketplace API", () => StaAsync(TodayReceiptsAsync)),
+        ("STA successful single and batch print clear only submitted marks even when history save fails", () => StaAsync(PrintClearsMarksAsync)),
+        ("STA cancellation preparation and printer errors preserve selected marks", () => StaAsync(PrintFailureKeepsMarksAsync)),
         ("STA TTN and receipt type filters exclude hidden selections from print", () => StaAsync(SearchPrintAsync)),
         ("STA table receipt number, date and order sorting determine backend order", () => StaAsync(SortedPrintAsync)),
         ("STA marketplace sync inside confirmation cannot change immutable batch", () => StaAsync(ConfirmationSyncAsync)),
@@ -167,7 +170,7 @@ internal static class MarketplaceViewModelTests
         Equal(1, fixture.Dialogs.Confirmation!.HiddenSelectedCount);
         Equal("Rozetka", fixture.Dialogs.Confirmation.Items[0].Marketplace);
         Equal("RZ-42", fixture.Dialogs.Confirmation.Items[0].OrderNumber);
-        Equal(1, main.VisibleSelectedCount);
+        Equal(0, main.VisibleSelectedCount);
         Equal(1, main.HiddenSelectedCount);
     }
 
@@ -196,6 +199,81 @@ internal static class MarketplaceViewModelTests
         workspace.Filter = "Prom";
         True(main.Receipts.All(r => !r.IsSelectedForOrders));
         Equal(0, fixture.Printer.Calls);
+    }
+
+    private static async Task TodayReceiptsAsync()
+    {
+        var fixture = new Fixture();
+        var today = DateRangeBuilder.TodayKyiv;
+        fixture.ReceiptSource.FilterDates = true;
+        fixture.ReceiptSource.Rows =
+        [
+            new() { Id = ReceiptOne, Serial = 1, Type = ReceiptTypes.Sell, Status = "DONE", FiscalDate = new DateTimeOffset(today, DateRangeBuilder.KyivZone.GetUtcOffset(today)) },
+            new() { Id = ReceiptTwo, Serial = 2, Type = ReceiptTypes.Sell, Status = "DONE", FiscalDate = new DateTimeOffset(today.AddDays(-1), DateRangeBuilder.KyivZone.GetUtcOffset(today.AddDays(-1))) }
+        ];
+        var (main, _) = fixture.Create();
+        main.DateFrom = today.AddDays(-1); main.DateTo = today.AddDays(-1);
+        main.SearchText = "no-match";
+        main.SelectedType = main.ReceiptTypes.Single(t => t.Value == ReceiptTypes.Return);
+        await ExecuteAsync(main.TodayCommand);
+        Equal(today, main.DateFrom); Equal(today, main.DateTo);
+        Equal(DateOnly.FromDateTime(today), fixture.ReceiptSource.LastFrom);
+        Equal(DateOnly.FromDateTime(today), fixture.ReceiptSource.LastTo);
+        Equal(1, fixture.ReceiptSource.Calls);
+        Equal("", main.SearchText); Equal("", main.SelectedType!.Value);
+        True(main.ReceiptsView.Cast<ReceiptRowViewModel>().Select(r => r.Id).SequenceEqual([ReceiptOne]));
+        Equal(0, fixture.Source.FetchCalls); Equal(0, fixture.Rozetka.FetchCalls);
+        Equal(0, fixture.Settings.SecretLoads);
+    }
+
+    private static async Task PrintClearsMarksAsync()
+    {
+        foreach (var orders in new[] { false, true })
+        foreach (var single in new[] { false, true })
+        foreach (var historyFailure in new[] { false, true })
+        {
+            var fixture = new Fixture();
+            fixture.History.FailSave = historyFailure;
+            var (main, workspace) = fixture.Create();
+            await main.RefreshAsync();
+            if (orders) await OpenOrdersAsync(main, workspace);
+            foreach (var row in main.Receipts) { row.IsSelected = true; row.IsSelectedForOrders = true; }
+            if (single) main.SearchText = "2";
+            var submitted = main.ReceiptsView.Cast<ReceiptRowViewModel>().ToArray();
+            await ExecuteAsync(main.PrintSelectedCommand);
+            Equal(1, fixture.Printer.Calls);
+            Equal(submitted.Length, fixture.Printer.BatchIds.Length);
+            foreach (var row in main.Receipts)
+            {
+                Equal(!submitted.Contains(row), main.ActiveTab.IsMarked(row));
+                True(orders ? row.IsSelected : row.IsSelectedForOrders, "The other tab's independent marks changed.");
+            }
+            True(submitted.All(row => row.PrintStatus == PrintItemStatus.Done));
+            Equal(0, main.VisibleSelectedCount);
+            True(!main.PrintSelectedCommand.CanExecute(null));
+            if (historyFailure) True(submitted.All(row => row.PrintError.Contains("історію")));
+        }
+    }
+
+    private static async Task PrintFailureKeepsMarksAsync()
+    {
+        foreach (var single in new[] { false, true })
+        foreach (var failure in new[] { "cancel", "image", "printer" })
+        {
+            var fixture = new Fixture();
+            fixture.Dialogs.AcceptPrint = failure != "cancel";
+            fixture.Images.FailId = failure == "image" ? ReceiptTwo : null;
+            fixture.Printer.Fail = failure == "printer";
+            var (main, _) = fixture.Create();
+            await main.RefreshAsync();
+            if (single) main.SearchText = "2";
+            main.SelectAllCommand.Execute(null);
+            var selected = main.Receipts.Where(r => r.IsSelected).ToArray();
+            await ExecuteAsync(main.PrintSelectedCommand);
+            True(selected.All(r => r.IsSelected), "A failed or cancelled print cleared marks.");
+            Equal(selected.Length, main.VisibleSelectedCount);
+            Equal(0, fixture.History.Saves);
+        }
     }
 
     private static async Task SearchPrintAsync()
@@ -362,6 +440,7 @@ internal static class MarketplaceViewModelTests
         var print = ExecuteAsync(main.PrintSelectedCommand);
         await fixture.Printer.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         True(fixture.Printer.BatchIds.SequenceEqual(expectedIds));
+        True(!main.TodayCommand.CanExecute(null), "Today must not refresh receipt rows during a print.");
         Equal(0, fixture.History.Saves);
         fixture.Source.Gate.SetResult(true);
         await sync;
@@ -376,6 +455,7 @@ internal static class MarketplaceViewModelTests
         Equal(0, fixture.History.Saves);
         fixture.Printer.Gate.SetResult(true);
         await print;
+        Equal(0, main.SelectedCount);
         True(main.Receipts.All(row => row.PrintStatus == PrintItemStatus.Done));
         Equal(1, fixture.History.Saves);
         Equal(3, fixture.History.Records.Count);
@@ -387,7 +467,7 @@ internal static class MarketplaceViewModelTests
         await main.PrepareOrdersAsync();
         Equal(fetchesBeforeRefresh, fixture.Source.FetchCalls);
         await workspace.SyncAsync(); // Fresh range coverage is explicit; cached automatic evidence is incomplete.
-        Equal(2, main.SelectedCount);
+        Equal(0, main.SelectedCount);
         True(main.Receipts.All(row => row.PrintStatus == PrintItemStatus.Done));
         Equal("ORDER-41", main.Receipts[0].OrderNumber);
         True(fixture.Printer.BatchIds.SequenceEqual(expectedIds));
@@ -1594,6 +1674,16 @@ internal static class MarketplaceViewModelTests
             True(ReferenceEquals(workspace.Orders, marketplaceOrdersGrid!.ItemsSource));
             True(!ReferenceEquals(allGrid.ItemsSource, ordersGrid.ItemsSource));
             Equal(3, allGrid.Items.Count);
+            var selectAll = (Button)mainWindow.FindName("SelectAllChecksButton");
+            var clearAll = (Button)mainWindow.FindName("ClearAllChecksButton");
+            var todayReceipts = (Button)mainWindow.FindName("TodayReceiptsButton");
+            True(ReferenceEquals(selectAll.Command, main.SelectAllCommand));
+            True(ReferenceEquals(clearAll.Command, main.ClearSelectionCommand));
+            True(ReferenceEquals(todayReceipts.Command, main.TodayCommand));
+            selectAll.Command.Execute(null);
+            Equal(3, main.VisibleSelectedCount);
+            clearAll.Command.Execute(null);
+            Equal(0, main.SelectedCount);
             var first = main.Receipts.Single(r => r.Id == ReceiptOne);
             var second = main.Receipts.Single(r => r.Id == ReceiptTwo);
             allGrid.SelectedItem = second;
@@ -1807,7 +1897,11 @@ internal static class MarketplaceViewModelTests
         var observedBusy = false;
         void Changed(object? sender, EventArgs args)
         {
-            if (!(finished?.Invoke() ?? command.CanExecute(null))) { observedBusy = true; return; }
+            // A completed print may remain disabled because all its marks were cleared.
+            // Completion is execution state, not whether another print can be started.
+            var isFinished = finished?.Invoke() ?? (command is CheckboxBatchPrinter.Infrastructure.AsyncRelayCommand asyncCommand
+                ? !asyncCommand.IsExecuting : command.CanExecute(null));
+            if (!isFinished) { observedBusy = true; return; }
             if (!observedBusy) return;
             command.CanExecuteChanged -= Changed;
             completed.TrySetResult();
@@ -1994,16 +2088,19 @@ internal static class MarketplaceViewModelTests
     {
         public Dictionary<string, PrintedReceiptRecord> Records { get; } = [];
         public int Saves;
+        public bool FailSave;
         public Task<IReadOnlyDictionary<string, PrintedReceiptRecord>> LoadAsync(string account, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyDictionary<string, PrintedReceiptRecord>>(Records.Where(p => p.Value.AccountContext == account).ToDictionary(p => p.Key, p => p.Value));
         public Task MarkPrintedAsync(string account, IReadOnlyCollection<string> ids, string printer, CancellationToken ct = default)
         {
+            if (FailSave) return Task.FromException(new IOException("Synthetic history save failure"));
             Saves++; foreach (var id in ids) Records[id] = new(account, id, printer, DateTimeOffset.UtcNow); return Task.CompletedTask;
         }
     }
     private sealed class Printer : IPrintService
     {
         public int Calls;
+        public bool Fail;
         public string PrinterName = "";
         public string[] BatchIds = [];
         public TaskCompletionSource<bool>? Gate;
@@ -2016,15 +2113,23 @@ internal static class MarketplaceViewModelTests
         {
             Calls++; PrinterName = settings.PrinterName; BatchIds = receipts.Select(r => r.ReceiptId).ToArray(); Entered.TrySetResult();
             if (Gate is not null) await Gate.Task.WaitAsync(ct);
+            if (Fail) throw new InvalidOperationException("Synthetic printer error");
         }
         public Task PrintTestAsync(AppSettings settings, CancellationToken ct = default) => throw new InvalidOperationException("Physical test forbidden in VM scenario.");
     }
     private sealed class Receipts : IReceiptService
     {
         public int Calls;
+        public bool FilterDates;
+        public DateOnly LastFrom, LastTo;
         public IReadOnlyList<ReceiptRecord> Rows = [Receipt(ReceiptTwo, 2, 10000), Receipt(ReceiptOne, 1, 10000), Receipt(ReceiptThree, 3, 99900)];
         public Task<IReadOnlyList<ReceiptRecord>> GetReceiptsAsync(DateOnly from, DateOnly to, CancellationToken ct = default)
-        { Calls++; return Task.FromResult(Rows); }
+        {
+            Calls++; LastFrom = from; LastTo = to;
+            return Task.FromResult<IReadOnlyList<ReceiptRecord>>(FilterDates ? Rows.Where(r => r.DisplayDate is { } date &&
+                DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(date, DateRangeBuilder.KyivZone).DateTime) >= from &&
+                DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(date, DateRangeBuilder.KyivZone).DateTime) <= to).ToArray() : Rows);
+        }
     }
     private sealed class Images : IReceiptImageService
     {

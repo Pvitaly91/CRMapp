@@ -57,7 +57,7 @@ public sealed class MainViewModel : ObservableObject
         if (Marketplace is not null) Marketplace.MatchesChanged += (_, _) => OrdersReceiptsTab.View.Refresh();
 
         RefreshCommand = new AsyncRelayCommand(_ => RefreshAsync(), _ => !IsBusy);
-        TodayCommand = new RelayCommand(_ => { DateFrom = DateRangeBuilder.TodayKyiv; DateTo = DateRangeBuilder.TodayKyiv; });
+        TodayCommand = new AsyncRelayCommand(_ => ShowTodayAsync(), _ => !IsBusy);
         ClearDateCommand = new RelayCommand(parameter =>
         {
             if (string.Equals(parameter as string, "from", StringComparison.Ordinal)) DateFrom = null;
@@ -247,6 +247,16 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    private async Task ShowTodayAsync()
+    {
+        var today = DateRangeBuilder.TodayKyiv;
+        DateFrom = today;
+        DateTo = today;
+        SearchText = string.Empty;
+        SelectedType = ReceiptTypes[0];
+        await RefreshAsync();
+    }
+
     private void SelectVisible(bool selected)
     {
         SelectionService.SetVisibleSelection(ReceiptsView.Cast<ReceiptRowViewModel>(), ActiveTab.SetMarked, selected);
@@ -309,6 +319,7 @@ public sealed class MainViewModel : ObservableObject
                     row.PrintStatus = PrintItemStatus.Printing;
                     await _printService.PrintReceiptAsync(png, row.Id, settings, cancellationToken);
                     row.PrintStatus = PrintItemStatus.Done;
+                    tab.SetMarked(row, false);
                     _logger.Info("receipt.print", row.Id, printStatus: "done");
                 }, (row, exception) =>
                 {
@@ -347,7 +358,11 @@ public sealed class MainViewModel : ObservableObject
                 {
                     foreach (var item in loaded) item.Row.PrintStatus = PrintItemStatus.Printing;
                     await _printService.PrintReceiptsAsSingleJobAsync(loaded.Select(x => (x.Png, x.ReceiptId)).ToArray(), settings);
-                    foreach (var item in loaded) item.Row.PrintStatus = PrintItemStatus.Done;
+                    foreach (var item in loaded)
+                    {
+                        item.Row.PrintStatus = PrintItemStatus.Done;
+                        tab.SetMarked(item.Row, false);
+                    }
                     success = loaded.Count;
                 }
             }
@@ -450,7 +465,7 @@ public sealed class MainViewModel : ObservableObject
 
     private void RaiseCommands()
     {
-        foreach (var command in new ICommand[] { RefreshCommand, SelectAllCommand, ClearSelectionCommand, PrintSelectedCommand, RetryFailedCommand, PreviewCommand, SettingsCommand, MarketplaceSettingsCommand })
+        foreach (var command in new ICommand[] { RefreshCommand, TodayCommand, SelectAllCommand, ClearSelectionCommand, PrintSelectedCommand, RetryFailedCommand, PreviewCommand, SettingsCommand, MarketplaceSettingsCommand })
         {
             if (command is RelayCommand relay) relay.RaiseCanExecuteChanged();
             if (command is AsyncRelayCommand asyncRelay) asyncRelay.RaiseCanExecuteChanged();

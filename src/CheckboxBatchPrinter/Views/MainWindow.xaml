@@ -55,6 +55,12 @@
                     <TextBox x:Name="ReceiptSearchInput" Width="330" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                              ToolTip="Пошук у поточній вкладці. На «Усі чеки» — лише дані чека; на «Чеки та замовлення» — також дані замовлення та ТТН." />
                     <ComboBox Width="180" ItemsSource="{Binding ReceiptTypes}" SelectedItem="{Binding SelectedType}" />
+                    <Button x:Name="TodayReceiptsButton" Content="Чеки за сьогодні" Command="{Binding TodayCommand}"
+                            ToolTip="Показати чеки за сьогодні (Київ): скинути пошук і тип та одразу оновити список" />
+                    <Button x:Name="SelectAllChecksButton" Content="Виділити всі" Command="{Binding SelectAllCommand}"
+                            ToolTip="Позначити всі чеки у поточному відфільтрованому списку активної вкладки" />
+                    <Button x:Name="ClearAllChecksButton" Content="Зняти всі" Command="{Binding ClearSelectionCommand}"
+                            ToolTip="Зняти всі галочки активної вкладки, включно з прихованими фільтром" />
                 </WrapPanel>
             </Grid>
         </Border>
@@ -64,8 +70,8 @@
                 <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                 <WrapPanel Grid.ColumnSpan="2">
-                    <Button Content="Вибрати всі видимі" Command="{Binding SelectAllCommand}" ToolTip="Ctrl+A — усі видимі в активній вкладці" />
-                    <Button Content="Зняти весь вибір" Command="{Binding ClearSelectionCommand}" ToolTip="Зняти видимі та приховані позначки активної вкладки" />
+                    <Button Content="Виділити всі" Command="{Binding SelectAllCommand}" ToolTip="Ctrl+A — усі видимі в активній вкладці" />
+                    <Button Content="Зняти всі" Command="{Binding ClearSelectionCommand}" ToolTip="Зняти видимі та приховані позначки активної вкладки" />
                     <TextBlock Text="{Binding SelectionText}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="12,0" />
                     <Button Content="Перегляд" Command="{Binding PreviewCommand}" />
                 </WrapPanel>
