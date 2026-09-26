@@ -1,5 +1,3 @@
-using System.Text;
-using System.Text.RegularExpressions;
 using CheckboxBatchPrinter.Core.Models;
 
 namespace CheckboxBatchPrinter.Core.Services;
@@ -7,7 +5,11 @@ namespace CheckboxBatchPrinter.Core.Services;
 /// <summary>A snapshot-wide, non-iterative bipartite graph. Suggestions never reserve nodes.</summary>
 internal static class BasketReceiptMatching
 {
-    private sealed record Edge(ReceiptRecord Receipt, MarketplaceOrder Order, ProductComparison Products, string Issue);
+    private sealed record ProductCheck(ProductComparison State, string Reason = "");
+    private sealed record Edge(ReceiptRecord Receipt, MarketplaceOrder Order, ProductCheck Check, string Issue)
+    {
+        public ProductComparison Products => Check.State;
+    }
 
     internal static void Apply(IDictionary<string, ReceiptOrderMatch> matches, IReadOnlyList<ReceiptRecord> receipts,
         IReadOnlyList<MarketplaceOrder> orders, string account, IReadOnlyList<ReceiptOrderDecision> decisions,
@@ -28,7 +30,7 @@ internal static class BasketReceiptMatching
         {
             if (!PotentialPair(receipt, order, scope)) continue;
             details.TryGetValue(NormalizeId(receipt.Id), out var detail);
-            var products = loading?.Contains(NormalizeId(receipt.Id)) == true ? ProductComparison.Loading : CompareProducts(order, detail);
+            var products = loading?.Contains(NormalizeId(receipt.Id)) == true ? new(ProductComparison.Loading) : CompareProducts(order, detail);
             edges.Add(new(receipt, order, products, AmountIssue(receipt, order, detail)));
         }
         // Missing details, special totals and rejected hypotheses stay competitors. Only a proven
@@ -83,7 +85,11 @@ internal static class BasketReceiptMatching
                 : "Недостатньо даних для автопризначення. " + string.Join(" ", options.Select(e => e.Issue).Where(s => s.Length > 0).Distinct());
             if (!coverageComplete) message = "Перевірка неповна: нові автозв’язки не призначаються. " + message;
             if (productState == ProductComparison.Loading) message += "Товарні дані ще завантажуються; зв’язок буде перевірено повторно. ";
-            else if (productState == ProductComparison.Insufficient) message += "Товари: недостатньо даних для перевірки повного кошика. ";
+            else if (productState == ProductComparison.Insufficient) message += "Товари: недостатньо даних для перевірки повного кошика; невстановлена відповідність назв не є суперечністю. ";
+            foreach (var excluded in raw.Where(e => e.Products == ProductComparison.Contradiction)
+                         .OrderBy(e => e.Order.Key.Marketplace).ThenBy(e => e.Order.Key.ConnectionId, StringComparer.Ordinal)
+                         .ThenBy(e => e.Order.Key.OrderId, StringComparer.Ordinal))
+                message += $"Виключено замовлення №{excluded.Order.Number}: {excluded.Check.Reason} ";
             if (raw.Any(e => string.IsNullOrWhiteSpace(e.Order.Currency))) message += "Валюта API не підтверджена. ";
             if (decision?.SuppressAutomatic == true) message += "Автоприв’язку вимкнено вручну. ";
             if (selected is not null && HasFiscalEvidence(selected.Order)) message += "Фіскальні ключі не підтвердили цю пару. ";
@@ -159,58 +165,55 @@ internal static class BasketReceiptMatching
         catch (OverflowException) { return true; }
     }
 
-    internal static ProductComparison CompareProducts(MarketplaceOrder order, ReceiptDetails? details)
+    private static ProductCheck CompareProducts(MarketplaceOrder order, ReceiptDetails? details)
     {
         if (details is null || !(order.ItemListComplete ?? order.ItemsComplete) || !(details.ItemListComplete ?? details.ItemsComplete) ||
             order.Items.Count == 0 || details.Items.Count == 0 || order.Items.Concat(details.Items).Any(i => string.IsNullOrWhiteSpace(i.Name)))
-            return ProductComparison.Insufficient;
+            return new(ProductComparison.Insufficient);
         try
         {
             var left = Group(order.Items); var right = Group(details.Items);
-            if (left.Any(p => right.TryGetValue(p.Key, out var quantity) && p.Value.HasValue && quantity.HasValue && p.Value != quantity))
-                return ProductComparison.Contradiction;
+            var sameNames = left.Keys.ToHashSet().SetEquals(right.Keys);
+            foreach (var p in left.OrderBy(p => p.Key, StringComparer.Ordinal))
+            {
+                // A differently named line could be another representation of the same product.
+                // Do not prove a total-quantity difference while such an alias is still possible.
+                if (right.TryGetValue(p.Key, out var quantity) && p.Value.HasValue && quantity.HasValue && p.Value != quantity &&
+                    left.Keys.Concat(right.Keys).Where(k => k != p.Key).All(k => ProductNameEvidence.Difference(p.Key, k) is not null))
+                    return new(ProductComparison.Contradiction, $"Кількість товару «{p.Key}»: {p.Value} у замовленні, {quantity} у чеку.");
+            }
+            if (sameNames)
+            {
+                // With the same literal identities on both sides there are no unmatched aliases.
+                var mismatch = left.OrderBy(p => p.Key, StringComparer.Ordinal)
+                    .FirstOrDefault(p => p.Value.HasValue && right[p.Key].HasValue && p.Value != right[p.Key]);
+                if (mismatch.Key is not null)
+                    return new(ProductComparison.Contradiction, $"Кількість товару «{mismatch.Key}»: {mismatch.Value} у замовленні, {right[mismatch.Key]} у чеку.");
+                return new(left.Any(p => !p.Value.HasValue || !right[p.Key].HasValue) ? ProductComparison.Insufficient : ProductComparison.Match);
+            }
             var onlyLeft = left.Keys.Except(right.Keys).ToArray();
             var onlyRight = right.Keys.Except(left.Keys).ToArray();
-            if (onlyLeft.Length > 0 || onlyRight.Length > 0)
+            if (onlyLeft.Length == 0 || onlyRight.Length == 0) return new(ProductComparison.Insufficient);
+            // Exact common identities have already been accounted for. Exclusion of a remaining
+            // line requires incompatibility with EVERY remaining counterpart, not just one
+            // differently spelled line. No known identity/attribute alignment means insufficient data.
+            foreach (var (source, targets) in new[] { (onlyLeft, onlyRight), (onlyRight, onlyLeft) })
+            foreach (var name in source.Order(StringComparer.Ordinal))
             {
-                if (onlyLeft.Any(l => onlyRight.Any(r => UncertainNames(l, r)))) return ProductComparison.Insufficient;
-                return ProductComparison.Contradiction;
+                var reasons = targets.Order(StringComparer.Ordinal).Select(other => ProductNameEvidence.Difference(name, other)).ToArray();
+                if (reasons.All(reason => reason is not null))
+                    return new(ProductComparison.Contradiction, string.Join(" ", reasons.Distinct()));
             }
-            if (left.Any(p => p.Value.HasValue && right[p.Key].HasValue && p.Value != right[p.Key])) return ProductComparison.Contradiction;
-            return left.Any(p => !p.Value.HasValue || !right[p.Key].HasValue) ? ProductComparison.Insufficient : ProductComparison.Match;
+            return new(ProductComparison.Insufficient);
         }
-        catch (OverflowException) { return ProductComparison.Insufficient; }
+        catch (OverflowException) { return new(ProductComparison.Insufficient); }
     }
 
-    private static Dictionary<string, decimal?> Group(IReadOnlyList<OrderItem> items) => items.GroupBy(i => NormalizeName(i.Name))
+    private static Dictionary<string, decimal?> Group(IReadOnlyList<OrderItem> items) => items.GroupBy(i => ProductNameEvidence.Identity(i.Name))
         .ToDictionary(g => g.Key, g => g.All(i => i.Quantity is > 0m) ? (decimal?)g.Sum(i => i.Quantity!.Value) : null);
-
-    private static bool UncertainNames(string left, string right)
-    {
-        static string LettersAndNumbers(string s) => new(s.Where(char.IsLetterOrDigit).ToArray());
-        static int Script(string s) => (s.Any(c => c is >= 'А' and <= 'Я' or 'І' or 'Ї' or 'Є' or 'Ґ') ? 1 : 0) |
-            (s.Any(c => c is >= 'A' and <= 'Z') ? 2 : 0);
-        if ((Script(left) & Script(right)) == 0) return true;
-        var leftNumbers = Regex.Matches(left, @"\d+(?:[.,/]\d+)*").Select(m => m.Value);
-        var rightNumbers = Regex.Matches(right, @"\d+(?:[.,/]\d+)*").Select(m => m.Value);
-        if (!leftNumbers.SequenceEqual(rightNumbers) && leftNumbers.Any() && rightNumbers.Any()) return false;
-        return left.Contains(right, StringComparison.Ordinal) || right.Contains(left, StringComparison.Ordinal) ||
-            LettersAndNumbers(left) == LettersAndNumbers(right) || left.EndsWith('.') || right.EndsWith('.');
-    }
 
     private static bool HasFiscalEvidence(MarketplaceOrder o) => o.ReceiptIds.Count > 0 || o.FiscalReferences.Count > 0 ||
         o.FiscalReceiptNumbers.Count > 0 || o.FiscalReceiptUrls.Count > 0;
 
-    private static string NormalizeName(string name)
-    {
-        var normalized = new string(name.Normalize(NormalizationForm.FormC).Select(c => c switch
-        {
-            '\u2010' or '\u2011' or '\u2012' or '\u2013' or '\u2014' => '-',
-            '\u2018' or '\u2019' or '\u201a' or '\u201b' => '\'',
-            '\u201c' or '\u201d' or '\u201e' or '\u201f' or '\u00ab' or '\u00bb' => '"',
-            _ => c
-        }).ToArray());
-        return string.Join(" ", normalized.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToUpperInvariant();
-    }
     internal static string NormalizeId(string value) => Guid.TryParse(value, out var id) ? id.ToString("D") : value;
 }

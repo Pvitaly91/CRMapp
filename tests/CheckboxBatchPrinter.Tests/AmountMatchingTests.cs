@@ -9,6 +9,11 @@ internal static class AmountMatchingTests
     private static readonly ReceiptOrderMatchingService Matcher = new();
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
+        ("product regression: translated cable remains a competitor in complete A/B/receipt graph", Run(TranslatedCandidateRegression)),
+        ("product evidence: translations, reordered, abbreviated and mixed-script names stay uncertain", Run(UnknownNames)),
+        ("product evidence: aligned voltage model size color connector and quantity differences explain exclusions", Run(EstablishedDifferences)),
+        ("product evidence: reordered numbers, unaligned characteristics and foreign articles cannot prove difference", Run(UnalignedCharacteristics)),
+        ("product evidence: unknown lines remain possible counterparts in multi-item baskets", Run(UnknownBasketLines)),
         ("amount graph: unique amount without details, prices or SKU and with complete basket", Run(Unique)),
         ("amount graph: products distinguish equal totals, not API order or timestamp", Run(DistinctProducts)),
         ("amount graph: identical buyers' orders stay ambiguous in 2:2, 2:1 and 1:2", Run(Ambiguity)),
@@ -53,14 +58,40 @@ internal static class AmountMatchingTests
         Eq(AutomaticLinkBasis.AmountAndProducts, M([r], [noPrices], D((r, "Товар X")))[r.Id].Basis);
         Eq(AutomaticLinkBasis.UniqueAmount, M([r], [o with { Items = [], ItemsComplete = false }])[r.Id].Basis);
         Yes(M([r], [o with { Currency = "" }])[r.Id].Explanation.Contains("Валюта API не підтверджена"));
-        var wrong = M([r], [o], D((r, "Товар Y")))[r.Id];
+        // Explicit model field, not the formerly unjustified X/Y wording distinction.
+        var wrong = M([r], [O(name: "Товар модель X")], D((r, "Товар модель Y")))[r.Id];
         Eq(ProductComparison.Contradiction, wrong.Products); Eq(ReceiptLinkState.Candidates, wrong.State);
+    }
+
+    private static void TranslatedCandidateRegression()
+    {
+        var receipt = R();
+        MarketplaceOrder Cable(int id, string name) => O(id, name) with
+        {
+            Number = id == 1 ? "A" : "B", Buyer = null,
+            Items = [new(name, "", 1m, 290m, 290m)], ItemListComplete = true
+        };
+        var a = Cable(1, "Кабель живлення");
+        var b = Cable(2, "Кабель");
+        var details = new Dictionary<string, ReceiptDetails>
+        {
+            [receipt.Id] = new(receipt.Id, [new("Кабель питания", "", 1m, 290m, 290m)]) { ItemListComplete = true }
+        };
+        var result = Matcher.MatchAll([receipt], "test-account", [a, b], [], coverageComplete: true, details)[receipt.Id];
+        Console.WriteLine($"  A/B regression: state={result.State}; assigned={result.Order?.Number ?? "none"}; competing orders={result.CompetingOrderCount}");
+        Eq(ReceiptLinkState.Candidates, result.State);
+        Yes(result.Order is null && result.Ambiguous);
+        Eq(2, result.CompetingOrderCount);
+        Eq(2, result.Candidates.Count);
+        var reversed = Matcher.MatchAll([receipt], "test-account", [b, a], [], true, details)[receipt.Id];
+        Eq(result.State, reversed.State); Eq(result.Explanation, reversed.Explanation);
+        Yes(result.GroupOrders.Select(o => o.Key).SequenceEqual(reversed.GroupOrders.Select(o => o.Key)));
     }
 
     private static void DistinctProducts()
     {
-        var rs = new[] { R(), R(2) }; var os = new[] { O(), O(2, "Товар Y") };
-        var ds = D((rs[0], "Товар X"), (rs[1], "Товар Y"));
+        var rs = new[] { R(), R(2) }; var os = new[] { O(1, "Товар модель X"), O(2, "Товар модель Y") };
+        var ds = D((rs[0], "Товар модель X"), (rs[1], "Товар модель Y"));
         for (var i = 0; i < 4; i++)
         {
             var result = M(i % 2 == 0 ? rs : rs.Reverse().ToArray(), i < 2 ? os : os.Reverse().ToArray(), ds);
@@ -138,7 +169,7 @@ internal static class AmountMatchingTests
         var result = M([r], [o], loading: new HashSet<string> { r.Id })[r.Id];
         Eq(ProductComparison.Loading, result.Products); Eq(ReceiptLinkState.Suggested, result.State);
         Eq(ReceiptLinkState.Incomplete, M([r], [o], complete: false)[r.Id].State);
-        var wrong = M([r], [o], D((r, "Товар Y")))[r.Id];
+        var wrong = M([r], [O(name: "Товар модель X")], D((r, "Товар модель Y")))[r.Id];
         Eq(ReceiptLinkState.Candidates, wrong.State);
         var rs = new[] { r, R(2) };
         NoAuto(M(rs, [o], D((r, "Товар X")), loading: new HashSet<string> { rs[1].Id }).Values);
@@ -153,6 +184,107 @@ internal static class AmountMatchingTests
         var split = O() with { Items = [new("Товар X", "one", 0.5m, 10m), new("товар  X", "two", 0.5m, 500m)] };
         Eq(ProductComparison.Match, M([r], [split], D((r, "Товар X")))[r.Id].Products);
     }
+    private static ReceiptOrderMatch Products(string orderName, string receiptName, decimal orderQuantity = 1, decimal receiptQuantity = 1)
+    {
+        var r = R();
+        var order = O(name: orderName) with { Items = [new(orderName, "shop-article", orderQuantity, 290m / orderQuantity, 290m)], ItemListComplete = true };
+        var details = new Dictionary<string, ReceiptDetails>
+        {
+            [r.Id] = new(r.Id, [new(receiptName, "receipt-article", receiptQuantity, 290m / receiptQuantity, 290m)]) { ItemListComplete = true }
+        };
+        return M([r], [order], details)[r.Id];
+    }
+
+    private static void UnknownNames()
+    {
+        foreach (var (order, receipt) in new[]
+        {
+            ("Кабель живлення", "Кабель питания"),
+            ("Червоний кабель USB", "Кабель USB червоний"),
+            ("Кабель живлення USB", "Каб. USB"),
+            ("Кабель USB Type-C", "Кабель USВ Type-C"), // Last character in USВ is Cyrillic.
+            ("Товар X", "Товар Y"), // Different text alone is no longer a proof.
+            ("Кабель", "Cable")
+        })
+        {
+            var result = Products(order, receipt);
+            Eq(ReceiptLinkState.Suggested, result.State); Eq(AutomaticLinkBasis.UniqueAmount, result.Basis);
+            Eq(ProductComparison.Insufficient, result.Products);
+            Yes(!result.Explanation.Contains("Виключено"));
+        }
+        Eq(ProductComparison.Match, Products("Кабель живлення", "  КАБЕЛЬ\u00a0живлення ").Products);
+    }
+
+    private static void EstablishedDifferences()
+    {
+        foreach (var (order, receipt, reason) in new[]
+        {
+            ("Адаптер 12 В", "Адаптер 24 В", "Напруга"),
+            ("Датчик модель DC-100", "Датчик модель DC-200", "Модель"),
+            ("Датчик MODEL DC-12V", "Датчик MODEL DC-24V", "Модель"),
+            ("Кабель розмір 2 м", "Кабель розмір 3 м", "Розмір"),
+            ("Червоний кабель USB", "Кабель USB чорний", "Колір"),
+            ("Кабель USB-A", "Кабель USB-C", "Роз’єм"),
+            ("Адаптер модель X 12 В чорний", "Червоний адаптер 24 В модель Y", "Модель")
+        })
+        {
+            var result = Products(order, receipt);
+            Eq(ReceiptLinkState.Candidates, result.State); Eq(ProductComparison.Contradiction, result.Products);
+            Yes(result.Explanation.Contains("Виключено замовлення") && result.Explanation.Contains(reason));
+            Eq(0, result.CompetingOrderCount); Yes(result.Order is null);
+            var reversed = Products(receipt, order);
+            Eq(result.State, reversed.State); Eq(result.Products, reversed.Products);
+        }
+        var quantity = Products("Кабель", "Кабель", orderQuantity: 2);
+        Eq(ProductComparison.Contradiction, quantity.Products); Yes(quantity.Explanation.Contains("Кількість"));
+    }
+
+    private static void UnalignedCharacteristics()
+    {
+        foreach (var (order, receipt) in new[]
+        {
+            ("Адаптер 12 В розмір 2 м", "Адаптер розмір 2 м 12 В"),
+            ("Датчик 12/24 В", "Датчик 24/12 В"),
+            ("Кабель 2 м 12", "Кабель 12 2 м"),
+            ("Кабель 2 12", "Кабель 12 3"),
+            ("Датчик DC-12V", "Датчик DC-24V"), // Unlabelled code fragment is not an aligned voltage field.
+            ("Датчик ABC-USB-A", "Датчик ABC-USB-C"),
+            ("Датчик ABC-RED", "Датчик ABC-BLACK"),
+            ("Адаптер вхід 12 В вихід 24 В", "Адаптер вихід 12 В вхід 24 В"),
+            ("Кабель USB-A USB-C", "Кабель USB-A USB-B"),
+            ("Адаптер 12 В", "Датчик 24 В"), // No established common product anchor.
+            ("Червоний кабель", "Чорний датчик"),
+            ("Кабель розмір 2 м", "Кабель розмір 200 см")
+        })
+        {
+            var result = Products(order, receipt);
+            Eq(ProductComparison.Insufficient, result.Products); Eq(AutomaticLinkBasis.UniqueAmount, result.Basis);
+        }
+        // Unrelated identifier namespaces are neither identity nor contradiction evidence.
+        var r = R(); var skuOrder = O(name: "Кабель") with { Items = [new("Кабель", "A", 1, 290, 290)] };
+        var details = new Dictionary<string, ReceiptDetails> { [r.Id] = new(r.Id, [new("Кабель", "B", 1, 290, 290)]) };
+        Eq(ProductComparison.Match, M([r], [skuOrder], details)[r.Id].Products);
+        skuOrder = skuOrder with { Items = [new("Кабель живлення", "SAME", 1, 290, 290)] };
+        details[r.Id] = new(r.Id, [new("Кабель питания", "SAME", 1, 290, 290)]);
+        Eq(ProductComparison.Insufficient, M([r], [skuOrder], details)[r.Id].Products);
+    }
+
+    private static void UnknownBasketLines()
+    {
+        var r = R();
+        var order = O() with { Items = [new("Датчик модель X", "", 1, 150, 150), new("Датчик скор.", "", 1, 140, 140)] };
+        var details = new Dictionary<string, ReceiptDetails>
+        {
+            [r.Id] = new(r.Id, [new("Датчик модель Y", "", 1, 150, 150), new("Інший датчик", "", 1, 140, 140)])
+        };
+        Eq(ProductComparison.Insufficient, M([r], [order], details)[r.Id].Products);
+        order = order with { Items = [new("Кабель", "", 2, 145, 290)] };
+        details[r.Id] = new(r.Id, [new("Кабель", "", 1, 150, 150), new("Кабель питания", "", 1, 140, 140)]);
+        Eq(ProductComparison.Insufficient, M([r], [order], details)[r.Id].Products);
+        var competitor = order with { Key = O(2).Key };
+        NoAuto(M([r], [order, competitor], details).Values);
+    }
+
     private static void ReceiptSemantics()
     {
         var r = ReceiptParser.ParsePage($$"""{"results":[{"id":"{{R().Id}}","type":"SELL","status":"DONE","fiscal_date":"{{Time:O}}"}]}""").Single();

@@ -66,6 +66,7 @@ internal static class MarketplaceViewModelTests
         ("STA selected order and receipt require explicit confirmation and survive F5 restart", () => StaAsync(SelectedOrderManualAsync)),
         ("STA unique complete basket suggests a link without writing manual decisions", () => StaAsync(BasketSuggestedUiAsync)),
         ("STA amount matcher workspace tables display unique missing and contradictory products", () => StaAsync(AmountBasisUiAsync)),
+        ("STA translated cable A/B matcher workspace tables stay ambiguous through filters refresh and permutations", () => StaAsync(TranslatedCableUiAsync)),
         ("STA equal sums distinguish products, while buyers and filters do not resolve identical orders", () => StaAsync(AmountGroupsUiAsync)),
         ("STA amount suggestions withdraw on new competitors and incomplete API, manual links survive restart", () => StaAsync(AmountRecomputeUiAsync)),
         ("STA item loading rechecks amount suggestion without changing print selection", () => StaAsync(AmountLoadingUiAsync)),
@@ -1246,7 +1247,7 @@ internal static class MarketplaceViewModelTests
             fixture.Source.Orders = [mode == "missing" ? Order() : BasketOrder()];
             fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 10000)];
             fixture.Details.Values[ReceiptOne] = mode == "contradiction"
-                ? new(ReceiptOne, [new("Кабель інший", "", 1, null)]) : BasketDetails(ReceiptOne);
+                ? new(ReceiptOne, [new("Товар", "", 2, 50, 100)]) : BasketDetails(ReceiptOne);
             var (main, workspace) = fixture.Create();
             await main.RefreshAsync(); await OpenOrdersAsync(main, workspace);
             var row = main.Receipts.Single();
@@ -1255,6 +1256,7 @@ internal static class MarketplaceViewModelTests
             {
                 Equal(ReceiptLinkState.Candidates, row.OrderMatch!.State);
                 Equal("Сума збігається, товари суперечать", row.LinkStatus);
+                True(row.LinkExplanation.Contains("Кількість") && order.LinkExplanation.Contains("Кількість"));
                 True(!order.HasSuggestedLink); True(order.LinkStatus.Contains("суперечать"));
             }
             else
@@ -1275,12 +1277,12 @@ internal static class MarketplaceViewModelTests
         foreach (var distinctProducts in new[] { true, false })
         {
             var fixture = new Fixture();
-            var first = BasketOrder();
+            var first = distinctProducts ? BasketOrder() with { Items = [new("Товар модель X", "", 1, 100, 100)] } : BasketOrder();
             var second = first with { Key = new(MarketplaceKind.Prom, "prom-test", "42"), Number = "ORDER-42", Buyer = new("Інший тестовий покупець"),
-                Items = [new(distinctProducts ? "Кабель" : "Товар", "", 1, null)] };
+                Items = [new(distinctProducts ? "Товар модель Y" : "Товар", "", 1, 100, 100)] };
             fixture.Source.Orders = [second, first];
             fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 10000), Receipt(ReceiptTwo, 2, 10000)];
-            fixture.Details.Values[ReceiptOne] = BasketDetails(ReceiptOne);
+            fixture.Details.Values[ReceiptOne] = new(ReceiptOne, first.Items);
             fixture.Details.Values[ReceiptTwo] = new(ReceiptTwo, second.Items);
             var (main, workspace) = fixture.Create();
             await main.RefreshAsync(); await OpenOrdersAsync(main, workspace);
@@ -1310,6 +1312,46 @@ internal static class MarketplaceViewModelTests
             Equal(distinctProducts ? ReceiptLinkState.Suggested : ReceiptLinkState.Candidates, one.OrderMatch!.State);
             Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
         }
+    }
+
+    private static async Task TranslatedCableUiAsync()
+    {
+        var fixture = new Fixture();
+        var a = Order() with
+        {
+            Number = "A", Total = 290m, Buyer = null,
+            Items = [new("Кабель живлення", "", 1, 290, 290)], ItemListComplete = true
+        };
+        var b = a with { Key = new(MarketplaceKind.Prom, "prom-test", "42"), Number = "B", Items = [new("Кабель", "", 1, 290, 290)] };
+        fixture.Source.Orders = [a, b];
+        fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 29000)];
+        fixture.Details.Values[ReceiptOne] = new(ReceiptOne, [new("Кабель питания", "", 1, 290, 290)]) { ItemListComplete = true };
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync(); await OpenOrdersAsync(main, workspace);
+        void CheckTables()
+        {
+            var receipt = main.Receipts.Single();
+            Equal(ReceiptLinkState.Candidates, receipt.OrderMatch!.State);
+            True(receipt.OrderMatch.Ambiguous && receipt.OrderMatch.Order is null);
+            Equal(2, receipt.OrderMatch.CompetingOrderCount); Equal(2, receipt.OrderMatch.Candidates.Count);
+            True(receipt.LinkStatus.Contains("Неоднозначно"));
+            True(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().All(row =>
+                !row.HasSuggestedLink && !row.HasConfirmedLink && row.LinkedReceipts.Count == 0 && row.LinkStatus.Contains("Неоднозначно")));
+        }
+        CheckTables();
+        workspace.OrderSearch = "B"; // Hidden A must still compete with B.
+        Equal(1, workspace.Orders.Cast<object>().Count());
+        await workspace.AutoMatchAsync(); CheckTables();
+        workspace.OrderSearch = "";
+        fixture.Source.Orders = [b, a];
+        await workspace.SyncAsync(); CheckTables();
+        await main.RefreshAsync(); await main.PrepareOrdersAsync();
+        True(main.Receipts.Single().OrderMatch?.Order is null); // F5 invalidates coverage until a new completed sync.
+        await workspace.SyncAsync(); CheckTables();
+        main.SelectedTabIndex = 0;
+        Equal(1, main.AllReceiptsTab.View.Cast<object>().Count());
+        True(!main.Receipts.Single().IsSelected && !main.Receipts.Single().IsSelectedForOrders);
+        Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
     }
 
     private static async Task AmountRecomputeUiAsync()
@@ -1350,7 +1392,7 @@ internal static class MarketplaceViewModelTests
         var fixture = new Fixture();
         fixture.Source.Orders = [BasketOrder()];
         fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 10000)];
-        fixture.Details.Values[ReceiptOne] = new(ReceiptOne, [new("Кабель", "", 1, null)]);
+        fixture.Details.Values[ReceiptOne] = new(ReceiptOne, [new("Товар", "", 2, 50, 100)]);
         fixture.Details.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
         var (main, workspace) = fixture.Create();
         await main.RefreshAsync();
@@ -1979,6 +2021,34 @@ internal static class MarketplaceViewModelTests
             True(ReferenceEquals(main.PreviewCommand, openReceipt.Command) && ReferenceEquals(amountRow, openReceipt.CommandParameter));
             await DrainDispatcherAsync();
             RenderSyntheticContent(mainWindow, "amount-links.png");
+            _xamlCheckpoint = "translated cable ambiguity in actual compiled tables";
+            var translatedOrder = Order() with
+            {
+                Number = "A", Total = 290m, Buyer = null, ItemListComplete = true,
+                Items = [new("Кабель живлення", "", 1, 290, 290)]
+            };
+            var shortOrder = translatedOrder with { Key = new(MarketplaceKind.Prom, "prom-test", "42"), Number = "B", Items = [new("Кабель", "", 1, 290, 290)] };
+            fixture.Source.Orders = [translatedOrder, shortOrder];
+            fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 29000)];
+            fixture.Details.Values[ReceiptOne] = new(ReceiptOne, [new("Кабель питания", "", 1, 290, 290)]) { ItemListComplete = true };
+            await main.RefreshAsync(); await main.PrepareOrdersAsync(); await workspace.SyncAsync();
+            LayoutContent(mainWindow); await DrainDispatcherAsync();
+            var cableRow = main.Receipts.Single();
+            Equal(ReceiptLinkState.Candidates, cableRow.OrderMatch!.State);
+            Equal(2, cableRow.OrderMatch.CompetingOrderCount); True(cableRow.OrderMatch.Order is null);
+            var receiptLinkColumn = ordersGrid.Columns.Single(c => c.Header?.ToString() == "Зв’язок");
+            ordersGrid.ScrollIntoView(cableRow, receiptLinkColumn); ordersGrid.UpdateLayout();
+            var receiptLinkText = ((TextBlock)receiptLinkColumn.GetCellContent(cableRow)).Text;
+            Equal(cableRow.LinkStatus, receiptLinkText); True(receiptLinkText.Contains("Неоднозначно"));
+            var orderLinkColumn = marketplaceOrdersGrid.Columns.Single(c => c.Header?.ToString() == "Зв’язок із чеками");
+            foreach (var cableOrder in workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Where(o => o.Key == translatedOrder.Key || o.Key == shortOrder.Key))
+            {
+                True(!cableOrder.HasSuggestedLink && !cableOrder.HasConfirmedLink);
+                marketplaceOrdersGrid.ScrollIntoView(cableOrder, orderLinkColumn); marketplaceOrdersGrid.UpdateLayout();
+                var orderLinkText = ((TextBlock)orderLinkColumn.GetCellContent(cableOrder)).Text;
+                Equal(cableOrder.LinkStatus, orderLinkText); True(orderLinkText.Contains("Неоднозначно"));
+            }
+            Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
             True(bindingFailures.Messages.Count == 0, "Compiled XAML binding errors: " + string.Join("\n", bindingFailures.Messages));
         }
         finally

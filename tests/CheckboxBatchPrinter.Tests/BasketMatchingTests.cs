@@ -160,7 +160,7 @@ internal static class BasketMatchingTests
         Equal(ReceiptLinkState.Suggested, Match([normalized], details: details).State);
         foreach (var changed in new[]
                  {
-                     "PIR DC-9/60 \"12/48V\" O'Ring", // Different model digits.
+                     "PIR DC-9/60 \"12/48V\" O'Ring", // Explicitly aligned voltage differs.
                      "PIR DC9/60 \"12/24V\" O'Ring",  // Punctuation is not removed.
                      "PIR DC-9-60 \"12/24V\" O'Ring", // Slash is not a dash variant.
                      "PIR DC-9/60 12/24V O'Ring",      // Quotes are normalized, not removed.
@@ -170,7 +170,7 @@ internal static class BasketMatchingTests
         {
             var different = await ParsePromProductsAsync([Products[0] with { Name = changed }, Products[1]]);
             var result = Match([different], details: details);
-            if (changed.Contains("12/48V") || changed.Contains("DC-9-60")) NotSuggested(result);
+            if (changed.Contains("12/48V")) NotSuggested(result);
             else
             {
                 Equal(ReceiptLinkState.Suggested, result.State);
@@ -193,7 +193,8 @@ internal static class BasketMatchingTests
         // Even a rejected/suppressed competitor is not evidence the remaining receipt owns an order.
         NotSuggested(Match(scope: scope, detailsScope: available, decisions:
             [new() { AccountContext = "account", ReceiptId = OtherId, SuppressAutomatic = true, RejectedOrders = [Order().Key] }]));
-        available[OtherId] = Details(OtherId, [new("Інший товар", "sku-1", 1m, 250m, 250m)]);
+        // A proven quantity difference, not merely an unfamiliar product name.
+        available[OtherId] = Details(OtherId, [new("Датчик руху", "sku-1", 1m, 200m, 200m), Products[1]]);
         Equal(ReceiptLinkState.Suggested, Match(scope: scope, detailsScope: available).State);
         available[OtherId] = available[OtherId] with { ItemsComplete = false, ItemListComplete = false };
         NotSuggested(Match(scope: scope, detailsScope: available));
@@ -231,15 +232,16 @@ internal static class BasketMatchingTests
             [new("Датчик", "sku-1", 2m, 100m, 200m), Products[1]],
             [new("Датчик-руху", "sku-1", 2m, 100m, 200m), Products[1]],
             [Products[0]],
-            [Products[0], Products[1], new("extra", "sku-x", 1m, 0m, 0m)],
+            [Products[0], Products[1], new("Датчик руху", "sku-x", 1m, 0m, 0m)],
             [Products[0] with { Quantity = null }, Products[1]],
             [Products[0] with { UnitPrice = null }, Products[1]]
         };
         for (var i = 0; i < variants.Length; i++)
         {
             var result = Match([Order() with { Items = variants[i] }]);
-            if (i is 0 or 1 or 4 or 5) NotSuggested(result);
+            if (i is 1 or 4 or 5) NotSuggested(result);
             else Equal(ReceiptLinkState.Suggested, result.State);
+            if (i == 0) Equal(ProductComparison.Insufficient, result.Products); // Unknown text is not a proved difference.
         }
         Equal(ReceiptLinkState.Suggested, Match(details: Details() with { ItemsComplete = false, ItemListComplete = false }).State);
         Equal(AutomaticLinkBasis.UniqueAmount, Match(details: Details(OtherId)).Basis);
@@ -301,7 +303,7 @@ internal static class BasketMatchingTests
         Equal(ReceiptLinkState.Suggested, Match([Order() with { Items = Products.Select(p => p with { Total = null }).ToArray() }]).State);
         Equal(ReceiptLinkState.Suggested, Match([Order() with { Items = [new("Датчик руху", "sku-1", 1m, 100m, 100m), new("Датчик руху", "sku-1", 1m, 100m, 100m), Products[1]] }]).State);
         NotSuggested(Match([Order() with { Items = [Products[0], new("Датчик руху", "sku-1", 1m, 100m, 100m), Products[1]] }]));
-        NotSuggested(Match([Order() with { Items = [Products[0], Products[1], new("extra", "sku-extra", 1m, 0m, 0m)] }]));
+        NotSuggested(Match([Order() with { Items = [Products[0], Products[1], new("Датчик руху", "sku-extra", 1m, 0m, 0m)] }]));
         NotSuggested(Match([Order() with { Items = [new("Датчик руху", "sku-1", decimal.MaxValue, 100m), Products[1]] }]));
         return Task.CompletedTask;
     }
