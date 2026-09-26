@@ -83,7 +83,7 @@ public sealed record MarketplaceSnapshot(IReadOnlyList<MarketplaceOrder> Orders,
 
 public enum ReceiptLinkState { NotChecked, Exact, Manual, Candidates, NotFound, Conflict, Incomplete, Suggested }
 public enum ProductComparison { Match, Contradiction, Insufficient, Loading }
-public enum AutomaticLinkBasis { None, UniqueAmount, AmountAndProducts }
+public enum AutomaticLinkBasis { None, UniqueAmount, AmountAndProducts, AmountAndQuantity }
 public sealed record AmountMatchScope(int HistoryDays = 30, MarketplaceRange? OrderRange = null, string Description = "");
 public sealed record ReceiptOrderMatch(ReceiptLinkState State, MarketplaceOrder? Order, string Explanation,
     IReadOnlyList<MarketplaceOrder> Candidates)
@@ -99,8 +99,12 @@ public sealed record ReceiptOrderMatch(ReceiptLinkState State, MarketplaceOrder?
     {
         ReceiptLinkState.Manual => "Підтверджено вручну",
         ReceiptLinkState.Exact => "Точний фіскальний зв’язок",
-        ReceiptLinkState.Suggested => Basis == AutomaticLinkBasis.AmountAndProducts
-            ? "Автозв’язок: сума й товари" : "Автозв’язок: унікальна сума",
+        ReceiptLinkState.Suggested => Basis switch
+        {
+            AutomaticLinkBasis.AmountAndProducts => "Автозв’язок: сума й товари",
+            AutomaticLinkBasis.AmountAndQuantity => "Автозв’язок: сума й кількість товарів",
+            _ => "Автозв’язок: унікальна сума"
+        },
         ReceiptLinkState.Incomplete => "Перевірка неповна",
         ReceiptLinkState.Conflict => "Конфлікт фіскальних даних",
         ReceiptLinkState.Candidates when Ambiguous => "Неоднозначно: кілька замовлень / чеків",

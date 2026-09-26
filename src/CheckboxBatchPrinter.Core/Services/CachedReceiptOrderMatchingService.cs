@@ -8,7 +8,7 @@ namespace CheckboxBatchPrinter.Core.Services;
 /// <summary>Memoizes complete graph results, never individual edges that could hide a new competitor.</summary>
 public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider = null)
 {
-    public const string AlgorithmVersion = "same-kyiv-day-product-evidence-v1";
+    public const string AlgorithmVersion = "same-kyiv-day-product-quantity-v2";
     public const int MaximumDetails = 5000;
     public const int MaximumSnapshots = 8;
     private const int MaximumMatchesPerSnapshot = 5000;

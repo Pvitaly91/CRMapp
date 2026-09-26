@@ -239,9 +239,15 @@ internal static class BasketMatchingTests
         for (var i = 0; i < variants.Length; i++)
         {
             var result = Match([Order() with { Items = variants[i] }]);
-            if (i is 1 or 4 or 5) NotSuggested(result);
+            if (i is 0 or 1 or 4 or 5) NotSuggested(result);
             else Equal(ReceiptLinkState.Suggested, result.State);
-            if (i == 0) Equal(ProductComparison.Insufficient, result.Products); // Unknown text is not a proved difference.
+            if (i == 0)
+            {
+                // Unknown text alone is still insufficient. This complete basket now has
+                // a concrete count difference: 1 unit versus the receipt's 3 units.
+                Equal(ProductComparison.Contradiction, result.Products);
+                True(result.Explanation.Contains("Кількість товарних одиниць"));
+            }
         }
         Equal(ReceiptLinkState.Suggested, Match(details: Details() with { ItemsComplete = false, ItemListComplete = false }).State);
         Equal(AutomaticLinkBasis.UniqueAmount, Match(details: Details(OtherId)).Basis);

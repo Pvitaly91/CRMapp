@@ -6,9 +6,16 @@ namespace CheckboxBatchPrinter.Core.Services;
 internal static class BasketReceiptMatching
 {
     private sealed record ProductCheck(ProductComparison State, string Reason = "");
-    private sealed record Edge(ReceiptRecord Receipt, MarketplaceOrder Order, ProductCheck Check, string Issue)
+    private sealed record Edge(ReceiptRecord Receipt, MarketplaceOrder Order, ProductCheck Check, string Issue,
+        decimal? OrderQuantity, decimal? ReceiptQuantity)
     {
         public ProductComparison Products => Check.State;
+        // Count is a secondary hypothesis only for complete, ordinary baskets. Missing or
+        // adjusted documents remain competitors, not evidence in favor of another order.
+        public bool QuantityDiffers => Issue.Length == 0 && OrderQuantity.HasValue && ReceiptQuantity.HasValue && OrderQuantity != ReceiptQuantity;
+        public bool Excluded => Products == ProductComparison.Contradiction || QuantityDiffers;
+        public string ExclusionReason => Products == ProductComparison.Contradiction ? Check.Reason :
+            $"Кількість товарних одиниць у повних кошиках: {OrderQuantity} у замовленні, {ReceiptQuantity} у чеку.";
     }
 
     internal static void Apply(IDictionary<string, ReceiptOrderMatch> matches, IReadOnlyList<ReceiptRecord> receipts,
@@ -31,11 +38,14 @@ internal static class BasketReceiptMatching
             if (!PotentialPair(receipt, order, scope)) continue;
             details.TryGetValue(NormalizeId(receipt.Id), out var detail);
             var products = loading?.Contains(NormalizeId(receipt.Id)) == true ? new(ProductComparison.Loading) : CompareProducts(order, detail);
-            edges.Add(new(receipt, order, products, AmountIssue(receipt, order, detail)));
+            var quantitiesLoading = products.State == ProductComparison.Loading;
+            edges.Add(new(receipt, order, products, AmountIssue(receipt, order, detail),
+                quantitiesLoading ? null : CountUnits(order.Items, order.ItemListComplete ?? order.ItemsComplete),
+                quantitiesLoading || detail is null ? null : CountUnits(detail.Items, detail.ItemListComplete ?? detail.ItemsComplete)));
         }
         // Missing details, special totals and rejected hypotheses stay competitors. Only a proven
-        // product contradiction removes an edge. No assigned suggestion is removed on a second pass.
-        var possible = edges.Where(e => e.Products != ProductComparison.Contradiction).ToArray();
+        // product/count contradiction removes an edge. No assigned suggestion is removed on a second pass.
+        var possible = edges.Where(e => !e.Excluded).ToArray();
         var byReceipt = possible.ToLookup(e => e.Receipt.Id);
         var byOrder = possible.ToLookup(e => e.Order.Key);
         var rawByReceipt = edges.ToLookup(e => e.Receipt.Id);
@@ -78,8 +88,13 @@ internal static class BasketReceiptMatching
                 receipt.DisplayDate.HasValue && selected.Order.CreatedAt.HasValue && !HasFiscalEvidence(selected.Order) &&
                 decision?.SuppressAutomatic != true && decision?.RejectedOrders.Contains(selected.Order.Key) != true;
             var productState = selected?.Products ?? (options.Length == 0 ? ProductComparison.Contradiction : ProductComparison.Insufficient);
+            var resolvedByQuantity = selected is not null && selected.OrderQuantity.HasValue && selected.OrderQuantity == selected.ReceiptQuantity &&
+                edges.Any(e => e.QuantityDiffers && (e.Receipt.Id == receipt.Id || e.Order.Key == selected.Order.Key));
+            var basis = !canSuggest ? AutomaticLinkBasis.None : productState == ProductComparison.Match ? AutomaticLinkBasis.AmountAndProducts :
+                resolvedByQuantity ? AutomaticLinkBasis.AmountAndQuantity : AutomaticLinkBasis.UniqueAmount;
             var message = canSuggest
-                ? (productState == ProductComparison.Match ? "За сумою й товарами за один день. " : "За сумою за один день: взаємно унікальна пара. ") +
+                ? (productState == ProductComparison.Match ? "За сумою й товарами за один день. " :
+                    resolvedByQuantity ? "За сумою та кількістю товарів за один день: взаємно унікальна пара. " : "За сумою за один день: взаємно унікальна пара. ") +
                     "Це ймовірний висновок за даними документів, не фіскальне підтвердження спільного UUID / fiscal_code. "
                 : ambiguous ? $"Неоднозначна група: замовлень — {componentOrders.Count}, чеків — {componentReceipts.Count}. Потрібен ручний вибір пари. "
                 : options.Length == 0 ? "Сума збігається, товари суперечать. Автопризначення заблоковано. "
@@ -87,10 +102,12 @@ internal static class BasketReceiptMatching
             if (!coverageComplete) message = "Перевірка неповна: нові автозв’язки не призначаються. " + message;
             if (productState == ProductComparison.Loading) message += "Товарні дані ще завантажуються; зв’язок буде перевірено повторно. ";
             else if (productState == ProductComparison.Insufficient) message += "Товари: недостатньо даних для перевірки повного кошика; невстановлена відповідність назв не є суперечністю. ";
-            foreach (var excluded in raw.Where(e => e.Products == ProductComparison.Contradiction)
+            if (selected?.OrderQuantity is { } units && selected.ReceiptQuantity == units)
+                message += $"Кількість товарних одиниць збігається: {units}. Це не доводить тотожність назв товарів. ";
+            foreach (var excluded in raw.Where(e => e.Excluded)
                          .OrderBy(e => e.Order.Key.Marketplace).ThenBy(e => e.Order.Key.ConnectionId, StringComparer.Ordinal)
                          .ThenBy(e => e.Order.Key.OrderId, StringComparer.Ordinal))
-                message += $"Виключено замовлення №{excluded.Order.Number}: {excluded.Check.Reason} ";
+                message += $"Виключено замовлення №{excluded.Order.Number}: {excluded.ExclusionReason} ";
             if (raw.Any(e => string.IsNullOrWhiteSpace(e.Order.Currency))) message += "Валюта API не підтверджена. ";
             if (decision?.SuppressAutomatic == true) message += "Автоприв’язку вимкнено вручну. ";
             if (selected is not null && HasFiscalEvidence(selected.Order)) message += "Фіскальні ключі не підтвердили цю пару. ";
@@ -103,7 +120,7 @@ internal static class BasketReceiptMatching
             matches[receipt.Id] = new(canSuggest ? ReceiptLinkState.Suggested : coverageComplete ? ReceiptLinkState.Candidates : ReceiptLinkState.Incomplete,
                 canSuggest ? selected!.Order : null, message, candidates)
             {
-                Basis = canSuggest ? productState == ProductComparison.Match ? AutomaticLinkBasis.AmountAndProducts : AutomaticLinkBasis.UniqueAmount : AutomaticLinkBasis.None,
+                Basis = basis,
                 Products = productState, Ambiguous = ambiguous, Scope = scopeText,
                 CompetingOrderCount = componentOrders.Count,
                 GroupOrders = freeOrders.Where(o => componentOrders.Contains(o.Key)).OrderBy(o => o.Key.Marketplace)
@@ -111,6 +128,16 @@ internal static class BasketReceiptMatching
                 CompetingReceiptIds = componentReceipts.Order(StringComparer.Ordinal).ToArray()
             };
         }
+    }
+
+    private static decimal? CountUnits(IReadOnlyList<OrderItem> items, bool complete)
+    {
+        // Raw line counts change when identical goods are split/merged. Sum normalized
+        // quantities instead. Fractional/unknown quantities have no reliable piece count.
+        if (!complete || items.Count == 0 || items.Any(i => i.Quantity is not > 0m || decimal.Truncate(i.Quantity.Value) != i.Quantity.Value))
+            return null;
+        try { return items.Sum(i => i.Quantity!.Value); }
+        catch (OverflowException) { return null; }
     }
 
     internal static bool PotentialPair(ReceiptRecord receipt, MarketplaceOrder order, AmountMatchScope scope) =>
