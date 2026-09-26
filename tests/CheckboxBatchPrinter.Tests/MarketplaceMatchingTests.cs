@@ -52,9 +52,9 @@ internal static class MarketplaceMatchingTests
     {
         var orders = new[]
         {
-            Order("42", created: Now.AddDays(-12)),
-            Order("42", MarketplaceKind.Rozetka, RozetkaId, created: Now.AddDays(-12)),
-            Order("42", connectionId: "48234d9d36ce4ac8a95d4b9a2c3f425c", created: Now.AddDays(-12))
+            Order("42", created: Now.AddHours(-1)),
+            Order("42", MarketplaceKind.Rozetka, RozetkaId, created: Now.AddHours(-1)),
+            Order("42", connectionId: "48234d9d36ce4ac8a95d4b9a2c3f425c", created: Now.AddHours(-1))
         };
         var matcher = new ReceiptOrderMatchingService();
         var result = matcher.Match(Receipt(), "cashier-a", orders, [], true);
@@ -262,7 +262,7 @@ internal static class MarketplaceMatchingTests
         DateTimeOffset? created = null, string[]? ids = null, DateTimeOffset? retrieved = null) => new()
     {
         Key = new(marketplace, connectionId, id), Number = id, Total = total, Currency = currency,
-        CreatedAt = created ?? Now.AddDays(-1), ReceiptIds = ids ?? [], RetrievedAtUtc = retrieved ?? Now,
+        CreatedAt = created ?? Now.AddHours(-1), ReceiptIds = ids ?? [], RetrievedAtUtc = retrieved ?? Now,
         Buyer = new("Buyer test only", "+380000000000"), Items = [new("Test item", "sku-test-only", 1m, total)]
     };
 

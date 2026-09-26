@@ -4,6 +4,7 @@ public static class DateRangeBuilder
 {
     public static TimeZoneInfo KyivZone { get; } = TimeZoneInfo.FindSystemTimeZoneById("FLE Standard Time");
     public static DateTime TodayKyiv => TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, KyivZone).Date;
+    public static DateOnly KyivDate(DateTimeOffset value) => DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(value, KyivZone).DateTime);
     public static (DateTimeOffset From, DateTimeOffset ToExclusive) ForLocalDates(DateOnly from, DateOnly to, TimeZoneInfo? timeZone = null)
     {
         if (to < from)

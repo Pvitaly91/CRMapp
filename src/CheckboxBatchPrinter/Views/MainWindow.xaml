@@ -217,7 +217,7 @@
                                         ToolTip="Виберіть замовлення ліворуч та чек праворуч. Прив’язку буде збережено лише після підтвердження." />
                                 <Button x:Name="MatchProductsButton" Content="Зіставити за сумою й товарами" Padding="8,6" VerticalAlignment="Center"
                                         Command="{Binding Marketplace.AutoMatchCommand}"
-                                        ToolTip="Взаємно унікальна сума — ймовірний автозв’язок. Товари перевіряють пару та розрізняють однакові суми; відсутні деталі не усувають конкурентів." />
+                                        ToolTip="Взаємно унікальна сума в той самий календарний день за Києвом — ймовірний автозв’язок. Товари перевіряють пару та розрізняють однакові суми; відсутні деталі не усувають конкурентів." />
                             </StackPanel>
                             </ScrollViewer>
                             <DataGrid x:Name="MarketplaceOrdersGrid" Grid.Row="1" ItemsSource="{Binding Marketplace.Orders}"

@@ -124,7 +124,7 @@ public sealed class ReceiptOrderMatchingService
             candidates = candidates.Concat(available.Where(order => !rejected.Contains(order.Key) &&
                     order.Total == receipt.TotalSum && (string.IsNullOrWhiteSpace(order.Currency) ||
                         string.Equals(order.Currency, "UAH", StringComparison.OrdinalIgnoreCase)) &&
-                    order.CreatedAt is { } created && created >= receiptDate.AddDays(-30) && created <= receiptDate))
+                    order.CreatedAt is { } created && BasketReceiptMatching.SameDayBeforeReceipt(created, receiptDate)))
                 .DistinctBy(order => order.Key).OrderByDescending(order => order.CreatedAt).ToArray();
         }
 
@@ -139,7 +139,9 @@ public sealed class ReceiptOrderMatchingService
             decision?.SuppressAutomatic == true
                 ? "Прив’язку знято вручну; автоматичне відновлення вимкнено." +
                     (coverageComplete ? "" : " Перевірка діапазону неповна.")
-                : coverageComplete ? "Не знайдено у перевіреному діапазоні" : "Перевірка неповна / API недоступне", []);
+                : coverageComplete ? receipt.Type == ReceiptTypes.Sell
+                    ? "Не знайдено замовлення за сумою в той самий день (Київ)."
+                    : "Не знайдено у перевіреному діапазоні" : "Перевірка неповна / API недоступне", []);
     }
 
     private static bool SameReceiptId(string left, string right) =>

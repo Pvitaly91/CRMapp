@@ -20,7 +20,9 @@ internal static class MarketplaceSyncTests
         ("sync: repeated refresh upserts and updates older orders by exact ID", RepeatedRefreshAsync),
         ("sync: platform/account keys remain isolated during detail refresh", CompoundKeysAsync),
         ("sync: partial pages and exceptions never advance last successful checkpoint", PartialFailureAsync),
-        ("sync: old-order safety limit is visible and not marked complete", SafetyLimitAsync),
+        ("sync: irrelevant dated history does not block current range completeness", HistoricalCacheScopeAsync),
+        ("sync: durable outside-range order failures still block completeness", DurableHistoryFailureAsync),
+        ("sync: relevant unknown-date and durable order safety limit stays incomplete", SafetyLimitAsync),
         ("sync: cancellation releases gate; concurrent duplicate sync is rejected", CancellationAndConcurrencyAsync),
         ("sync: Kyiv day boundaries honor DST and configurable lookback", DateRangeAsync),
         ("transport: only documented read/auth requests reach HTTP handler", ReadOnlyWhitelistAsync),
@@ -119,22 +121,86 @@ internal static class MarketplaceSyncTests
         Equal(previousSuccess, oldUnavailable.States.Single().LastSuccessUtc);
     }
 
-    private static async Task SafetyLimitAsync()
+    private static async Task HistoricalCacheScopeAsync()
     {
-        var lastSuccess = Now.AddDays(-1);
-        var old = Enumerable.Range(1, 501).Select(i => Order(i.ToString(), "old", created: Now.AddDays(-100))).ToArray();
-        var cache = new MemoryCache(new(old, [new(PromId, Range, true, lastSuccess, "", lastSuccess)]));
+        // Reproduce a large previous snapshot: these older rows remain visible, but they
+        // cannot be competitors for documents in this requested range.
+        var old = Enumerable.Range(1, 645).Select(i => Order(i.ToString(), "old", created: Now.AddDays(-100))).ToArray();
+        var current = Order("1000", "current");
+        var pastBoundary = Order("1001", "before", created: Range.From.AddTicks(-1));
+        var endBoundary = Order("1002", "after", created: Range.ToExclusive);
+        var cache = new MemoryCache(new([.. old, pastBoundary, endBoundary], []));
         var client = new FakeClient(MarketplaceKind.Prom)
         {
-            Detail = (_, id, _) => Task.FromResult<MarketplaceOrder?>(Order(id, "updated", created: Now.AddDays(-100)))
+            Fetch = (_, _) => Task.FromResult(new OrdersFetchResult([current], true)),
+            Detail = (_, _, _) => throw new HttpRequestException("Unrelated dated history must not be requested.")
         };
-        var result = await new MarketplaceSyncService([client], new MemorySecrets(), cache, new Clock())
-            .SynchronizeAsync(Settings(), Range, []);
-        Equal(500, client.DetailIds.Count);
-        Equal(501, result.Orders.Count);
+        var service = new MarketplaceSyncService([client], new MemorySecrets(), cache, new Clock());
+        var result = await service.SynchronizeAsync(Settings(), Range, []);
+        Equal(0, client.DetailIds.Count);
+        Equal(648, result.Orders.Count);
+        True(old.All(o => result.Orders.Contains(o)));
+        True(result.States.Single().Complete);
+        Equal(Now, result.States.Single().LastSuccessUtc);
+
+        // Missing rows at the inclusive start and with an unknown date remain relevant.
+        var rangeStart = Order("1003", "start", created: Range.From);
+        var unknownDate = Order("1004", "unknown") with { CreatedAt = null };
+        await cache.SaveAsync(new([.. result.Orders, rangeStart, unknownDate], result.States));
+        client.Detail = (_, id, _) => Task.FromResult<MarketplaceOrder?>(
+            id == rangeStart.Key.OrderId ? rangeStart : unknownDate);
+        result = await service.SynchronizeAsync(Settings(), Range, []);
+        True(client.DetailIds.ToHashSet().SetEquals([rangeStart.Key.OrderId, unknownDate.Key.OrderId]));
+        True(result.States.Single().Complete);
+        Equal(650, result.Orders.Count);
+    }
+
+    private static async Task DurableHistoryFailureAsync()
+    {
+        var lastSuccess = Now.AddDays(-1);
+        var old = Order("1", "old", created: Now.AddDays(-100));
+        var cache = new MemoryCache(new([old], [new(PromId, Range, true, lastSuccess, "", lastSuccess)]));
+        var client = new FakeClient(MarketplaceKind.Prom)
+        {
+            Detail = (_, _, _) => throw new HttpRequestException("Linked order unavailable.")
+        };
+        var service = new MarketplaceSyncService([client], new MemorySecrets(), cache, new Clock());
+        var result = await service.SynchronizeAsync(Settings(), Range, [old.Key]);
+        Equal(old.Key.OrderId, client.DetailIds.Single());
         True(!result.States.Single().Complete);
-        True(result.States.Single().Message.Contains("500", StringComparison.Ordinal));
         Equal(lastSuccess, result.States.Single().LastSuccessUtc);
+        Equal(old, result.Orders.Single());
+
+        client.Detail = (_, _, _) => Task.FromResult<MarketplaceOrder?>(old with { Status = "updated" });
+        result = await service.SynchronizeAsync(Settings(), Range, [old.Key]);
+        True(result.States.Single().Complete);
+        Equal("updated", result.Orders.Single().Status);
+        Equal(Now, result.States.Single().LastSuccessUtc);
+    }
+
+    private static async Task SafetyLimitAsync()
+    {
+        foreach (var mode in new[] { "in-range", "unknown-date", "durable-history" })
+        {
+            var lastSuccess = Now.AddDays(-1);
+            var old = Enumerable.Range(1, 501).Select(i => Order(i.ToString(), "old") with
+            {
+                CreatedAt = mode == "unknown-date" ? null : mode == "durable-history" ? Now.AddDays(-100) : Now
+            }).ToArray();
+            var cache = new MemoryCache(new(old, [new(PromId, Range, true, lastSuccess, "", lastSuccess)]));
+            var client = new FakeClient(MarketplaceKind.Prom)
+            {
+                Detail = (_, id, _) => Task.FromResult<MarketplaceOrder?>(old.Single(o => o.Key.OrderId == id) with { Status = "updated" })
+            };
+            var known = mode == "durable-history" ? old.Select(o => o.Key).ToArray() : [];
+            var result = await new MarketplaceSyncService([client], new MemorySecrets(), cache, new Clock())
+                .SynchronizeAsync(Settings(), Range, known);
+            Equal(500, client.DetailIds.Count);
+            Equal(501, result.Orders.Count);
+            True(!result.States.Single().Complete);
+            True(result.States.Single().Message.Contains("500", StringComparison.Ordinal));
+            Equal(lastSuccess, result.States.Single().LastSuccessUtc);
+        }
     }
 
     private static async Task CancellationAndConcurrencyAsync()

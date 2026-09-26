@@ -40,8 +40,9 @@ internal static class BasketReceiptMatching
         var byOrder = possible.ToLookup(e => e.Order.Key);
         var rawByReceipt = edges.ToLookup(e => e.Receipt.Id);
         var components = new Dictionary<string, (HashSet<OrderKey> Orders, HashSet<string> Receipts)>();
-        var scopeText = scope.Description.Length > 0 ? scope.Description :
-            $"Область: усі {receipts.Count} завантажених чеків і {orders.Count} замовлень; історія до дати чека — {scope.HistoryDays} днів.";
+        var scopeText = (scope.Description.Length > 0 ? scope.Description :
+            $"Область: усі {receipts.Count} завантажених чеків і {orders.Count} замовлень.") +
+            " Автозіставлення за сумою: одна календарна дата чека й замовлення (Київ); замовлення не пізніше чека.";
         foreach (var receipt in freeReceipts)
         {
             if (matches[receipt.Id].State == ReceiptLinkState.Conflict ||
@@ -53,7 +54,7 @@ internal static class BasketReceiptMatching
                 var remaining = previous.Candidates.Where(o => !reservedOrders.Contains(o.Key) && PotentialPair(receipt, o, scope)).ToArray();
                 if (previous.State == ReceiptLinkState.Candidates && remaining.Length == 0)
                     matches[receipt.Id] = new(coverageComplete ? ReceiptLinkState.NotFound : ReceiptLinkState.Incomplete, null,
-                        "Вільного замовлення не знайдено: перевірено також підтверджені прив’язки поза списком. " + scopeText, []);
+                        "Вільного замовлення за сумою на дату чека не знайдено; перевірено також підтверджені прив’язки поза списком. " + scopeText, []);
                 continue;
             }
             var options = byReceipt[receipt.Id].ToArray();
@@ -78,7 +79,7 @@ internal static class BasketReceiptMatching
                 decision?.SuppressAutomatic != true && decision?.RejectedOrders.Contains(selected.Order.Key) != true;
             var productState = selected?.Products ?? (options.Length == 0 ? ProductComparison.Contradiction : ProductComparison.Insufficient);
             var message = canSuggest
-                ? (productState == ProductComparison.Match ? "За сумою й товарами. " : "За сумою: взаємно унікальна пара. ") +
+                ? (productState == ProductComparison.Match ? "За сумою й товарами за один день. " : "За сумою за один день: взаємно унікальна пара. ") +
                     "Це ймовірний висновок за даними документів, не фіскальне підтвердження спільного UUID / fiscal_code. "
                 : ambiguous ? $"Неоднозначна група: замовлень — {componentOrders.Count}, чеків — {componentReceipts.Count}. Потрібен ручний вибір пари. "
                 : options.Length == 0 ? "Сума збігається, товари суперечать. Автопризначення заблоковано. "
@@ -117,8 +118,13 @@ internal static class BasketReceiptMatching
         (!receipt.TotalKnown || order.Total is null || order.Total == receipt.TotalSum) &&
         (order.CreatedAt is not { } created ||
             (scope.OrderRange is not { } range || created >= range.From && created < range.ToExclusive) &&
-            (receipt.DisplayDate is not { } date || created <= date &&
-                (scope.OrderRange is not null || created >= date.AddDays(-scope.HistoryDays))));
+            (receipt.DisplayDate is not { } date || SameDayBeforeReceipt(created, date)));
+
+    // Compare calendar dates in the business timezone, not the PC timezone or the API's
+    // textual offset. Unknown dates are handled by PotentialPair/AmountIssue and stay
+    // competitors. Known dates must satisfy both the same-day and not-after-receipt rules.
+    internal static bool SameDayBeforeReceipt(DateTimeOffset created, DateTimeOffset receiptDate) =>
+        created <= receiptDate && DateRangeBuilder.KyivDate(created) == DateRangeBuilder.KyivDate(receiptDate);
 
     private static string AmountIssue(ReceiptRecord receipt, MarketplaceOrder order, ReceiptDetails? details)
     {

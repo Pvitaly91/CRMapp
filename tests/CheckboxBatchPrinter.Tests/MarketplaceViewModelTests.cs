@@ -70,7 +70,8 @@ internal static class MarketplaceViewModelTests
         ("STA equal sums distinguish products, while buyers and filters do not resolve identical orders", () => StaAsync(AmountGroupsUiAsync)),
         ("STA amount suggestions withdraw on new competitors and incomplete API, manual links survive restart", () => StaAsync(AmountRecomputeUiAsync)),
         ("STA item loading rechecks amount suggestion without changing print selection", () => StaAsync(AmountLoadingUiAsync)),
-        ("STA configured history instead of fixed thirty days controls amount links", () => StaAsync(AmountHistoryUiAsync)),
+        ("STA history stays visible while amount links use the same Kyiv calendar day", () => StaAsync(AmountHistoryUiAsync)),
+        ("STA September26 amounts355 and1400 link after completed sync without historical competitors", () => StaAsync(SameDayAmountsUiAsync)),
         ("STA duplicate orders or competing receipts cannot create basket suggestions", () => StaAsync(BasketAmbiguousUiAsync)),
         ("STA cached and partial marketplace orders remain visible without claiming checked links", () => StaAsync(PartialOrderPanelAsync)),
         ("STA old account basket detail completion cannot populate the new account", () => StaAsync(StaleBasketDetailsAsync)),
@@ -1413,17 +1414,75 @@ internal static class MarketplaceViewModelTests
     {
         var fixture = new Fixture();
         fixture.Settings.Market.HistoryDays = 60;
-        fixture.Source.Orders = [Order() with { CreatedAt = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.FromHours(3)) }];
+        var historical = Order() with { CreatedAt = new DateTimeOffset(2026, 8, 1, 10, 0, 0, TimeSpan.FromHours(3)) };
+        var sameDay = Order() with { Key = new(MarketplaceKind.Prom, "prom-test", "42"), Number = "SAME-DAY" };
+        fixture.Source.Orders = [historical, sameDay];
         fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 10000)];
         var (main, workspace) = fixture.Create();
         await main.RefreshAsync(); await OpenOrdersAsync(main, workspace);
         var row = main.Receipts.Single();
         Equal(ReceiptLinkState.Suggested, row.OrderMatch!.State);
+        Equal(sameDay.Key, row.OrderMatch.Order!.Key);
+        Equal(2, workspace.Orders.Cast<object>().Count());
         True(row.LinkExplanation.Contains("25.07.2026") && row.LinkExplanation.Contains("23.09.2026"));
+        True(row.LinkExplanation.Contains("той самий календарний день"));
         fixture.Settings.Market.HistoryDays = 10;
         await workspace.SyncAsync();
-        True(row.OrderMatch.Order is null);
+        Equal(sameDay.Key, row.OrderMatch.Order!.Key);
+        True(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single(o => o.Key == historical.Key).HasSuggestedLink == false);
         Equal(0, fixture.Printer.Calls);
+    }
+
+    private static async Task SameDayAmountsUiAsync()
+    {
+        var fixture = new Fixture();
+        var first = Order() with { Number = "CURRENT-355", Total = 355, CreatedAt = new DateTimeOffset(2026, 9, 26, 8, 30, 0, TimeSpan.FromHours(3)) };
+        var second = first with { Key = new(MarketplaceKind.Prom, "prom-test", "42"), Number = "CURRENT-1400", Total = 1400,
+            CreatedAt = new DateTimeOffset(2026, 9, 26, 12, 53, 0, TimeSpan.FromHours(3)) };
+        var oldFirst = first with { Key = new(MarketplaceKind.Prom, "prom-test", "51"), Number = "OLD-355", CreatedAt = first.CreatedAt!.Value.AddDays(-1) };
+        var oldSecond = second with { Key = new(MarketplaceKind.Prom, "prom-test", "52"), Number = "OLD-1400", CreatedAt = second.CreatedAt!.Value.AddDays(-1) };
+        var archive = Enumerable.Range(1, 645).Select(n => first with
+        {
+            Key = new(MarketplaceKind.Prom, "prom-test", $"archived-{n}"), Number = $"ARCHIVE-{n}",
+            CreatedAt = first.CreatedAt!.Value.AddDays(-80)
+        }).ToArray();
+        var range = MarketplaceSyncService.BuildRange(new(2026, 9, 26), new(2026, 9, 26), 30);
+        await fixture.Cache.SaveAsync(new(archive,
+            [new("prom-test", range, false, null, "Частково: понад 500 старих замовлень потребують перевірки.", first.CreatedAt.Value)]));
+        fixture.Source.Orders = [oldFirst, second, first, oldSecond];
+        fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 35500, 26),
+            new() { Id = ReceiptTwo, Serial = 2, Type = ReceiptTypes.Sell, Status = "DONE", TotalSumMinor = 140000,
+                FiscalDate = new DateTimeOffset(2026, 9, 26, 15, 0, 0, TimeSpan.FromHours(3)) }];
+        fixture.Source.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (main, workspace) = fixture.Create();
+        main.DateFrom = new(2026, 9, 26); main.DateTo = new(2026, 9, 26);
+        await main.RefreshAsync();
+        var pending = OpenOrdersAsync(main, workspace);
+        await fixture.Source.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        True(workspace.FiscalSummary.Contains("перевірка замовлень ще неповна"));
+        True(!workspace.FiscalSummary.Contains("Ймовірних за сумою й товарами: 0"));
+        fixture.Source.Gate.SetResult(true); await pending;
+        foreach (var row in main.Receipts)
+        {
+            Equal(ReceiptLinkState.Suggested, row.OrderMatch!.State);
+            Equal(AutomaticLinkBasis.UniqueAmount, row.OrderMatch.Basis);
+            Equal(row.Total == 355 ? first.Key : second.Key, row.OrderMatch.Order!.Key);
+            Equal(1, row.OrderMatch.CompetingOrderCount);
+        }
+        Equal(4 + archive.Length, workspace.Orders.Cast<object>().Count());
+        Equal(2, workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Count(o => o.HasSuggestedLink));
+        Equal(0, fixture.Source.DetailCalls); // Irrelevant old cache must not block completed current-range checks.
+        Equal(0, fixture.Details.Calls); // A full product basket is not required for unique same-day totals.
+        var duplicate = first with { Key = new(MarketplaceKind.Prom, "prom-test", "43"), Number = "DUPLICATE-355", Buyer = new("Другий тестовий покупець") };
+        fixture.Source.Orders = [duplicate, oldSecond, first, second, oldFirst];
+        await workspace.SyncAsync();
+        var ambiguous = main.Receipts.Single(r => r.Total == 355);
+        True(ambiguous.OrderMatch!.Ambiguous && ambiguous.OrderMatch.Order is null);
+        Equal(2, ambiguous.OrderMatch.CompetingOrderCount);
+        workspace.OrderSearch = "CURRENT-355"; await workspace.AutoMatchAsync();
+        True(ambiguous.OrderMatch.Order is null);
+        Equal(second.Key, main.Receipts.Single(r => r.Total == 1400).OrderMatch!.Order!.Key);
+        Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
     }
 
     private static MarketplaceOrder BasketOrder() => Order() with { Items = [new("Товар", "SKU", 1m, 100m, 100m)], ItemsComplete = true };
@@ -2219,7 +2278,7 @@ internal static class MarketplaceViewModelTests
     private static MarketplaceOrder Order(IReadOnlyList<string>? receiptIds = null) => new()
     {
         Key = new(MarketplaceKind.Prom, "prom-test", "41"), Number = "ORDER-41", StoreName = "Test shop",
-        CreatedAt = new DateTimeOffset(2026, 9, 22, 10, 0, 0, TimeSpan.FromHours(3)), Total = 100m, Currency = "UAH",
+        CreatedAt = new DateTimeOffset(2026, 9, 23, 10, 0, 0, TimeSpan.FromHours(3)), Total = 100m, Currency = "UAH",
         Status = "Отримано", Buyer = new("Тестовий покупець"), Shipments = [new("Test carrier", "TEST-TTN")], ReceiptIds = receiptIds ?? []
     };
     private static ReceiptRecord Receipt(string id, int serial, long amount, int day = 23) => new()
@@ -2288,6 +2347,7 @@ internal static class MarketplaceViewModelTests
         public bool Fail;
         public bool Complete = true;
         public int FetchCalls;
+        public int DetailCalls;
         public MarketplaceRange? LastRange;
         public TaskCompletionSource<bool>? Gate;
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -2300,7 +2360,7 @@ internal static class MarketplaceViewModelTests
             return new(Orders, Complete, Complete ? "" : "Перевірка неповна (synthetic test).");
         }
         public Task<MarketplaceOrder?> GetOrderAsync(MarketplaceConnection c, MarketplaceCredentials s, string id, CancellationToken ct = default)
-            => Task.FromResult(Orders.FirstOrDefault(o => o.Key.OrderId == id));
+        { DetailCalls++; return Task.FromResult(Orders.FirstOrDefault(o => o.Key.OrderId == id)); }
     }
     private sealed class Cache : IMarketplaceCacheStore
     {

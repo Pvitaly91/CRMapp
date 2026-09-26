@@ -49,9 +49,13 @@ public sealed class MarketplaceSyncService(
                         if (order.Key.ConnectionId == connection.Id && order.Key.Marketplace == connection.Marketplace)
                             orders[order.Key] = MarketplaceFiscalEvidence.Preserve(order, orders.GetValueOrDefault(order.Key));
 
-                    // Refresh changed older cached orders and durable linked IDs even outside this range.
+                    // Durable links must stay current even outside the requested range. Other cached
+                    // orders only affect this range's completeness when their date is in it or unknown;
+                    // dated history outside the range stays cached without an unrelated detail refresh.
                     var fetchedKeys = fetched.Orders.Select(o => o.Key).ToHashSet();
-                    var refresh = knownOrders.Concat(previous.Orders.Select(o => o.Key)).Distinct()
+                    var relevantCachedKeys = previous.Orders.Where(o => o.CreatedAt is not { } created ||
+                        created >= range.From && created < range.ToExclusive).Select(o => o.Key);
+                    var refresh = knownOrders.Concat(relevantCachedKeys).Distinct()
                         .Where(k => k.ConnectionId == connection.Id && k.Marketplace == connection.Marketplace && !fetchedKeys.Contains(k)).ToArray();
                     if (refresh.Length > 500) { complete = false; message = "Частково: понад 500 старих замовлень потребують перевірки."; }
                     foreach (var key in refresh.Take(500))

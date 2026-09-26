@@ -15,6 +15,9 @@ internal static class AmountMatchingTests
         ("product evidence: reordered numbers, unaligned characteristics and foreign articles cannot prove difference", Run(UnalignedCharacteristics)),
         ("product evidence: unknown lines remain possible counterparts in multi-item baskets", Run(UnknownBasketLines)),
         ("amount graph: unique amount without details, prices or SKU and with complete basket", Run(Unique)),
+        ("amount graph: 355 and 1400 match within Kyiv day, historical totals do not compete", Run(SameDayAmounts)),
+        ("amount graph: Kyiv calendar dates handle UTC midnight and retain unknown-date competitors", Run(SameDayBoundaries)),
+        ("amount graph: exact and manual evidence retain priority across calendar dates", Run(CrossDayEvidence)),
         ("amount graph: products distinguish equal totals, not API order or timestamp", Run(DistinctProducts)),
         ("amount graph: identical buyers' orders stay ambiguous in 2:2, 2:1 and 1:2", Run(Ambiguity)),
         ("amount graph: missing competitor details and unknown totals never manufacture uniqueness", Run(MissingCompetitors)),
@@ -33,7 +36,7 @@ internal static class AmountMatchingTests
     private static MarketplaceOrder O(int n = 1, string name = "Товар X") => new()
     {
         Key = new(n % 2 == 0 ? MarketplaceKind.Rozetka : MarketplaceKind.Prom, $"store-{n}", n.ToString()),
-        Number = n.ToString(), CreatedAt = Time.AddDays(-1), Total = 290m, Currency = "UAH",
+        Number = n.ToString(), CreatedAt = Time.AddHours(-1), Total = 290m, Currency = "UAH",
         Buyer = new($"Синтетичний покупець {n}"), Items = I(name), ItemsComplete = true
     };
     private static Dictionary<string, ReceiptDetails> D(params (ReceiptRecord R, string Name)[] rows) =>
@@ -86,6 +89,81 @@ internal static class AmountMatchingTests
         var reversed = Matcher.MatchAll([receipt], "test-account", [b, a], [], true, details)[receipt.Id];
         Eq(result.State, reversed.State); Eq(result.Explanation, reversed.Explanation);
         Yes(result.GroupOrders.Select(o => o.Key).SequenceEqual(reversed.GroupOrders.Select(o => o.Key)));
+    }
+
+    private static void SameDayAmounts()
+    {
+        var day = new DateTimeOffset(2026, 9, 26, 0, 0, 0, TimeSpan.FromHours(3));
+        var receipts = new[] { R(1, 35500, time: day.AddHours(13)), R(2, 140000, time: day.AddHours(14)),
+            R(3, 35500, time: day.AddDays(-1).AddHours(13)) };
+        var orders = new[]
+        {
+            O(1) with { CreatedAt = day.AddHours(8).AddMinutes(30), Total = 355m, Items = [], ItemsComplete = false },
+            O(2) with { CreatedAt = day.AddHours(12).AddMinutes(53), Total = 1400m, Items = [], ItemsComplete = false },
+            O(3) with { CreatedAt = day.AddDays(-1).AddHours(8), Total = 355m, Items = [], ItemsComplete = false }
+        };
+        var scope = new AmountMatchScope(30, new(day.AddDays(-30), day.AddDays(1)), "Усі завантажені документи");
+        foreach (var rs in new[] { receipts, receipts.Reverse().ToArray() })
+        foreach (var os in new[] { orders, orders.Reverse().ToArray() })
+        {
+            var result = M(rs, os, scope: scope);
+            for (var index = 0; index < receipts.Length; index++)
+            {
+                var match = result[receipts[index].Id];
+                Eq(ReceiptLinkState.Suggested, match.State); Eq(orders[index].Key, match.Order!.Key);
+                Eq(AutomaticLinkBasis.UniqueAmount, match.Basis); Eq(1, match.CompetingOrderCount);
+                Yes(match.Explanation.Contains("одна календарна дата"));
+            }
+        }
+        var duplicate = orders[0] with { Key = O(4).Key, Buyer = new("Інший синтетичний покупець") };
+        var ambiguous = M(receipts, [.. orders, duplicate], scope: scope)[receipts[0].Id];
+        Eq(ReceiptLinkState.Candidates, ambiguous.State); Eq(2, ambiguous.CompetingOrderCount);
+        Yes(ambiguous.Ambiguous && ambiguous.Order is null);
+        Eq(ReceiptLinkState.Incomplete, M(receipts, orders, complete: false, scope: scope)[receipts[0].Id].State);
+    }
+
+    private static void SameDayBoundaries()
+    {
+        // Different UTC dates can be the same Kyiv date; one UTC date can contain two Kyiv dates.
+        foreach (var (created, fiscal, eligible) in new[]
+        {
+            ("2026-09-25T21:30:00Z", "2026-09-26T12:00:00Z", true),
+            ("2026-09-26T21:00:00Z", "2026-09-26T21:10:00Z", true),
+            ("2026-09-26T20:59:59Z", "2026-09-26T21:10:00Z", false),
+            ("2026-01-25T22:30:00Z", "2026-01-26T12:00:00Z", true),
+            ("2026-01-25T21:59:59Z", "2026-01-25T22:10:00Z", false),
+            ("2026-09-26T13:00:01+03:00", "2026-09-26T13:00:00+03:00", false)
+        })
+        {
+            var receipt = R(time: DateTimeOffset.Parse(fiscal));
+            var order = O() with { CreatedAt = DateTimeOffset.Parse(created) };
+            var match = M([receipt], [order])[receipt.Id];
+            Eq(eligible ? ReceiptLinkState.Suggested : ReceiptLinkState.NotFound, match.State);
+        }
+        var r = R(); var o = O();
+        var unknownOrder = o with { Key = O(2).Key, CreatedAt = null };
+        var competing = M([r], [o, unknownOrder])[r.Id];
+        Eq(ReceiptLinkState.Candidates, competing.State); Eq(2, competing.CompetingOrderCount);
+        Eq(ReceiptLinkState.Candidates, M([r], [unknownOrder])[r.Id].State);
+        var unknownReceipt = new ReceiptRecord
+        {
+            Id = R(2).Id, Type = ReceiptTypes.Sell, Status = "DONE", TotalSumMinor = 29000
+        };
+        var unknownResult = M([r, unknownReceipt], [o]);
+        NoAuto(unknownResult.Values); Eq(2, unknownResult[r.Id].CompetingReceiptIds.Count);
+    }
+
+    private static void CrossDayEvidence()
+    {
+        var r = R(); var older = O() with { CreatedAt = Time.AddDays(-45) };
+        Eq(ReceiptLinkState.NotFound, M([r], [older])[r.Id].State);
+        var manual = new ReceiptOrderDecision { AccountContext = "test-account", ReceiptId = r.Id, ConfirmedOrder = older.Key };
+        Eq(ReceiptLinkState.Manual, M([r], [older], decisions: [manual])[r.Id].State);
+        var exact = M([r], [older with { ReceiptIds = [r.Id] }])[r.Id];
+        Eq(ReceiptLinkState.Exact, exact.State); Eq(older.Key, exact.Order!.Key);
+        var second = R(2); var today = O(2);
+        var reserved = M([r, second], [older, today], decisions: [manual]);
+        Eq(ReceiptLinkState.Manual, reserved[r.Id].State); Eq(today.Key, reserved[second.Id].Order!.Key);
     }
 
     private static void DistinctProducts()
@@ -154,11 +232,11 @@ internal static class AmountMatchingTests
             NoAuto(M([r], [other]).Values);
         foreach (var receipt in new[] { R(type: "RETURN"), R(status: "CREATED"), R(cents: 0), R(cents: -29000) })
             NoAuto(M([receipt], [o]).Values);
-        Eq(ReceiptLinkState.Suggested, M([r], [o])[r.Id].State); // yesterday -> today
+        Eq(ReceiptLinkState.Suggested, M([r], [o])[r.Id].State); // Earlier on the same Kyiv date.
         var older = o with { CreatedAt = Time.AddDays(-45) };
         NoAuto(M([r], [older]).Values);
         var range = new MarketplaceRange(Time.AddDays(-60), Time.AddDays(1));
-        Eq(ReceiptLinkState.Suggested, M([r], [older], scope: new(60, range, "60-day test range"))[r.Id].State);
+        NoAuto(M([r], [older], scope: new(60, range, "60-day test range")).Values); // Expanding history does not relax same-day evidence.
         NoAuto(M([r], [older], scope: new(10, new(Time.AddDays(-10), Time.AddDays(1)))).Values);
         var malformedLines = o with { Items = [new("Товар X", "", 1m, 290m, 280m)] };
         NoAuto(M([r], [malformedLines], D((r, "Товар X"))).Values);

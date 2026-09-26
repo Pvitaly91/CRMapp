@@ -255,7 +255,7 @@ internal static class BasketMatchingTests
         Equal(ReceiptLinkState.Suggested, Match([Order() with { Currency = "UAH" }]).State);
         NotSuggested(Match([Order() with { CreatedAt = Time.AddTicks(1) }]));
         NotSuggested(Match([Order() with { CreatedAt = Time.AddDays(-30).AddTicks(-1) }]));
-        Equal(ReceiptLinkState.Suggested, Match([Order() with { CreatedAt = Time.AddDays(-30) }]).State);
+        NotSuggested(Match([Order() with { CreatedAt = Time.AddDays(-30) }]));
         NotSuggested(Match([Order() with { CreatedAt = null }]));
         NotSuggested(Match(receipt: Receipt(type: ReceiptTypes.Return)));
         NotSuggested(Match(receipt: Receipt(status: "CREATED")));

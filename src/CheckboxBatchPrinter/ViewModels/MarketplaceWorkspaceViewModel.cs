@@ -463,7 +463,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
             var days = Math.Min(3650, _config.HistoryDays + _extraHistory);
             var range = MarketplaceSyncService.BuildRange(_from, _to, days);
             return new(days, range,
-                $"Область однозначності: чеки {_from:dd.MM.yyyy} — {_to:dd.MM.yyyy}; замовлення {range.From:dd.MM.yyyy} — {range.ToExclusive.AddDays(-1):dd.MM.yyyy} (Київ), усі увімкнені магазини. Фільтри таблиць не звужують перевірку.");
+                $"Для автозв’язку: однакова сума та той самий календарний день (Київ). Чеки {_from:dd.MM.yyyy} — {_to:dd.MM.yyyy}; завантажена історія замовлень {range.From:dd.MM.yyyy} — {range.ToExclusive.AddDays(-1):dd.MM.yyyy}, усі увімкнені магазини. Фільтри таблиць не звужують перевірку.");
         }
     }
 
@@ -472,7 +472,8 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         var range = MatchScope.OrderRange!;
         var orders = ActiveOrders.Where(o => o.Items.Count > 0).ToArray();
         return _rows.Where(row => row.RawType == ReceiptTypes.Sell && row.Model.Status == "DONE" && row.Model.DisplayDate is { } date &&
-            orders.Any(o => o.Total == row.Total && o.CreatedAt is { } created && created <= date && created >= range.From && created < range.ToExclusive))
+            orders.Any(o => o.Total == row.Total && o.CreatedAt is { } created && created <= date &&
+                DateRangeBuilder.KyivDate(created) == DateRangeBuilder.KyivDate(date) && created >= range.From && created < range.ToExclusive))
             .Where(row => !_receiptDetails.ContainsKey(row.Id))
             .OrderBy(row => _basketAttempted.Contains(row.Id)).ToArray();
     }
@@ -524,12 +525,14 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         var unavailable = orders.Count(o => o.FiscalDataStatus.Length > 0);
         var repeatedIds = orders.GroupBy(o => (o.Key.Marketplace, o.Key.OrderId))
             .Count(group => group.Select(o => o.Key.ConnectionId).Distinct().Skip(1).Any());
-        FiscalSummary = !HasEnabledConnections ? "" : $"Завантажено замовлень: {orders.Count}. Точних зв’язків: {_rows.Count(r => r.OrderMatch?.State == ReceiptLinkState.Exact)}. Ймовірних за сумою й товарами: {_rows.Count(r => r.OrderMatch?.State == ReceiptLinkState.Suggested)}. " +
+        FiscalSummary = !HasEnabledConnections ? "" : $"Завантажено замовлень: {orders.Count}. Точних зв’язків: {_rows.Count(r => r.OrderMatch?.State == ReceiptLinkState.Exact)}. " +
+            (_coverageComplete ? $"Ймовірних за сумою й товарами: {_rows.Count(r => r.OrderMatch?.State == ReceiptLinkState.Suggested)}. " :
+                "Ймовірні зв’язки: перевірка замовлень ще неповна. ") +
             (unmatchedKeys > 0 ? $"Замовлень із непідтвердженими фіскальними ключами: {unmatchedKeys}. Перевірте контекст каси/продавця, період і права касира; це не означає, що чека немає. " : "") +
             (unavailable > 0 ? $"Фіскальні дані потребують перевірки: {unavailable}. " : "") +
             (repeatedIds > 0 ? "Є однакові API-ID замовлень у різних підключеннях. Перевірте, чи той самий магазин не додано двічі; такі записи не об’єднуються автоматично. " : "") +
             (orders.Any(o => o.Key.Marketplace == MarketplaceKind.Prom && o.FiscalReferences.Count == 0)
-                ? "Prom: частина замовлень без фіскальних ключів. Взаємно унікальна сума дає ймовірний, не фіскальний автозв’язок. " : "") + MatchScope.Description;
+                ? "Prom: частина замовлень без фіскальних ключів. Взаємно унікальна сума в той самий день дає ймовірний, не фіскальний автозв’язок. " : "") + MatchScope.Description;
         NotifyDetails(); MatchesChanged?.Invoke(this, EventArgs.Empty); RaiseCommands();
     }
 
