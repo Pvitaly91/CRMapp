@@ -22,12 +22,12 @@ internal static class BasketMatchingTests
         ("basket API-to-matcher: typography normalizes but product codes and punctuation stay distinct", TypographyAdapterAsync),
         ("basket matching: complete details of every competing receipt are required", CompetingReceiptsAsync),
         ("basket matching: two orders stay ambiguous even after one is rejected", CompetingOrdersAsync),
-        ("basket matching: sum or SKU alone and incomplete or altered lines never link", FullBasketAsync),
+        ("basket matching: unique sum tolerates missing basket fields but not product contradictions", FullBasketAsync),
         ("basket matching: time bounds currency type status and coverage are fail closed", BoundariesAsync),
         ("basket matching: saved manual rejected and suppression decisions take priority", DecisionsAsync),
         ("basket matching: fiscal keys and fiscal contradictions are never bypassed", FiscalPriorityAsync),
         ("basket matching: discounts invalid totals extra quantities and differing prices do not link", AdjustmentsAsync),
-        ("basket parser safety: incomplete or adjusted live-shaped DTOs and old cache cannot suggest", ParserSafetyAsync)
+        ("basket parser safety: incomplete items allow amount basis, known adjustments remain blocked", ParserSafetyAsync)
     ];
 
     private static ReceiptRecord Receipt(string id = Id, string type = ReceiptTypes.Sell, string status = "DONE") => new()
@@ -146,9 +146,9 @@ internal static class BasketMatchingTests
 
         var unequalPrices = await ParsePromProductsAsync(
             [new("Датчик руху", "sku-1", 1m, 75m, 75m), new("Датчик руху", "sku-1", 1m, 125m, 125m), Products[1]]);
-        // Same name, total quantity, average price and order sum are insufficient.
-        NotSuggested(Match([unequalPrices]));
-        NotSuggested(Match([combinedOrder], details: Details(products: unequalPrices.Items)));
+        // New rule: individual line prices need not match when totals and quantities agree.
+        Equal(ReceiptLinkState.Suggested, Match([unequalPrices]).State);
+        Equal(ReceiptLinkState.Suggested, Match([combinedOrder], details: Details(products: unequalPrices.Items)).State);
     }
 
     private static async Task TypographyAdapterAsync()
@@ -169,7 +169,15 @@ internal static class BasketMatchingTests
                  })
         {
             var different = await ParsePromProductsAsync([Products[0] with { Name = changed }, Products[1]]);
-            NotSuggested(Match([different], details: details));
+            var result = Match([different], details: details);
+            if (changed.Contains("12/48V") || changed.Contains("DC-9-60")) NotSuggested(result);
+            else
+            {
+                Equal(ReceiptLinkState.Suggested, result.State);
+                // Partial/punctuation-only differences do not prove either a match or a contradiction.
+                Equal(ProductComparison.Insufficient, result.Products);
+                Equal(AutomaticLinkBasis.UniqueAmount, result.Basis);
+            }
         }
     }
 
@@ -187,11 +195,11 @@ internal static class BasketMatchingTests
             [new() { AccountContext = "account", ReceiptId = OtherId, SuppressAutomatic = true, RejectedOrders = [Order().Key] }]));
         available[OtherId] = Details(OtherId, [new("Інший товар", "sku-1", 1m, 250m, 250m)]);
         Equal(ReceiptLinkState.Suggested, Match(scope: scope, detailsScope: available).State);
-        available[OtherId] = available[OtherId] with { ItemsComplete = false };
+        available[OtherId] = available[OtherId] with { ItemsComplete = false, ItemListComplete = false };
         NotSuggested(Match(scope: scope, detailsScope: available));
         var matcher = new ReceiptOrderMatchingService();
         NotSuggested(matcher.Match(first, "account", [Order()], [], true, details));
-        NotSuggested(matcher.Match(first, "account", [Order()], [], true, details, [first]));
+        Equal(ReceiptLinkState.Suggested, matcher.Match(first, "account", [Order()], [], true, details, [first]).State);
         NotSuggested(matcher.Match(first, "account", [Order()], [], true, details, [second], available));
         NotSuggested(Match(scope: [first, new() { Id = OtherId, Type = ReceiptTypes.Sell, Status = "DONE", TotalSumMinor = 25000 }]));
         return Task.CompletedTask;
@@ -227,10 +235,15 @@ internal static class BasketMatchingTests
             [Products[0] with { Quantity = null }, Products[1]],
             [Products[0] with { UnitPrice = null }, Products[1]]
         };
-        foreach (var variant in variants) NotSuggested(Match([Order() with { Items = variant }]));
-        NotSuggested(Match(details: Details() with { ItemsComplete = false }));
-        NotSuggested(Match(details: Details(OtherId)));
-        NotSuggested(Match(details: new(Id, [Products[0] with { Total = null }, Products[1]])));
+        for (var i = 0; i < variants.Length; i++)
+        {
+            var result = Match([Order() with { Items = variants[i] }]);
+            if (i is 0 or 1 or 4 or 5) NotSuggested(result);
+            else Equal(ReceiptLinkState.Suggested, result.State);
+        }
+        Equal(ReceiptLinkState.Suggested, Match(details: Details() with { ItemsComplete = false, ItemListComplete = false }).State);
+        Equal(AutomaticLinkBasis.UniqueAmount, Match(details: Details(OtherId)).Basis);
+        Equal(ReceiptLinkState.Suggested, Match(details: new(Id, [Products[0] with { Total = null }, Products[1]])).State);
         return Task.CompletedTask;
     }
 
@@ -327,7 +340,8 @@ internal static class BasketMatchingTests
             True(!parsed.ItemsComplete);
             Equal(Products.Length, parsed.Items.Count);
             Equal(Products[0], parsed.Items[0]);
-            NotSuggested(Match(details: parsed));
+            if (parsed.AmountComparisonIssue.Length > 0) NotSuggested(Match(details: parsed));
+            else Equal(ReceiptLinkState.Suggested, Match(details: parsed).State);
         }
 
         static JsonObject PromJson() => JsonNode.Parse(JsonSerializer.Serialize(new
@@ -367,14 +381,15 @@ internal static class BasketMatchingTests
             Equal(1, requests); True(!parsed!.ItemsComplete); Equal(count, parsed.Items.Count);
             if (count == 2) Equal(Products[0], parsed.Items[0]);
             if (count == 1) Equal(Products[1], parsed.Items[0]);
-            NotSuggested(Match([parsed]));
+            if (parsed.AmountComparisonIssue.Length > 0) NotSuggested(Match([parsed]));
+            else Equal(ReceiptLinkState.Suggested, Match([parsed]).State);
         }
 
         var oldCache = JsonNode.Parse(JsonSerializer.Serialize(Order()))!.AsObject();
         True(oldCache.Remove(nameof(MarketplaceOrder.ItemsComplete)));
         var restored = JsonSerializer.Deserialize<MarketplaceOrder>(oldCache.ToJsonString())!;
         True(!restored.ItemsComplete); Equal(Products.Length, restored.Items.Count);
-        NotSuggested(Match([restored]));
+        Equal(AutomaticLinkBasis.UniqueAmount, Match([restored]).Basis);
     }
 
     private sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> action) : HttpMessageHandler

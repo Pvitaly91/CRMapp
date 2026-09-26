@@ -207,6 +207,11 @@ public sealed class PromOrdersClient : IMarketplaceOrdersClient
             DeliveryMethod = Text(deliveryOption, "name"),
             DeliveryCost = PromMoney.Parse(Property(order, "delivery_cost")).Amount,
             Items = items,
+            ItemListComplete = products.ValueKind == JsonValueKind.Array && products.GetArrayLength() > 0 && items.Count == products.GetArrayLength(),
+            AmountComparisonIssue = products.ValueKind == JsonValueKind.Array && products.EnumerateArray().Any(p =>
+                TryProperty(p, "discount_types", out var discounts) && discounts.ValueKind != JsonValueKind.Null &&
+                    !(discounts.ValueKind == JsonValueKind.Array && discounts.GetArrayLength() == 0))
+                ? "Знижки Prom: склад загальної суми потребує перевірки." : "",
             ItemsComplete = itemMoneyComplete && products.ValueKind == JsonValueKind.Array && products.GetArrayLength() > 0 &&
                 items.Count == products.GetArrayLength() && products.EnumerateArray().All(p =>
                     !TryProperty(p, "discount_types", out var discounts) || discounts.ValueKind == JsonValueKind.Null ||

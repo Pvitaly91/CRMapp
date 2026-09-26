@@ -23,13 +23,16 @@ public sealed class ReceiptDetailsService(CheckboxApiClient api, ISettingsServic
             throw new JsonException("API повернуло деталі іншого чека.");
         var items = new List<OrderItem>();
         var complete = false;
+        var structural = false;
+        var issue = ReadAmountIssue(root);
         if (root.TryGetProperty("goods", out var goods) && goods.ValueKind == JsonValueKind.Array)
         {
             complete = goods.GetArrayLength() > 0;
+            structural = complete;
             foreach (var item in goods.EnumerateArray())
             {
                 if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("good", out var good) || good.ValueKind != JsonValueKind.Object)
-                { complete = false; continue; }
+                { complete = false; structural = false; continue; }
                 if (HasValues(item, "discounts") || (item.TryGetProperty("is_return", out var isReturn) && isReturn.ValueKind == JsonValueKind.True)) complete = false;
                 items.Add(new(Text(good, "name"), Text(good, "code"), Number(item, "quantity") / 1000m,
                     Number(good, "price") / 100m, Number(item, "sum") / 100m));
@@ -38,8 +41,24 @@ public sealed class ReceiptDetailsService(CheckboxApiClient api, ISettingsServic
         if (HasValues(root, "discounts") || HasValues(root, "pre_payment_relation_id") || Number(root, "round_sum") is not (null or 0)) complete = false;
         if (Number(root, "total_sum") is not { } totalMinor || items.Any(item => item.Total is null) ||
             items.Sum(item => item.Total ?? 0) != totalMinor / 100m) complete = false;
+        if (structural && Number(root, "total_sum") is { } total && items.All(i => i.Total.HasValue) &&
+            items.Sum(i => i.Total!.Value) != total / 100m)
+            issue = "Сума позицій чека відрізняється від загальної: потрібна перевірка структури оплати.";
         return new(id, items, Text(root, "related_receipt_id"), Text(root, "order_id"),
-            root.TryGetProperty("context", out var context) && context.ValueKind == JsonValueKind.Object && context.EnumerateObject().Any(), complete);
+            root.TryGetProperty("context", out var context) && context.ValueKind == JsonValueKind.Object && context.EnumerateObject().Any(), complete)
+            { ItemListComplete = structural, AmountComparisonIssue = issue };
+    }
+
+    internal static string ReadAmountIssue(JsonElement root)
+    {
+        if (HasValues(root, "pre_payment_relation_id")) return "Передоплата / часткова оплата: потрібен точний або ручний зв’язок.";
+        if (HasValues(root, "discounts") || Number(root, "round_sum") is not (null or 0))
+            return "Знижка або округлення в чеку: склад загальної суми потребує перевірки.";
+        if (root.TryGetProperty("goods", out var goods) && goods.ValueKind == JsonValueKind.Array &&
+            goods.EnumerateArray().Any(g => g.ValueKind == JsonValueKind.Object && (HasValues(g, "discounts") ||
+                g.TryGetProperty("is_return", out var returned) && returned.ValueKind == JsonValueKind.True)))
+            return "Знижка або повернення в позиціях: потрібна перевірка структури документа.";
+        return "";
     }
 
     private static string Text(JsonElement item, string field) => item.TryGetProperty(field, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";

@@ -59,6 +59,7 @@ internal static class Program
         Tests.AddRange(MarketplaceMatchingTests.All);
         Tests.AddRange(FiscalLinkTests.All);
         Tests.AddRange(BasketMatchingTests.All);
+        Tests.AddRange(AmountMatchingTests.All);
         Tests.AddRange(MarketplaceSyncTests.All);
         Tests.AddRange(MarketplaceViewModelTests.All);
         var failed = 0;

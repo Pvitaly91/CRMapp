@@ -29,6 +29,9 @@ public static class ReceiptParser
                 FiscalDate = GetDate(item, "fiscal_date"),
                 CreatedAt = GetDate(item, "created_at"),
                 TotalSumMinor = GetLong(item, "total_sum"),
+                TotalKnown = item.TryGetProperty("total_sum", out var total) &&
+                    long.TryParse(total.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out _),
+                AmountComparisonIssue = ReceiptDetailsService.ReadAmountIssue(item),
                 Payments = ParsePayments(item),
                 CashRegisterFiscalNumber = GetCashRegister(item),
                 OrganizationId = GetString(item, "organization_id"),

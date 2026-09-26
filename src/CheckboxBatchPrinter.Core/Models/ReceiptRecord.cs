@@ -10,6 +10,8 @@ public sealed class ReceiptRecord
     public DateTimeOffset? FiscalDate { get; init; }
     public DateTimeOffset? CreatedAt { get; init; }
     public long TotalSumMinor { get; init; }
+    public bool TotalKnown { get; init; } = true;
+    public string AmountComparisonIssue { get; init; } = "";
     public IReadOnlyList<ReceiptPayment> Payments { get; init; } = [];
     public string CashRegisterFiscalNumber { get; init; } = string.Empty;
     public string OrganizationId { get; init; } = string.Empty;

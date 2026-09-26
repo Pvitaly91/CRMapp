@@ -34,27 +34,18 @@ public sealed class ReceiptRowViewModel : ObservableObject
         set
         {
             if (!SetProperty(ref _orderMatch, value)) return;
-            foreach (var property in new[] { nameof(Marketplace), nameof(OrderNumber), nameof(OrderBuyer), nameof(OrderStatus), nameof(OrderTracking), nameof(LinkStatus), nameof(LinkExplanation) })
+            foreach (var property in new[] { nameof(Marketplace), nameof(OrderNumber), nameof(OrderLinkButtonText), nameof(OrderBuyer), nameof(OrderStatus), nameof(OrderTracking), nameof(LinkStatus), nameof(LinkExplanation) })
                 OnPropertyChanged(property);
         }
     }
     public string Marketplace => OrderMatch?.Order?.Key.Marketplace.ToString() ?? "";
     public string OrderNumber => OrderMatch?.Order?.Number ?? "";
+    public string OrderLinkButtonText => OrderNumber.Length > 0 ? OrderNumber : "Кандидати";
     public string OrderBuyer => OrderMatch?.Order?.Buyer?.Name ?? "";
     public string OrderStatus => OrderMatch?.Order?.Status ?? "";
     public string OrderTracking => OrderMatch?.Order?.TrackingDisplay ?? "";
     public string LinkExplanation => OrderMatch?.Explanation ?? "Не перевірено";
-    public string LinkStatus => OrderMatch?.State switch
-    {
-        ReceiptLinkState.Exact => OrderMatch.Explanation,
-        ReceiptLinkState.Manual => "Прив’язано вручну",
-        ReceiptLinkState.Suggested => "Ймовірно: за товарами",
-        ReceiptLinkState.Candidates => "Є кандидати",
-        ReceiptLinkState.NotFound => "Не знайдено у діапазоні",
-        ReceiptLinkState.Conflict => "Конфлікт",
-        ReceiptLinkState.Incomplete => "Перевірка неповна",
-        _ => "Не перевірено"
-    };
+    public string LinkStatus => OrderMatch?.StatusLabel ?? "Не перевірено";
     public bool MatchesOrderSearch(string query) => OrderMatch?.Order is { } order &&
         new[] { order.Number, order.Buyer?.Name, order.Buyer?.Phone, order.Recipient?.Name, order.Recipient?.Phone,
             order.TrackingDisplay, order.StoreName }.Any(value => value?.Contains(query, StringComparison.CurrentCultureIgnoreCase) == true);

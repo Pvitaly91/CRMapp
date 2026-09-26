@@ -142,7 +142,7 @@
                             <CheckBox x:Name="ExtraOrderColumns" Content="Покупець, статус, ТТН у таблиці" VerticalAlignment="Center" Margin="12,0" />
                         </WrapPanel>
                         <WrapPanel>
-                        <CheckBox x:Name="AutomaticOrderLinks" Content="Автоматично шукати ймовірні зв’язки за товарами"
+                        <CheckBox x:Name="AutomaticOrderLinks" Content="Автоматично зіставляти за сумою й товарами"
                                   IsChecked="{Binding Marketplace.AutoLinkEnabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                   Margin="3,6,9,3" VerticalAlignment="Center"
                                   ToolTip="При відкритті цієї вкладки та після оновлення чеків тут: завантажити замовлення й порівняти товари, кількість, ціни, суму та час. Ймовірний зв’язок не є підтвердженням фіскального документа. Налаштування діє до закриття програми." />
@@ -164,7 +164,7 @@
                         </WrapPanel>
                     </StackPanel>
 
-                    <Expander DockPanel.Dock="Bottom" Header="Пов’язане замовлення" IsExpanded="False" Margin="2,6,2,2">
+                    <Expander DockPanel.Dock="Bottom" Header="Пов’язане замовлення / кандидати" IsExpanded="{Binding Marketplace.DetailsExpanded, Mode=TwoWay}" Margin="2,6,2,2">
                         <Grid MaxHeight="250">
                             <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
                             <WrapPanel>
@@ -206,18 +206,18 @@
                             <ScrollViewer x:Name="OrderToolbarScroll" HorizontalScrollBarVisibility="Auto"
                                           VerticalScrollBarVisibility="Disabled" Margin="0,0,0,3">
                             <StackPanel x:Name="OrderToolbar" Orientation="Horizontal">
-                                <TextBox x:Name="OrderSearchInput" Width="150" VerticalAlignment="Center"
+                                <TextBox x:Name="OrderSearchInput" Width="115" VerticalAlignment="Center"
                                          AutomationProperties.Name="Пошук замовлень"
                                          Text="{Binding Marketplace.OrderSearch, UpdateSourceTrigger=PropertyChanged}"
                                          ToolTip="Пошук лише серед завантажених замовлень — не приховує чеки праворуч." />
-                                <ComboBox x:Name="OrderFilterInput" Width="110" VerticalAlignment="Center" ItemsSource="{Binding Marketplace.OrderFilters}"
+                                <ComboBox x:Name="OrderFilterInput" Width="95" VerticalAlignment="Center" ItemsSource="{Binding Marketplace.OrderFilters}"
                                           SelectedItem="{Binding Marketplace.OrderFilter}" ToolTip="Фільтр лише замовлень" />
                                 <Button x:Name="LinkSelectedOrderButton" Content="Прив’язати вибрані" Padding="8,6" VerticalAlignment="Center"
                                         Command="{Binding Marketplace.LinkSelectedOrderCommand}"
                                         ToolTip="Виберіть замовлення ліворуч та чек праворуч. Прив’язку буде збережено лише після підтвердження." />
-                                <Button x:Name="MatchProductsButton" Content="Зіставити за товарами" Padding="8,6" VerticalAlignment="Center"
+                                <Button x:Name="MatchProductsButton" Content="Зіставити за сумою й товарами" Padding="8,6" VerticalAlignment="Center"
                                         Command="{Binding Marketplace.AutoMatchCommand}"
-                                        ToolTip="Завантажити деталі чеків лише для читання. Сума + повний склад товарів; неточні збіги потребують перевірки." />
+                                        ToolTip="Взаємно унікальна сума — ймовірний автозв’язок. Товари перевіряють пару та розрізняють однакові суми; відсутні деталі не усувають конкурентів." />
                             </StackPanel>
                             </ScrollViewer>
                             <DataGrid x:Name="MarketplaceOrdersGrid" Grid.Row="1" ItemsSource="{Binding Marketplace.Orders}"
@@ -235,12 +235,31 @@
                                             <Style TargetType="TextBlock"><Setter Property="ToolTip" Value="{Binding TotalDisplay}" /></Style>
                                         </DataGridTextColumn.ElementStyle>
                                     </DataGridTextColumn>
-                                    <DataGridTextColumn Header="Зв’язок із чеками" Binding="{Binding LinkStatus}" Width="175" />
+                                    <DataGridTextColumn Header="Зв’язок із чеками" Binding="{Binding LinkStatus}" Width="230">
+                                        <DataGridTextColumn.ElementStyle>
+                                            <Style TargetType="TextBlock"><Setter Property="ToolTip" Value="{Binding LinkExplanation}" /></Style>
+                                        </DataGridTextColumn.ElementStyle>
+                                    </DataGridTextColumn>
                                     <DataGridTextColumn Header="Пов’язані чеки" Binding="{Binding LinkedReceiptsDisplay}" Width="160">
                                         <DataGridTextColumn.ElementStyle>
                                             <Style TargetType="TextBlock"><Setter Property="ToolTip" Value="{Binding LinkedReceiptsDisplay}" /></Style>
                                         </DataGridTextColumn.ElementStyle>
                                     </DataGridTextColumn>
+                                    <DataGridTemplateColumn Header="Відкрити чек" Width="110">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ItemsControl ItemsSource="{Binding LinkedReceipts}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Button Content="{Binding Serial}" ContentStringFormat="Чек №{0}"
+                                                                    Command="{Binding DataContext.PreviewCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding}" />
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
                                     <DataGridTextColumn Header="Покупець" Binding="{Binding BuyerDisplay}" Width="180"
                                         Visibility="{Binding IsChecked, Source={x:Reference ExtraOrderColumns}, Converter={StaticResource BoolToVisibility}}" />
                                     <DataGridTextColumn Header="Статус замовлення" Binding="{Binding Status}" Width="150"
@@ -289,8 +308,16 @@
                             <DataGridTextColumn Header="Каса" Binding="{Binding CashRegister}" Width="150" IsReadOnly="True" />
                             <DataGridTextColumn Header="Друк" Binding="{Binding PrintStatusText}" Width="110" IsReadOnly="True" />
                             <DataGridTextColumn Header="Маркетплейс" Binding="{Binding Marketplace}" Width="100" IsReadOnly="True" />
-                            <DataGridTextColumn Header="№ замовлення" Binding="{Binding OrderNumber}" Width="120" IsReadOnly="True" />
-                            <DataGridTextColumn Header="Зв’язок" Binding="{Binding LinkStatus}" Width="165" IsReadOnly="True">
+                            <DataGridTemplateColumn Header="№ замовлення" Width="125" SortMemberPath="OrderNumber">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Content="{Binding OrderLinkButtonText}" Padding="4,2" ToolTip="Відкрити пов’язане замовлення або кандидатів"
+                                                Command="{Binding DataContext.Marketplace.ShowOrderCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                CommandParameter="{Binding}" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Зв’язок" Binding="{Binding LinkStatus}" Width="230" IsReadOnly="True">
                                 <DataGridTextColumn.ElementStyle><Style TargetType="TextBlock"><Setter Property="ToolTip" Value="{Binding LinkExplanation}" /></Style></DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
                             <DataGridTextColumn Header="Покупець" Binding="{Binding OrderBuyer}" Width="180" IsReadOnly="True"

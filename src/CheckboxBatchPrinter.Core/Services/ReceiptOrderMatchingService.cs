@@ -2,13 +2,40 @@ using CheckboxBatchPrinter.Core.Models;
 
 namespace CheckboxBatchPrinter.Core.Services;
 
-/// <summary>Fiscal evidence proves a link; a mutually unique full basket can only suggest one.</summary>
+/// <summary>Manual/fiscal evidence has priority. Amount hypotheses are computed for the entire snapshot.</summary>
 public sealed class ReceiptOrderMatchingService
 {
     public ReceiptOrderMatch Match(ReceiptRecord receipt, string accountContext,
         IReadOnlyList<MarketplaceOrder> orders, IReadOnlyList<ReceiptOrderDecision> decisions,
         bool coverageComplete, ReceiptDetails? details = null, IReadOnlyList<ReceiptRecord>? receiptScope = null,
         IReadOnlyDictionary<string, ReceiptDetails>? receiptDetailsScope = null)
+    {
+        if (receiptScope is null || !receiptScope.Any(r => SameReceiptId(r.Id, receipt.Id)))
+            return MatchEvidence(receipt, accountContext, orders, decisions, coverageComplete, details, receiptScope);
+        var allDetails = (receiptDetailsScope?.Values ?? []).ToDictionary(d => BasketReceiptMatching.NormalizeId(d.Id));
+        if (details is not null && SameReceiptId(details.Id, receipt.Id)) allDetails[BasketReceiptMatching.NormalizeId(receipt.Id)] = details;
+        return MatchAll(receiptScope, accountContext, orders, decisions, coverageComplete, allDetails)[receipt.Id];
+    }
+
+    public IReadOnlyDictionary<string, ReceiptOrderMatch> MatchAll(IReadOnlyList<ReceiptRecord> receipts, string accountContext,
+        IReadOnlyList<MarketplaceOrder> orders, IReadOnlyList<ReceiptOrderDecision> decisions, bool coverageComplete,
+        IReadOnlyDictionary<string, ReceiptDetails>? details = null, AmountMatchScope? scope = null, IReadOnlySet<string>? loading = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountContext);
+        var unique = receipts.DistinctBy(r => BasketReceiptMatching.NormalizeId(r.Id)).ToArray();
+        var available = orders.GroupBy(o => o.Key).Select(g => g.MaxBy(o => o.RetrievedAtUtc)!).ToArray();
+        var normalizedDetails = (details?.Values ?? []).GroupBy(d => BasketReceiptMatching.NormalizeId(d.Id))
+            .ToDictionary(g => g.Key, g => g.First());
+        var result = unique.ToDictionary(r => r.Id, r => MatchEvidence(r, accountContext, available, decisions,
+            coverageComplete, normalizedDetails.GetValueOrDefault(BasketReceiptMatching.NormalizeId(r.Id)), unique));
+        BasketReceiptMatching.Apply(result, unique, available, accountContext, decisions, coverageComplete,
+            normalizedDetails, scope ?? new(), loading);
+        return result;
+    }
+
+    private ReceiptOrderMatch MatchEvidence(ReceiptRecord receipt, string accountContext,
+        IReadOnlyList<MarketplaceOrder> orders, IReadOnlyList<ReceiptOrderDecision> decisions,
+        bool coverageComplete, ReceiptDetails? details, IReadOnlyList<ReceiptRecord>? receiptScope)
     {
         ArgumentNullException.ThrowIfNull(receipt);
         ArgumentException.ThrowIfNullOrWhiteSpace(accountContext);
@@ -90,15 +117,6 @@ public sealed class ReceiptOrderMatchingService
         if (unresolvedFiscal.Length > 0)
             return new(ReceiptLinkState.Incomplete, null,
                 "Є фіскальний номер, але провайдер, контекст продавця/каси або однозначність ще не підтверджені. Друк чека доступний.", unresolvedFiscal);
-
-        if (coverageComplete && decision?.SuppressAutomatic != true && exact.Length == 0 &&
-            BasketReceiptMatching.TrySuggest(receipt, accountContext, available, decisions, rejected,
-                details, receiptScope, receiptDetailsScope) is { } suggested)
-            return new(ReceiptLinkState.Suggested, suggested,
-                "Ймовірний автозв’язок: увесь кошик (назви, кількість, ціни й суми рядків), загальна сума та час; " +
-                "взаємно однозначний лише серед завантажених даних. " +
-                (string.IsNullOrWhiteSpace(suggested.Currency) ? "Валюта API не підтверджена. " : "") +
-                "Це не фіскальне підтвердження; перевірте або відхиліть.", [suggested]);
 
         var candidates = allowedExact;
         if (receipt.Type == ReceiptTypes.Sell && receipt.DisplayDate is { } receiptDate)
