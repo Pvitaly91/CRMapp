@@ -18,7 +18,7 @@ using CheckboxBatchPrinter.Views;
 
 namespace CheckboxBatchPrinter.Tests;
 
-internal static class MarketplaceViewModelTests
+internal static partial class MarketplaceViewModelTests
 {
     private const string ReceiptOne = "00000000-0000-0000-0000-000000000001";
     private const string ReceiptTwo = "00000000-0000-0000-0000-000000000002";
@@ -30,6 +30,8 @@ internal static class MarketplaceViewModelTests
         ("STA selected Prom hidden by Rozetka filter never enters printer backend", () => StaAsync(FilteredPrintAsync)),
         ("STA clear all selection includes hidden rows and hidden-only selection disables print", () => StaAsync(HiddenSelectionAsync)),
         ("STA Today button resets filters and requests today's Kyiv receipts without marketplace API", () => StaAsync(TodayReceiptsAsync)),
+        ("STA shared dates immediately filter receipts and orders without changing matcher universe", () => StaAsync(SharedDisplayDatesAsync)),
+        ("STA shared open date boundaries and Kyiv midnight keep loaded rows and selections", () => StaAsync(SharedDisplayDateBoundariesAsync)),
         ("STA successful single and batch print clear only submitted marks even when history save fails", () => StaAsync(PrintClearsMarksAsync)),
         ("STA cancellation preparation and printer errors preserve selected marks", () => StaAsync(PrintFailureKeepsMarksAsync)),
         ("STA TTN and receipt type filters exclude hidden selections from print", () => StaAsync(SearchPrintAsync)),
@@ -70,8 +72,15 @@ internal static class MarketplaceViewModelTests
         ("STA equal sums distinguish products, while buyers and filters do not resolve identical orders", () => StaAsync(AmountGroupsUiAsync)),
         ("STA amount suggestions withdraw on new competitors and incomplete API, manual links survive restart", () => StaAsync(AmountRecomputeUiAsync)),
         ("STA item loading rechecks amount suggestion without changing print selection", () => StaAsync(AmountLoadingUiAsync)),
-        ("STA history stays visible while amount links use the same Kyiv calendar day", () => StaAsync(AmountHistoryUiAsync)),
+        ("STA history stays cached behind shared date filter while amount links use the same Kyiv day", () => StaAsync(AmountHistoryUiAsync)),
         ("STA September26 amounts355 and1400 link after completed sync without historical competitors", () => StaAsync(SameDayAmountsUiAsync)),
+        ("STA cached automatic links restore after restart without detail requests", () => StaAsync(CachedAutomaticRestartAsync)),
+        ("STA automatic refresh loads details only for new receipts", () => StaAsync(CachedAutomaticNewReceiptAsync)),
+        ("STA cached probable links yield to a new hidden competitor", () => StaAsync(CachedAutomaticCompetitorAsync)),
+        ("STA manual and rejected decisions override automatic cache", () => StaAsync(CachedAutomaticDecisionOverridesAsync)),
+        ("STA automatic cache failures never block matching or base workflow", () => StaAsync(CachedAutomaticFailureIsolationAsync)),
+        ("STA cached matches require complete enabled connection coverage", () => StaAsync(CachedAutomaticCoverageAsync)),
+        ("STA changed same-ID receipt invalidates cached details", () => StaAsync(CachedAutomaticChangedReceiptAsync)),
         ("STA duplicate orders or competing receipts cannot create basket suggestions", () => StaAsync(BasketAmbiguousUiAsync)),
         ("STA cached and partial marketplace orders remain visible without claiming checked links", () => StaAsync(PartialOrderPanelAsync)),
         ("STA old account basket detail completion cannot populate the new account", () => StaAsync(StaleBasketDetailsAsync)),
@@ -318,6 +327,7 @@ internal static class MarketplaceViewModelTests
                 new() { Key = new(MarketplaceKind.Prom, "prom-test", "A"), Number = "A-1", ReceiptIds = [ReceiptTwo] }
             ];
             var (main, workspace) = fixture.Create();
+            main.DateFrom = new(2026, 9, 21); // Sorting spans all three synthetic receipt days.
             await main.RefreshAsync();
             await OpenOrdersAsync(main, workspace);
             using (main.ReceiptsView.DeferRefresh())
@@ -963,6 +973,7 @@ internal static class MarketplaceViewModelTests
             Type = ReceiptTypes.Sell, TotalSumMinor = 10000, FiscalDate = new DateTimeOffset(2026,9,24,12,0,0,TimeSpan.FromHours(3)) },
             Receipt(ReceiptTwo, 2, 10000), Receipt(ReceiptThree, 3, 99900)];
         var (main, workspace) = fixture.Create();
+        main.DateTo = new(2026, 9, 24); // This fiscal-link fixture intentionally spans two receipt days.
         await main.RefreshAsync();
         var row = main.Receipts.Single(r => r.Id == ReceiptOne);
         // Base Checkbox parsing provides fiscal_code; make the fixture agree with the issued document.
@@ -1423,12 +1434,15 @@ internal static class MarketplaceViewModelTests
         var row = main.Receipts.Single();
         Equal(ReceiptLinkState.Suggested, row.OrderMatch!.State);
         Equal(sameDay.Key, row.OrderMatch.Order!.Key);
-        Equal(2, workspace.Orders.Cast<object>().Count());
+        Equal(1, workspace.Orders.Cast<object>().Count());
+        Equal(2, fixture.Cache.Snapshot.Orders.Count);
         True(row.LinkExplanation.Contains("25.07.2026") && row.LinkExplanation.Contains("23.09.2026"));
         True(row.LinkExplanation.Contains("той самий календарний день"));
         fixture.Settings.Market.HistoryDays = 10;
         await workspace.SyncAsync();
         Equal(sameDay.Key, row.OrderMatch.Order!.Key);
+        main.DateFrom = null; main.DateTo = null;
+        Equal(2, workspace.Orders.Cast<object>().Count());
         True(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single(o => o.Key == historical.Key).HasSuggestedLink == false);
         Equal(0, fixture.Printer.Calls);
     }
@@ -1469,7 +1483,8 @@ internal static class MarketplaceViewModelTests
             Equal(row.Total == 355 ? first.Key : second.Key, row.OrderMatch.Order!.Key);
             Equal(1, row.OrderMatch.CompetingOrderCount);
         }
-        Equal(4 + archive.Length, workspace.Orders.Cast<object>().Count());
+        Equal(2, workspace.Orders.Cast<object>().Count());
+        Equal(4 + archive.Length, fixture.Cache.Snapshot.Orders.Count);
         Equal(2, workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Count(o => o.HasSuggestedLink));
         Equal(0, fixture.Source.DetailCalls); // Irrelevant old cache must not block completed current-range checks.
         Equal(0, fixture.Details.Calls); // A full product basket is not required for unique same-day totals.
@@ -1558,7 +1573,7 @@ internal static class MarketplaceViewModelTests
         await workspace.SyncAsync();
         Equal(2, workspace.Orders.Cast<object>().Count());
         True(main.Receipts.All(r => r.OrderMatch?.State is not (ReceiptLinkState.Exact or ReceiptLinkState.Suggested)));
-        True(!workspace.AutoMatchCommand.CanExecute(null));
+        True(workspace.AutoMatchCommand.CanExecute(null)); // Refresh can complete the coverage; it does not bypass it.
         True(fixture.Cache.Snapshot.States.All(s => !s.Complete));
         Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
     }
@@ -1986,6 +2001,9 @@ internal static class MarketplaceViewModelTests
                 .Select(child => child.TranslatePoint(new Point(0, child.ActualHeight / 2), orderToolbar).Y).ToArray();
             True(centers.Max() - centers.Min() < 1, "Order search, filter and both buttons must share one row.");
             True(toolbarScroll.ScrollableWidth < 1, "The compact toolbar must fit the default half-width pane.");
+            var refreshLinks = (Button)mainWindow.FindName("MatchProductsButton");
+            Equal("Оновити автоприв’язки", refreshLinks.Content as string);
+            True(ReferenceEquals(workspace.AutoMatchCommand, refreshLinks.Command));
             var split = (Grid)mainWindow.FindName("OrdersSplitLayout");
             var leftPane = (Grid)mainWindow.FindName("MarketplaceOrdersPane");
             var rightPane = (Grid)mainWindow.FindName("CheckboxReceiptsPane");
@@ -2309,11 +2327,12 @@ internal static class MarketplaceViewModelTests
             var account = PrintAccountContext.Create(Settings.App);
             History.Records[ReceiptThree] = new(account, ReceiptThree, "mock-printer", DateTimeOffset.UtcNow);
         }
-        public (MainViewModel Main, MarketplaceWorkspaceViewModel Workspace) Create(bool autoLinkEnabled = false)
+        public (MainViewModel Main, MarketplaceWorkspaceViewModel Workspace) Create(bool autoLinkEnabled = false,
+            IAutomaticMatchCacheStore? automaticCache = null)
         {
             var sync = new MarketplaceSyncService([Source, Rozetka], Settings, Cache);
             // Existing scenarios explicitly use manual refresh mode; separate activation scenarios cover the production default.
-            var workspace = new MarketplaceWorkspaceViewModel(Settings, sync, Links, Details, Dialogs, autoLinkEnabled: autoLinkEnabled);
+            var workspace = new MarketplaceWorkspaceViewModel(Settings, sync, Links, Details, Dialogs, autoLinkEnabled: autoLinkEnabled, automaticCache: automaticCache);
             var main = new MainViewModel(ReceiptSource, Images, Settings, Authentication, History,
                 Printer, Dialogs, new Logger(), workspace) { DateFrom = new(2026, 9, 23), DateTo = new(2026, 9, 23) };
             return (main, workspace);

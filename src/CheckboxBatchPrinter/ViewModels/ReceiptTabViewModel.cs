@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Windows.Data;
+using CheckboxBatchPrinter.Core.Services;
 using CheckboxBatchPrinter.Infrastructure;
 
 namespace CheckboxBatchPrinter.ViewModels;
@@ -12,6 +13,7 @@ public sealed class ReceiptTabViewModel : ObservableObject
     private ReceiptTypeOption? _selectedType;
     private ReceiptRowViewModel? _selectedReceipt;
     private readonly MarketplaceWorkspaceViewModel? _marketplace;
+    private DateOnly? _dateFrom, _dateTo;
 
     public ReceiptTabViewModel(ObservableCollection<ReceiptRowViewModel> rows, ReceiptTypeOption initialType,
         bool usesOrders = false, MarketplaceWorkspaceViewModel? marketplace = null)
@@ -44,6 +46,15 @@ public sealed class ReceiptTabViewModel : ObservableObject
     }
 
     public bool IsMarked(ReceiptRowViewModel row) => UsesOrders ? row.IsSelectedForOrders : row.IsSelected;
+    public void SetDisplayDates(DateOnly? from, DateOnly? to)
+    {
+        if (_dateFrom == from && _dateTo == to) return;
+        _dateFrom = from;
+        _dateTo = to;
+        View.Refresh();
+        if (SelectedReceipt is not null && !View.Contains(SelectedReceipt)) SelectedReceipt = null;
+    }
+
     public void SetMarked(ReceiptRowViewModel row, bool value)
     {
         if (UsesOrders) row.IsSelectedForOrders = value;
@@ -53,6 +64,12 @@ public sealed class ReceiptTabViewModel : ObservableObject
     private bool MatchesFilter(object item)
     {
         if (item is not ReceiptRowViewModel row) return false;
+        if (_dateFrom.HasValue || _dateTo.HasValue)
+        {
+            if (row.Model.DisplayDate is not { } timestamp) return false;
+            var date = DateRangeBuilder.KyivDate(timestamp);
+            if (_dateFrom is { } from && date < from || _dateTo is { } to && date > to) return false;
+        }
         // The basic Checkbox screen never consults a marketplace filter or OrderMatch.
         if (UsesOrders && _marketplace?.MatchesFilter(row) == false) return false;
         if (!string.IsNullOrEmpty(SelectedType?.Value) && !string.Equals(row.RawType, SelectedType.Value, StringComparison.OrdinalIgnoreCase))

@@ -84,6 +84,7 @@ public sealed class MainViewModel : ObservableObject
                     Marketplace.SelectedReceipt = tab.SelectedReceipt;
             };
         }
+        ApplyDisplayDates();
     }
 
     public ObservableCollection<ReceiptRowViewModel> Receipts { get; } = [];
@@ -126,8 +127,19 @@ public sealed class MainViewModel : ObservableObject
     public ICommand SettingsCommand { get; }
     public ICommand MarketplaceSettingsCommand { get; }
 
-    public DateTime? DateFrom { get => _dateFrom; set { if (SetProperty(ref _dateFrom, value)) UpdateOrderDatesWithoutReceipts(); } }
-    public DateTime? DateTo { get => _dateTo; set { if (SetProperty(ref _dateTo, value)) UpdateOrderDatesWithoutReceipts(); } }
+    public DateTime? DateFrom { get => _dateFrom; set { if (SetProperty(ref _dateFrom, value)) ApplyDisplayDates(); } }
+    public DateTime? DateTo { get => _dateTo; set { if (SetProperty(ref _dateTo, value)) ApplyDisplayDates(); } }
+    private void ApplyDisplayDates()
+    {
+        var from = DateFrom is { } first ? DateOnly.FromDateTime(first) : (DateOnly?)null;
+        var to = DateTo is { } last ? DateOnly.FromDateTime(last) : (DateOnly?)null;
+        // Date inputs immediately filter loaded rows in both tabs. Never replace the
+        // source collection or matching scope: hidden competitors still count.
+        AllReceiptsTab.SetDisplayDates(from, to);
+        OrdersReceiptsTab.SetDisplayDates(from, to);
+        Marketplace?.SetDisplayDates(from, to);
+        UpdateOrderDatesWithoutReceipts();
+    }
     private void UpdateOrderDatesWithoutReceipts() => Marketplace?.SetOrderDatesWithoutReceipts(
         DateFrom is { } from ? DateOnly.FromDateTime(from) : null, DateTo is { } to ? DateOnly.FromDateTime(to) : null);
     public string SearchText

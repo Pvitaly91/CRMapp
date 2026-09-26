@@ -49,12 +49,14 @@ public partial class App : Application
             var marketplaceSecrets = new DpapiMarketplaceSecretStore(Path.Combine(marketplaceData, "Secrets"));
             var marketplaceCache = new DpapiMarketplaceCacheStore(Path.Combine(marketplaceData, "orders.dpapi"));
             var orderLinks = new DpapiReceiptOrderLinkStore(Path.Combine(marketplaceData, "receipt-order-links.dpapi"));
+            var automaticLinks = new DpapiAutomaticMatchCacheStore(Path.Combine(marketplaceData, "automatic-matches.dpapi"));
             _marketplaceHttpClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(45) };
             var marketplaceTransport = new MarketplaceHttpTransport(_marketplaceHttpClient);
             var marketplaceSync = new MarketplaceSyncService(
                 [new PromOrdersClient(marketplaceTransport), new RozetkaOrdersClient(marketplaceTransport)], marketplaceSecrets, marketplaceCache);
             var marketplace = new MarketplaceWorkspaceViewModel(marketplaceSettings, marketplaceSync, orderLinks,
-                new ReceiptDetailsService(apiClient, settingsService), new OrderLinkDialogService(), new FiscalReferenceVerifier(apiClient, settingsService));
+                new ReceiptDetailsService(apiClient, settingsService), new OrderLinkDialogService(), new FiscalReferenceVerifier(apiClient, settingsService),
+                automaticCache: automaticLinks);
             var dialogs = new UiDialogService(settingsService, authentication, imageService, printService, _logger,
                 () => new MarketplaceSettingsViewModel(marketplaceSettings, marketplaceSecrets, marketplaceSync));
             _logger.Info("app.viewmodel.create");
