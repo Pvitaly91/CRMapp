@@ -206,6 +206,18 @@ internal static class BasketReceiptMatching
         try
         {
             var left = Group(order.Items); var right = Group(details.Items);
+            if (!left.Keys.ToHashSet().SetEquals(right.Keys))
+            {
+                var reorderedLeft = Group(order.Items, ignoreWordOrder: true);
+                var reorderedRight = Group(details.Items, ignoreWordOrder: true);
+                if (reorderedLeft.Keys.ToHashSet().SetEquals(reorderedRight.Keys))
+                {
+                    var differentQuantity = reorderedLeft.FirstOrDefault(p => p.Value.HasValue && reorderedRight[p.Key].HasValue && p.Value != reorderedRight[p.Key]);
+                    if (differentQuantity.Key is not null)
+                        return new(ProductComparison.Contradiction, $"Кількість товару «{differentQuantity.Key}» при однакових словах назви: {differentQuantity.Value} у замовленні, {reorderedRight[differentQuantity.Key]} у чеку.");
+                    return new(reorderedLeft.Any(p => !p.Value.HasValue || !reorderedRight[p.Key].HasValue) ? ProductComparison.Insufficient : ProductComparison.Match);
+                }
+            }
             var sameNames = left.Keys.ToHashSet().SetEquals(right.Keys);
             foreach (var p in left.OrderBy(p => p.Key, StringComparer.Ordinal))
             {
@@ -242,7 +254,8 @@ internal static class BasketReceiptMatching
         catch (OverflowException) { return new(ProductComparison.Insufficient); }
     }
 
-    private static Dictionary<string, decimal?> Group(IReadOnlyList<OrderItem> items) => items.GroupBy(i => ProductNameEvidence.Identity(i.Name))
+    private static Dictionary<string, decimal?> Group(IReadOnlyList<OrderItem> items, bool ignoreWordOrder = false) =>
+        items.GroupBy(i => ignoreWordOrder ? ProductNameEvidence.WordOrderIdentity(i.Name) : ProductNameEvidence.Identity(i.Name))
         .ToDictionary(g => g.Key, g => g.All(i => i.Quantity is > 0m) ? (decimal?)g.Sum(i => i.Quantity!.Value) : null);
 
     private static bool HasFiscalEvidence(MarketplaceOrder o) => o.ReceiptIds.Count > 0 || o.FiscalReferences.Count > 0 ||

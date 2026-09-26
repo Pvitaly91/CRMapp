@@ -61,6 +61,7 @@ internal static class Program
         Tests.AddRange(BasketMatchingTests.All);
         Tests.AddRange(AmountMatchingTests.All);
         Tests.AddRange(QuantityMatchingTests.All);
+        Tests.AddRange(NameMatchingTests.All);
         Tests.AddRange(AutomaticMatchCacheTests.All);
         Tests.AddRange(MarketplaceSyncTests.All);
         Tests.AddRange(MarketplaceViewModelTests.All);

@@ -10,7 +10,7 @@ internal static class AmountMatchingTests
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
         ("product regression: translated cable remains a competitor in complete A/B/receipt graph", Run(TranslatedCandidateRegression)),
-        ("product evidence: translations, reordered, abbreviated and mixed-script names stay uncertain", Run(UnknownNames)),
+        ("product evidence: translations abbreviated and mixed-script names stay uncertain; plain word order matches", Run(UnknownNames)),
         ("product evidence: aligned voltage model size color connector and quantity differences explain exclusions", Run(EstablishedDifferences)),
         ("product evidence: reordered numbers, unaligned characteristics and foreign articles cannot prove difference", Run(UnalignedCharacteristics)),
         ("product evidence: unknown lines remain possible counterparts in multi-item baskets", Run(UnknownBasketLines)),
@@ -278,7 +278,6 @@ internal static class AmountMatchingTests
         foreach (var (order, receipt) in new[]
         {
             ("Кабель живлення", "Кабель питания"),
-            ("Червоний кабель USB", "Кабель USB червоний"),
             ("Кабель живлення USB", "Каб. USB"),
             ("Кабель USB Type-C", "Кабель USВ Type-C"), // Last character in USВ is Cyrillic.
             ("Товар X", "Товар Y"), // Different text alone is no longer a proof.
@@ -291,6 +290,8 @@ internal static class AmountMatchingTests
             Yes(!result.Explanation.Contains("Виключено"));
         }
         Eq(ProductComparison.Match, Products("Кабель живлення", "  КАБЕЛЬ\u00a0живлення ").Products);
+        var reordered = Products("Червоний кабель USB", "Кабель USB червоний");
+        Eq(ProductComparison.Match, reordered.Products); Eq(AutomaticLinkBasis.AmountAndProducts, reordered.Basis);
     }
 
     private static void EstablishedDifferences()
@@ -331,13 +332,18 @@ internal static class AmountMatchingTests
             ("Адаптер вхід 12 В вихід 24 В", "Адаптер вихід 12 В вхід 24 В"),
             ("Кабель USB-A USB-C", "Кабель USB-A USB-B"),
             ("Адаптер 12 В", "Датчик 24 В"), // No established common product anchor.
-            ("Червоний кабель", "Чорний датчик"),
+            ("Червоний адаптер", "Чорний модуль"), // Neither a shared anchor nor established distinct kinds.
             ("Кабель розмір 2 м", "Кабель розмір 200 см")
         })
         {
             var result = Products(order, receipt);
             Eq(ProductComparison.Insufficient, result.Products); Eq(AutomaticLinkBasis.UniqueAmount, result.Basis);
         }
+        // The old red-cable/black-sensor case now has an explicit KIND difference,
+        // but the unaligned colors must still never be its exclusion reason.
+        var differentKinds = Products("Червоний кабель", "Чорний датчик");
+        Eq(ProductComparison.Contradiction, differentKinds.Products);
+        Yes(differentKinds.Explanation.Contains("Тип товару в назві") && !differentKinds.Explanation.Contains("Колір:"));
         // Unrelated identifier namespaces are neither identity nor contradiction evidence.
         var r = R(); var skuOrder = O(name: "Кабель") with { Items = [new("Кабель", "A", 1, 290, 290)] };
         var details = new Dictionary<string, ReceiptDetails> { [r.Id] = new(r.Id, [new("Кабель", "B", 1, 290, 290)]) };
