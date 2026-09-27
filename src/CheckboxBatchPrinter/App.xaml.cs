@@ -63,9 +63,16 @@ public partial class App : Application
             var labelHistory = new DpapiLabelHistoryStore(Path.Combine(shippingData, "attempts.dpapi"));
             _shippingHttpClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(60) };
             var labelPrinter = new WindowsLabelPrinter();
-            var labelDialogs = new LabelDialogs(shippingSettings, marketplaceSettings, labelPrinter);
+            var shippingTransport = new ShippingLabelHttp(_shippingHttpClient);
+            var npClient = new NovaPoshtaReadOnlyClient(shippingTransport);
+            var pdfInspector = new WindowsLabelPdfInspector();
+            var npSession = new NovaPoshtaVerifiedSession();
+            var labelDialogs = new LabelDialogs(shippingSettings, marketplaceSettings, labelPrinter,
+                new NovaPoshtaDiagnostics(npClient, pdfInspector), npSession, () => marketplace.SelectedOrder?.Model);
             marketplace.Labels = new ShippingLabelsViewModel(marketplace, shippingSettings, labelHistory,
-                new OfficialShippingLabelSource(new ShippingLabelHttp(_shippingHttpClient), shippingSettings, marketplaceSettings, marketplaceSecrets),
+                new ConfiguredShippingLabelSource(shippingSettings,
+                    new NovaPoshtaDirectLabelSource(shippingSettings, npClient, pdfInspector, npSession),
+                    new OfficialShippingLabelSource(shippingTransport, shippingSettings, marketplaceSettings, marketplaceSecrets)),
                 new WindowsShippingLabelRenderer(), labelPrinter, labelDialogs);
             var dialogs = new UiDialogService(settingsService, authentication, imageService, printService, _logger,
                 () => new MarketplaceSettingsViewModel(marketplaceSettings, marketplaceSecrets, marketplaceSync), marketplace.Labels);

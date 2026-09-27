@@ -11,7 +11,7 @@ namespace CheckboxBatchPrinter.Services;
 // Embedded PDFium; no external viewer/process or plaintext PDF cache.
 public sealed class WindowsShippingLabelRenderer : IShippingLabelRenderer
 {
-    private static readonly SemaphoreSlim Gate = new(1,1); // PDFium is not thread safe.
+    internal static readonly SemaphoreSlim Gate = new(1,1); // Shared by inspection and rendering; PDFium is not thread safe.
     public async Task<IReadOnlyList<ShippingLabelPage>> RenderAsync(ShippingLabelDocument document, double dpiX, double dpiY,
         CancellationToken cancellationToken = default)
     {

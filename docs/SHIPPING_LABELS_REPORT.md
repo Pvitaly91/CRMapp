@@ -1,6 +1,48 @@
 # Shipping labels — implementation and acceptance
 
-## Direct NP / Prom follow-up — NOT COMPLETE
+## Current follow-up: direct NP diagnostics implemented, real acceptance awaiting key
+
+2026-09-27. Started at clean HEAD `2bb07400558934cbd55ffe46c66739dde71659f8`, branch `codex/checkbox-marketplace-orders`; GitHub branch matched. No newer/user work reverted. Production is not a deployment/data source.
+
+### 1. What came from SDK source
+
+Read the user-selected SDK revision `1c7027da068363d9d06792a1e698b025d852b41d`: Marking, InternetDocument, GetDocumentListRequest plus their Request/BaseModel/DocumentListData dependencies. Implemented those candidate requests in C#, without PHP/SDK install or a new package dependency. [Exact sources, guards and limitations](SHIPPING_LABELS_API_CONTRACT.md#current-direct-np-implementation-sdk-derived-awaiting-a-local-key). Specific methods/response shapes/marking URL are **SDK-derived, not official-contract-confirmed**.
+
+Separate NP account name/masked key/stable ID, protected storage and explicit Prom-store binding; manual “Перевірити наявну накладну” for one TTN of the selected Prom order, explicit 1–7-day TTN-creation period, ≤10 pages, cancel/reentry guard. No automatic history scan, guessed exact-search property, key-test-only success, or fallback account search. Settings/key can be saved without printer/Seller/Checkbox. Blank key preserves the old one; rotation retains history/account identity.
+
+PDF candidate downloads use exact NP HTTPS hosts, no redirects or secret-bearing error messages. Native PDFium inspects physical pages and text TTN identity, then the diagnostic preview shows all pages without a print button. Missing text/wrong TTN/unknown completeness cannot silently enter a packet. Existing print geometry, fiscal headers, Checkbox API and receipt printer were not changed.
+
+The separate `NovaPoshtaDirectLabelSource` is connected conditionally to the existing packet source: only an explicitly diagnosed/allowed single-place 100×100 PDF may enter a packet during this session, with a fresh download/inspection before normal batch confirmation. Restart/key rotation clears eligibility. Seller/RD remain; direct NP failure never falls back to another account. This wiring is exercised synthetically but **not yet accepted with real NP**.
+
+### 2–4. Real API / Prom document / identity and places
+
+- **Real NP requests executed: zero.** Current development shipping store was inspected through the existing DPAPI settings store, emitting counts/flags only: zero NP accounts/keys, zero Prom→NP bindings, no RD token. Previous check found two saved Prom tokens and zero Seller accounts. No production secret was copied. Status is **“Очікує локального введення ключа”**.
+- **Real label of a Prom-origin TTN obtained: no.** NP account visibility, current marking route success, PDF text/layout/size and account-context access remain unverified. A valid key or tracking response would not prove PDF availability.
+- Actual PDFium parsing/identity/size tests used synthetic 100×100/A4 and multi-page fixtures only, not real NP/customer PDFs. Diagnostic UI and images were rendered/visually inspected.
+- **Multi-place fullness is not verified.** All received pages remain visible; page count cannot prove all numbered places. Multi-place and absent SeatsAmount currently stay diagnostic-only. No guessed seat-number pattern or “first page is enough” rule was added.
+- **Physical print: none.** Real WindowsLabelPrinter algorithm used only its injected synthetic page device. No live StartDoc, spooler or global printer change, shipment/registry/order/fiscal write occurred.
+
+### 5. Regression/build and remaining work
+
+- All previous **215 tests preserved**; **18 new groups**, total **233/233 passed**, Release **0 warnings / 0 errors**. New scenarios cover bounded SDK request/empty-page termination, absent/inaccessible/incomplete samples, optional Ref without substitution, malformed envelopes, forbidden write/extra/duplicate properties, cancellation, secret-bearing failures/redirects/HTML/JSON, native PDF identity/size/off-page text/numeric boundaries, all multi-page diagnostic pages, actual masked-key UI save/manual request/reentry/cancel, DPAPI restart/key rotation/history isolation, direct Prom without Seller and NP→RD→NP through the real backend algorithm as one job. A broken packet does not submit partial pages; existing Seller and All Receipts regressions still pass.
+- Separate development self-contained win-x64 single-file PDFium output: `artifacts/development/np-direct-diagnostics/CheckboxBatchPrinter.exe`. Copied-EXE offline launch/restart verifies bundled native rasterization **and the new PDFium text inspector**; no real profile/API/printer is used in this smoke mode. Package verification result is checked before publishing the commit.
+- Production EXE SHA256 remains `AB087874FB49E48611A2DF0157E6C0285DB9602DCEEEE09FC200B3F53E7B1992`; production EXE/profile not overwritten, migrated or used for secrets.
+
+Local acceptance: in the new development EXE select an existing Prom order with NP TTN, then “Налаштування наклейок → Нова пошта — пряме підключення”. Add name/key locally, explicitly bind the Prom store, choose the actual **TTN creation** date interval and click “Перевірити наявну накладну”. Inspect account result, exact number/Ref, actual page sizes, text identity and every place. Enter RD token separately for genuine mixed preview. Current SDK route/response assumptions must be revisited if the real server differs, not repaired by guessing other methods. No real API is called by automated tests. Physical printing requires a new explicit approval and user paper confirmation.
+
+Reproducible package command (empty new output folder):
+
+```powershell
+dotnet build CheckboxBatchPrinter.sln -c Release
+dotnet run --project tests/CheckboxBatchPrinter.Tests/CheckboxBatchPrinter.Tests.csproj -c Release --no-build
+dotnet publish src/CheckboxBatchPrinter/CheckboxBatchPrinter.csproj -c Release -r win-x64 --self-contained true -o artifacts/development/np-direct-diagnostics -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:IncludeAllContentForSelfExtract=true -p:AppChannel=Development -p:SourceRevisionId=<current-development-commit>
+```
+
+The previous reports below are historical, not claims about the current code.
+
+---
+
+## Historical documentation-only follow-up at 2bb0740 — NOT COMPLETE
 
 2026-09-27 follow-up started at clean HEAD `7966c8665a9b8667a7c1d366d16b0deabeca6377`, branch `codex/checkbox-marketplace-orders`. GitHub's branch pointed to the same commit. No newer code or user changes were reverted.
 

@@ -17,7 +17,8 @@ public sealed class LabelSettingsWindow : Window
     private readonly CheckBox _landscape = new() { Content = "Альбомна орієнтація" };
     private readonly PasswordBox _token = new();
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap };
-    public LabelSettingsWindow(IShippingSettingsStore store, ILabelPrinter printer, ShippingLabelSettings original, MarketplaceSettings marketplaces)
+    public LabelSettingsWindow(IShippingSettingsStore store, ILabelPrinter printer, ShippingLabelSettings original, MarketplaceSettings marketplaces,
+        NovaPoshtaDiagnostics? diagnostics = null, NovaPoshtaVerifiedSession? session = null, Func<MarketplaceOrder?>? currentOrder = null)
     {
         _store = store; _printer = printer; _original = original;
         Title = "Налаштування — Друк наклейок"; Width = 660; Height = 650; WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -40,7 +41,19 @@ public sealed class LabelSettingsWindow : Window
         Add(root, "Нова пошта: підключення Rozetka Seller, яке має доступ до потрібних ТТН", _seller);
         _seller.DisplayMemberPath = nameof(MarketplaceConnection.Name); _seller.SelectedValuePath = nameof(MarketplaceConnection.Id);
         _seller.ItemsSource = marketplaces.Connections.Where(c => c.Enabled && c.Marketplace == MarketplaceKind.Rozetka).ToArray(); _seller.SelectedValue = original.NovaPoshtaSellerConnectionId;
-        root.Children.Add(new TextBlock { Text = "Прямий API Нової пошти очікує перевірки актуального контракту. Для ТТН із Prom доступ через Seller API не гарантований. Якщо немає доступу — пакет не друкується.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 8), FontSize = 11 });
+        var np = new Button { Content = "Нова пошта — пряме підключення", HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0,10,0,10), Padding = new Thickness(8) };
+        np.Click += async (_, _) =>
+        {
+            try
+            {
+                if (diagnostics is null || session is null) throw new InvalidOperationException();
+                new NovaPoshtaConnectionWindow(_store, await _store.LoadAsync(), marketplaces, diagnostics, session, new WindowsShippingLabelRenderer(), currentOrder?.Invoke())
+                    { Owner = this }.ShowDialog();
+            }
+            catch (Exception) { _status.Text = "Не вдалося відкрити пряме NP-підключення. Секрети не відображаються."; }
+        };
+        root.Children.Add(np);
+        root.Children.Add(new TextBlock { Text = "Прямий NP не потребує Seller. Методи досліджено за SDK; спершу явно перевірте конкретну ТТН. Без підтвердженого PDF пакет блокується.", TextWrapping = TextWrapping.Wrap, FontSize = 11 });
         root.Children.Add(_status);
         var notices = new Button { Content = "Ліцензії PDF-renderer", HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0,8,0,4) };
         notices.Click += (_, _) =>
@@ -79,7 +92,8 @@ public sealed class LabelSettingsWindow : Window
             var print = new LabelPrintSettings { PrinterName = name, DriverFormat = format.Name, WidthMm = format.WidthMm, HeightMm = format.HeightMm,
                 ScalePercent = Number(_scale), OffsetXmm = Number(_x), OffsetYmm = Number(_y), Landscape = _landscape.IsChecked == true, Copies = int.Parse(_copies.Text, CultureInfo.InvariantCulture) };
             _ = _printer.Inspect(print);
-            await _store.SaveAsync(_original with { Print = print, RozetkaDeliveryToken = _token.Password.Length == 0 ? _original.RozetkaDeliveryToken : _token.Password,
+            var latest = await _store.LoadAsync(); // Preserve separate NP edits made in the child settings dialog.
+            await _store.SaveAsync(latest with { Print = print, RozetkaDeliveryToken = _token.Password.Length == 0 ? latest.RozetkaDeliveryToken : _token.Password,
                 NovaPoshtaSellerConnectionId = _seller.SelectedValue as string ?? "" });
             _token.Clear(); DialogResult = true;
         }

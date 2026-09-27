@@ -88,7 +88,7 @@ public sealed class ShippingLabelsViewModel : ObservableObject
         _cancel.CancelAfter(TimeSpan.FromMinutes(5));
         try
         {
-            Status = "Готую офіційні етикетки…";
+            Status = "Готую та перевіряю етикетки…";
             var settings = (await _settings.LoadAsync(_cancel.Token)).Print with { };
             var geometry = _printer.Inspect(settings);
             var batch = await _preparation.PrepareAsync(orders, settings, geometry, _cancel.Token);

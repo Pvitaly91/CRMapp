@@ -19,6 +19,9 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
             throw new InvalidOperationException("Недозволений маршрут доставки.");
         var allowed = uri.Host switch
         {
+            "api.novaposhta.ua" => request.Method == HttpMethod.Post && uri.AbsolutePath == "/v2.0/json/" && uri.Query.Length == 0,
+            "my.novaposhta.ua" => request.Method == HttpMethod.Get && uri.Query.Length == 0 && Regex.IsMatch(uri.AbsolutePath,
+                @"\A/orders/printMarking100x100/orders(?:\[\]|%5[Bb]%5[Dd])/[0-9]{14}/type/pdf/zebra/zebra/apiKey/[A-Za-z0-9_-]{1,128}\z"),
             "rz-delivery.rozetka.ua" => request.Method == HttpMethod.Get &&
                 (uri.AbsolutePath == "/api/track/label" || Regex.IsMatch(uri.AbsolutePath, @"^/api/track/[0-9A-Za-z-]+$")),
             "api-seller.rozetka.com.ua" => request.Method == HttpMethod.Post && uri.AbsolutePath == "/sites" ||
@@ -26,6 +29,7 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
             _ => false
         };
         if (!allowed) throw new InvalidOperationException("Дозволено лише читання наявних накладних та їхніх копій.");
+        if (uri.Host == "api.novaposhta.ua") NovaPoshtaReadOnlyContract.ValidateBody(request);
     }
     public async Task<byte[]> SendAsync(Func<HttpRequestMessage> factory, string expectedType, CancellationToken cancellationToken)
     {
@@ -73,6 +77,8 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
             { throw new ShippingLabelException(LabelFailureKind.Temporary, "Перевищено час читання етикетки."); }
             catch (HttpRequestException)
             { throw new ShippingLabelException(LabelFailureKind.Temporary, "Немає з’єднання з API доставки."); }
+            catch (IOException)
+            { throw new ShippingLabelException(LabelFailureKind.Temporary, "Не вдалося повністю прочитати відповідь доставки."); }
         }
     }
     private static ShippingLabelException TooLarge() => new(LabelFailureKind.InvalidDocument, "Етикетка перевищує обмеження 20 MiB.");

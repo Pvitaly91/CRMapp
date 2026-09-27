@@ -1,6 +1,47 @@
-# Official shipping-label contracts
+# Shipping-label contracts and SDK diagnostic candidates
 
 Checked 2026-09-27. Existing documents only; no shipment, registry, order or receipt mutations. POST /sites is authentication.
+
+## Current direct NP implementation: SDK-derived, awaiting a local key
+
+The user explicitly authorized research of a pinned **unofficial** SDK after documentation commit `2bb0740`. The following code was read from revision `1c7027da068363d9d06792a1e698b025d852b41d`; PHP/SDK was **not installed**:
+
+- [Marking.php](https://github.com/sashalenz/nova-poshta-api/blob/1c7027da068363d9d06792a1e698b025d852b41d/src/Marking.php): single-number `printZebraMarking` URL below. No scan-sheet/document creation routes were implemented.
+- [InternetDocument.php](https://github.com/sashalenz/nova-poshta-api/blob/1c7027da068363d9d06792a1e698b025d852b41d/src/ApiModels/InternetDocument/InternetDocument.php) and [GetDocumentListRequest.php](https://github.com/sashalenz/nova-poshta-api/blob/1c7027da068363d9d06792a1e698b025d852b41d/src/ApiModels/InternetDocument/RequestData/GetDocumentListRequest.php): model/method, StudlyCase properties, `d.m.Y` dates and string page.
+- [BaseModel.php](https://github.com/sashalenz/nova-poshta-api/blob/1c7027da068363d9d06792a1e698b025d852b41d/src/ApiModels/BaseModel.php), [Request.php](https://github.com/sashalenz/nova-poshta-api/blob/1c7027da068363d9d06792a1e698b025d852b41d/src/Request.php), [DocumentListData.php](https://github.com/sashalenz/nova-poshta-api/blob/1c7027da068363d9d06792a1e698b025d852b41d/src/ApiModels/InternetDocument/ResponseData/DocumentListData.php): JSON envelope and IntDocNumber / Ref / SeatsAmount / DeletionMark. Unneeded buyer/address fields are discarded, not copied to diagnostics/history.
+
+**Evidence levels:** the key/HTTPS JSON entry point are confirmed by the official integration overview; the specific methods, parameters, response assumptions and marking route are **found in SDK source**, exercised synthetically, **not yet checked with a real NP response**, and **not confirmed by current official documentation**. The historical documentation-access observations below do not substitute for live acceptance.
+
+### Restricted requests
+
+| Request | Implemented candidate / guard |
+|---|---|
+| POST `https://api.novaposhta.ua/v2.0/json/` | Exact root properties `apiKey`, `modelName="InternetDocument"`, `calledMethod="getDocumentList"`, `methodProperties`. Only `DateTimeFrom`, `DateTimeTo` (`dd.MM.yyyy`), `GetFullList=false`, `Page` (string 1–10); 1–7 explicitly chosen days. Duplicate/extra keys, guessed TTN/Ref search parameters, all save/update/delete/registry methods and other HTTP methods are rejected before sending. Request body must be buffered JSON ≤4096 bytes. |
+| GET `https://my.novaposhta.ua/orders/printMarking100x100/orders[]/{PUBLIC_TTN}/type/pdf/zebra/zebra/apiKey/{KEY}` | SDK candidate for one 14-digit public TTN, only after its account lookup. Ref and order ID are never substituted in this route. Exact HTTPS host/path and key-character bounds, no query/fragment/userinfo/nondefault port. No redirects, including to another NP host. |
+
+Neither operation creates/edits shipments, registries, addresses, afterpayment, orders or fiscal receipts. There is no generic API console or account enumeration. The existing transport's 20 MiB response limit, 45-second request timeout, bounded 429/5xx retries/cancellation and whole-operation five-minute timeout remain in use. API/HTTP/JSON error bodies and credential-bearing URLs never appear in messages/logs; exceptions do not retain secret-bearing inner network exceptions.
+
+### Lookup and PDF acceptance
+
+The user selects one existing NP TTN from the currently selected Prom order and explicitly starts the check. Its NP connection is bound to that Prom store, independent of Seller. The date interval defaults to today and is explicitly editable; it is **not inferred from order creation time**. No lookup runs on startup, opening settings, selecting an account or saving a key.
+
+The response must contain boolean success, array data and array errors. Validate exact string IntDocNumber, separate UUID Ref when supplied, optional positive SeatsAmount and DeletionMark. No missing values are invented. A found public number without Ref can be inspected because the SDK marking route uses NUMBER, not Ref; internal document identity is explicitly `ttn:{PUBLIC_NUMBER}`, never presented as a UUID Ref. A supplied shipment Ref must agree.
+
+The SDK does not establish page size/total/last-page semantics. A short page is **not** terminal: continue until an empty successful page. Repeated pages or page-limit exhaustion mean **incomplete**, even if the number was encountered; no marking request follows. A complete empty match means **“Не знайдено у перевіреній вибірці цього акаунта”**, not nonexistent TTN or invalid key. Period expansion is a separate manual check.
+
+The marking response requires successful HTTP, application/pdf, PDF header and native PDFium parse; HTTP 200 alone does not establish identity. The PDFium inspector reads each page's physical dimensions and operation-local text. It excludes text outside page bounds and compares maximal numeric runs (not 14-digit prefixes of longer numbers); conflicting numbers fail closed. Missing text/unknown formatting remains unconfirmed and goes only to **diagnostic preview**. Raw extracted buyer text/PDF/PNG is never written to disk or a profile.
+
+Multi-page diagnostics retain all pages and display API place count, PDF count and each actual page size. **Multi-place completeness is not established by count alone**; seat-number correspondence has not yet been verified on a real NP PDF. Current multi-place/unknown-count documents are diagnostic-only, not eligible for the packet. This limitation is explicit rather than printing just the first page.
+
+### Conditional packet source
+
+`NovaPoshtaDirectLabelSource` implements IShippingLabelSource. After a completed diagnostic for a single-place/one-page, text-identified, actual 100×100 mm PDF, the user may explicitly allow **that TTN** in the current session. Session evidence holds account/TTN/lookup metadata, not PDF or buyer text; restart/changed key/another account/unverified result cannot inherit permission. The label is fetched and inspected again for the confirmed packet. Multi-place, unidentified or incompatible PDF cannot silently enter it.
+
+`ConfiguredShippingLabelSource` routes explicitly bound Prom/NP to that direct source. Failure never falls through to other accounts/Seller. Existing explicitly selected Seller alternative and Rozetka Delivery remain available. Unbound Prom/NP without explicitly selected Seller asks for an NP store binding, not mandatory Seller.
+
+Existing LabelBatchPreparation, rasterizer, preview, WindowsLabelPrinter and separate attempt journal remain in use: stable NP→RD→NP pages, one job, complete preparation before confirmation, no partial transmission after a document failure. Printer scaling, receipt geometry and fiscal headers are unchanged.
+
+Connections (stable ID/name/key) and per-Prom-store bindings are in the existing channel-specific ShippingLabels/settings.dpapi. Blank key field preserves its old value; rotating a key retains connection ID/binding and does not alter label/receipt history. Diagnostic settings can be saved without a printer, Checkbox or Seller. Keys/fingerprints are not included in reports. Real direct NP acceptance status: **“Очікує локального введення ключа”**.
 
 ## Primary sources
 
@@ -26,9 +67,9 @@ Rozetka: preserve delivery.delivery_service_name/id, ttn and carrier.carrier_tra
 
 Ref and public TTN are distinct. TTN-module rights and actual document access are required. Prom origin does not prove that a Seller account can access its NP document. Seller is selected separately; existing Rozetka-origin Seller connection can be used. No carrier registry is created.
 
-Direct NP API/key support is **not implemented** pending a current official read/100×100-print contract. Do not advertise this alternative as access to all Prom shipments.
+The direct NP SDK candidate is separate from this verified Seller alternative. It is not advertised as access to all Prom shipments: real NP/account/PDF acceptance is still pending, as described above.
 
-### Direct NP follow-up: contract still unverified (2026-09-27)
+### Historical documentation-only follow-up at 2bb0740 (2026-09-27)
 
 Rechecked from the local Windows PC, not just the remote web reader:
 
@@ -46,9 +87,9 @@ This proves a documentation-access problem in this environment, **not** that dir
 | Official thermal marking | Documented HTTPS route/model/method, PDF response, 100×100 selection, allowed parameters, handling of a key in a URL. |
 | Multi-place shipment | Place-count field and whether/how all pages are returned; page/document identity, actual page dimensions. |
 
-The generic JSON entry point is **not** added to the transport allowlist. All direct NP requests currently fail closed: there is no verified modelName/calledMethod/parameter allowlist. A route guessed from a third-party example or a synthetic PDF would not satisfy this contract. No placeholder connection test reports success and no unchecked redirect can receive a key.
+At `2bb0740`, the generic JSON entry point was **not** in the transport allowlist. The later user-authorized SDK implementation above adds only its specific bounded read method, not arbitrary POST access. Synthetic fixtures still do not satisfy real NP acceptance. No placeholder connection test reports success and no unchecked redirect can receive a key.
 
-Current source dispatch remains the previously verified Seller alternative / Rozetka Delivery implementation. Separate direct NP credentials, per-store NP connection selection and the direct adapter are **pending**, not represented as implemented. In particular, Seller cannot prove access to a Prom-origin TTN owned by another NP context. It must never be treated as proof that the TTN does not exist.
+At `2bb0740`, dispatch/credentials/per-store selection/direct adapter were pending; they are now implemented conditionally as described above. Seller still cannot prove access to a Prom-origin TTN owned by another NP context. A Seller miss must never be treated as proof that the TTN does not exist.
 
 ### Draft question for NP technical support (not sent)
 

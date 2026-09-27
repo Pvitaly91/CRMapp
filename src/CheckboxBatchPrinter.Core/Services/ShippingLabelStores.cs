@@ -7,13 +7,33 @@ public sealed class DpapiShippingSettingsStore(string path) : IShippingSettingsS
     public async Task<ShippingLabelSettings> LoadAsync(CancellationToken cancellationToken = default)
     {
         using var lease = await MarketplaceStoreFiles.LockAsync(path, cancellationToken);
-        return await MarketplaceStoreFiles.ReadProtectedAsync<ShippingLabelSettings>(path, cancellationToken) ?? new();
+        var value = await MarketplaceStoreFiles.ReadProtectedAsync<ShippingLabelSettings>(path, cancellationToken) ?? new();
+        ValidateConnections(value); return value;
     }
     public async Task SaveAsync(ShippingLabelSettings settings, CancellationToken cancellationToken = default)
     {
-        settings.Print.Validate();
+        // Connection diagnostics must not require a configured printer. Printing validates it independently.
+        (settings.Print.PrinterName.Length > 0 ? settings.Print : settings.Print with { PrinterName = "diagnostic-only" }).Validate();
+        ValidateConnections(settings);
         using var lease = await MarketplaceStoreFiles.LockAsync(path, cancellationToken);
         await MarketplaceStoreFiles.WriteProtectedAsync(path, settings, cancellationToken);
+    }
+    private static void ValidateConnections(ShippingLabelSettings value)
+    {
+        if (value.NovaPoshtaConnections is null || value.NovaPoshtaStoreBindings is null || value.NovaPoshtaConnections.Count > 30 || value.NovaPoshtaStoreBindings.Count > 100)
+            throw new InvalidDataException("Некоректні локальні підключення NP; файл не перезаписано.");
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var c in value.NovaPoshtaConnections)
+        {
+            if (c is null || !ids.Add(MarketplaceStoreFiles.ConnectionFileId(c.Id)) || string.IsNullOrWhiteSpace(c.Name) || c.Name.Length > 80 ||
+                c.Name.Any(char.IsControl) || c.ApiKey is null || c.ApiKey.Length > 0 && !NovaPoshtaReadOnlyContract.ValidKey(c.ApiKey))
+                throw new InvalidDataException("Некоректне підключення NP; ключ не відображається.");
+        }
+        var stores = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var b in value.NovaPoshtaStoreBindings)
+            if (b is null || !stores.Add(MarketplaceStoreFiles.ConnectionFileId(b.MarketplaceConnectionId)) ||
+                !ids.Contains(MarketplaceStoreFiles.ConnectionFileId(b.NovaPoshtaConnectionId)))
+                throw new InvalidDataException("Магазин повинен мати одне явно вибране існуюче NP-підключення.");
     }
 }
 public sealed class DpapiLabelHistoryStore(string path) : ILabelHistoryStore

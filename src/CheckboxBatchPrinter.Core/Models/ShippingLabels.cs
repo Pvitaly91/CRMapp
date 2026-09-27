@@ -49,6 +49,34 @@ public sealed record ShippingLabelSettings
     public string RozetkaDeliveryToken { get; init; } = "";
     public string RozetkaDeliveryConnectionId { get; init; } = Guid.NewGuid().ToString("N");
     public string NovaPoshtaSellerConnectionId { get; init; } = "";
+    public IReadOnlyList<NovaPoshtaConnection> NovaPoshtaConnections { get; init; } = [];
+    public IReadOnlyList<NovaPoshtaStoreBinding> NovaPoshtaStoreBindings { get; init; } = [];
+}
+
+// Lives exclusively in channel-specific DPAPI shipping settings, never marketplace JSON.
+public sealed record NovaPoshtaConnection(string Id, string Name, string ApiKey)
+{ public override string ToString() => Name; }
+public sealed record NovaPoshtaStoreBinding(string MarketplaceConnectionId, string NovaPoshtaConnectionId);
+public sealed record NovaPoshtaSearchPeriod(DateOnly From, DateOnly To)
+{
+    public void Validate()
+    {
+        if (To < From || To.DayNumber - From.DayNumber > 6)
+            throw new InvalidOperationException("Виберіть період перевірки ТТН від 1 до 7 днів. Розширення — окрема явна перевірка.");
+    }
+}
+public sealed record NovaPoshtaLookup(string TrackingNumber, string DocumentRef, int? Places, bool Complete, int PagesRead, string Message, bool Found = true);
+public enum LabelIdentityCheck { Unconfirmed, Verified, Contradiction }
+// Text is operation-local; do not serialize, cache, log or display raw PDF text.
+public sealed record LabelPdfPageInfo(int Number, double WidthMm, double HeightMm, string Text)
+{ public override string ToString() => $"Сторінка {Number}: {WidthMm:0.##} × {HeightMm:0.##} мм"; }
+public sealed record LabelPdfInspection(IReadOnlyList<LabelPdfPageInfo> Pages);
+public sealed record NovaPoshtaDiagnosticResult(NovaPoshtaLookup Lookup, ShippingLabelDocument? Document,
+    LabelPdfInspection? Inspection, LabelIdentityCheck Identity, bool AllPlacesVerified, string Message)
+{
+    public bool CanUseInBatch => Lookup.Complete && Lookup.Found && Document is not null && Identity == LabelIdentityCheck.Verified && AllPlacesVerified &&
+        (Lookup.DocumentRef.Length == 0 || Guid.TryParse(Lookup.DocumentRef, out _)) && Inspection is { Pages.Count: > 0 } &&
+        Inspection.Pages.All(p => Math.Abs(p.WidthMm - 100) <= 0.8 && Math.Abs(p.HeightMm - 100) <= 0.8);
 }
 
 public static class ShippingCarrierNames

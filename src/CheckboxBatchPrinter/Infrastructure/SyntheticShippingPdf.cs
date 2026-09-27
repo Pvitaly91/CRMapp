@@ -7,7 +7,8 @@ namespace CheckboxBatchPrinter.Infrastructure;
 // Offline QA only, never used as a substitute for carrier documents.
 internal static class SyntheticShippingPdf
 {
-    internal static byte[] Create(double widthMm = 100, double heightMm = 100, int pages = 1, int rotation = 0)
+    internal static byte[] Create(double widthMm = 100, double heightMm = 100, int pages = 1, int rotation = 0,
+        IReadOnlyList<string>? pageTexts = null, bool textOutsidePage = false)
     {
         string N(double n) => n.ToString("0.###", CultureInfo.InvariantCulture);
         var width = widthMm * 72 / 25.4; var height = heightMm * 72 / 25.4;
@@ -17,11 +18,16 @@ internal static class SyntheticShippingPdf
         {
             var pageId = objects.Count + 1; var contentId = pageId + 1;
             kids.Add($"{pageId} 0 R");
-            objects.Add($"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {N(width)} {N(height)}] /Rotate {rotation} /Resources << >> /Contents {contentId} 0 R >>");
+            objects.Add($"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {N(width)} {N(height)}] /Rotate {rotation} /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents {contentId} 0 R >>");
             var ink = new StringBuilder($"0 g 0 G 1 w 3 3 {N(width - 6)} {N(height - 6)} re S\n");
             // Barcode-like stripe pattern plus quiet zones and four full edge markers.
             for (var bar = 0; bar < 40; bar++) ink.Append($"{N(20 + bar * 4)} 35 {(bar % 3 == 0 ? 2 : 1)} 45 re f\n");
             ink.Append($"12 {N(height - 30)} {N(20 + index * 10)} 8 re f\n");
+            if (pageTexts is not null && index < pageTexts.Count)
+            {
+                var text = pageTexts[index].Replace("\\", "\\\\").Replace("(", "\\(").Replace(")", "\\)");
+                ink.Append($"BT /F1 12 Tf {(textOutsidePage ? N(width + 50) : "20")} {N(height - 65)} Td ({text}) Tj ET\n");
+            }
             var stream = ink.ToString();
             objects.Add($"<< /Length {Encoding.ASCII.GetByteCount(stream)} >>\nstream\n{stream}endstream");
         }

@@ -85,9 +85,15 @@ internal static class PackageVerification
             var previewEncoder = new PngBitmapEncoder(); previewEncoder.Frames.Add(BitmapFrame.Create(previewBitmap));
             using (var output = File.Create(Path.Combine(root,"ShippingLabelPreview.png"))) previewEncoder.Save(output);
             preview.Close();
+            // New direct-NP diagnostic uses this same bundled PDFium text layer; no network/account.
+            var diagnosticPdf = SyntheticShippingPdf.Create(pageTexts: ["20400000000000"]);
+            var inspection = await new WindowsLabelPdfInspector().InspectAsync(diagnosticPdf);
+            if (inspection.Pages.Count != 1 || !inspection.Pages[0].Text.Contains("20400000000000") || Math.Abs(inspection.Pages[0].WidthMm - 100) > .05)
+                throw new InvalidOperationException("Bundled PDF text inspection failed.");
             await File.WriteAllTextAsync(report, JsonSerializer.Serialize(new {
                 Success = true, AppEnvironment.Channel, AppEnvironment.Version, AppEnvironment.Commit,
                 ShippingPdfPages = labelPages.Count,
+                ShippingPdfTextInspection = true,
                 AppEnvironment.WindowTitle, DefaultDataRoot = AppEnvironment.DataRoot, TestDataRoot = data,
                 Restarted = restarted, Architecture = RuntimeInformation.ProcessArchitecture.ToString(),
                 Runtime = RuntimeEnvironment.GetRuntimeDirectory(), Framework = RuntimeInformation.FrameworkDescription
