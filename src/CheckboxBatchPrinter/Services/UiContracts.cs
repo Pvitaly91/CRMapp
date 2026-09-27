@@ -3,12 +3,15 @@ using CheckboxBatchPrinter.ViewModels;
 
 namespace CheckboxBatchPrinter.Services;
 
+// Order metadata belongs to the confirmed batch, not live rows during printing.
+public sealed record PrintReceiptDocument(byte[] Png, string ReceiptId, string OrderNumber = "");
+
 public interface IPrintService
 {
     IReadOnlyList<string> GetInstalledPrinters();
     bool PrinterExists(string printerName);
-    Task PrintReceiptAsync(byte[] png, string receiptId, AppSettings settings, CancellationToken cancellationToken = default);
-    Task PrintReceiptsAsSingleJobAsync(IReadOnlyList<(byte[] Png, string ReceiptId)> receipts, AppSettings settings,
+    Task PrintReceiptAsync(PrintReceiptDocument receipt, AppSettings settings, CancellationToken cancellationToken = default);
+    Task PrintReceiptsAsSingleJobAsync(IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings,
         CancellationToken cancellationToken = default);
     Task PrintTestAsync(AppSettings settings, CancellationToken cancellationToken = default);
 }

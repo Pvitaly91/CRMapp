@@ -26,21 +26,21 @@ public sealed class WindowsPrintService : IPrintService
     public bool PrinterExists(string printerName) =>
         GetInstalledPrinters().Contains(printerName, StringComparer.CurrentCultureIgnoreCase);
 
-    public Task PrintReceiptAsync(byte[] png, string receiptId, AppSettings settings, CancellationToken cancellationToken = default) =>
+    public Task PrintReceiptAsync(PrintReceiptDocument receipt, AppSettings settings, CancellationToken cancellationToken = default) =>
         Application.Current.Dispatcher.InvokeAsync(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
             using var server = new LocalPrintServer();
             using var queue = FindQueue(server, settings.PrinterName);
-            var source = DecodeGrayscale(png);
-            var page = BuildPage(source, settings, out var pageWidth, out var pageHeight);
+            var source = DecodeGrayscale(receipt.Png);
+            var page = BuildPage(source, settings, out var pageWidth, out var pageHeight, receipt.OrderNumber);
             var ticket = BuildTicket(queue, pageWidth, pageHeight);
             var dialog = new PrintDialog { PrintQueue = queue, PrintTicket = ticket };
-            dialog.PrintVisual(page, $"Checkbox чек {receiptId}");
+            dialog.PrintVisual(page, $"Checkbox чек {receipt.ReceiptId}");
         }).Task;
 
     public Task PrintReceiptsAsSingleJobAsync(
-        IReadOnlyList<(byte[] Png, string ReceiptId)> receipts,
+        IReadOnlyList<PrintReceiptDocument> receipts,
         AppSettings settings,
         CancellationToken cancellationToken = default) =>
         Application.Current.Dispatcher.InvokeAsync(() =>
@@ -108,13 +108,16 @@ public sealed class WindowsPrintService : IPrintService
         }
     }
 
-    private static FixedPage BuildPage(BitmapSource source, AppSettings settings, out double pageWidth, out double pageHeight)
+    internal static FixedPage BuildPage(BitmapSource source, AppSettings settings, out double pageWidth, out double pageHeight,
+        string orderNumber = "")
     {
         var geometry = PrintGeometry.Calculate(source.PixelWidth, source.PixelHeight, settings.PrintableWidthMm, settings.EffectivePaperWidthMm);
         // Size the print ticket to the printable head width. The physical roll
         // can be wider, but centering on that width shifts or clips the image.
         pageWidth = geometry.WidthDip;
-        pageHeight = geometry.HeightDip + geometry.MarginDip * 2;
+        var header = CreateOrderHeader(pageWidth, orderNumber);
+        var headerHeight = OrderHeaderHeight(header);
+        pageHeight = geometry.HeightDip + geometry.MarginDip * 2 + headerHeight;
         var image = new Image
         {
             Source = source,
@@ -125,8 +128,14 @@ public sealed class WindowsPrintService : IPrintService
         };
         RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
         FixedPage.SetLeft(image, 0);
-        FixedPage.SetTop(image, geometry.MarginDip);
+        FixedPage.SetTop(image, geometry.MarginDip + headerHeight);
         var page = new FixedPage { Width = pageWidth, Height = pageHeight, Background = Brushes.White };
+        if (header is not null)
+        {
+            FixedPage.SetLeft(header, 0);
+            FixedPage.SetTop(header, geometry.MarginDip);
+            page.Children.Add(header);
+        }
         page.Children.Add(image);
         page.Measure(new Size(pageWidth, pageHeight));
         page.Arrange(new Rect(0, 0, pageWidth, pageHeight));
@@ -135,7 +144,7 @@ public sealed class WindowsPrintService : IPrintService
     }
 
     internal static FixedPage BuildBatchPage(
-        IReadOnlyList<(byte[] Png, string ReceiptId)> receipts,
+        IReadOnlyList<PrintReceiptDocument> receipts,
         AppSettings settings,
         out double pageWidth,
         out double pageHeight)
@@ -148,11 +157,13 @@ public sealed class WindowsPrintService : IPrintService
                 settings.PrintableWidthMm, settings.EffectivePaperWidthMm, marginMm: 0)).ToArray();
 
         pageWidth = geometries.Max(item => item.WidthDip);
+        var headerWidth = pageWidth;
+        var headers = receipts.Select(item => CreateOrderHeader(headerWidth, item.OrderNumber)).ToArray();
         var outerMargin = MillimetersToDip(0.6);
         var separatorPadding = MillimetersToDip(0.8);
         var separatorThickness = MillimetersToDip(0.3);
         var separatorHeight = separatorPadding * 2 + separatorThickness;
-        pageHeight = outerMargin * 2 + geometries.Sum(item => item.HeightDip) +
+        pageHeight = outerMargin * 2 + geometries.Sum(item => item.HeightDip) + headers.Sum(OrderHeaderHeight) +
                      separatorHeight * (receipts.Count - 1);
 
         var page = new FixedPage { Width = pageWidth, Height = pageHeight, Background = Brushes.White };
@@ -160,6 +171,13 @@ public sealed class WindowsPrintService : IPrintService
         for (var index = 0; index < sources.Length; index++)
         {
             var geometry = geometries[index];
+            if (headers[index] is { } header)
+            {
+                FixedPage.SetLeft(header, 0);
+                FixedPage.SetTop(header, top);
+                page.Children.Add(header);
+                top += OrderHeaderHeight(header);
+            }
             var image = new Image
             {
                 Source = sources[index],
@@ -194,6 +212,27 @@ public sealed class WindowsPrintService : IPrintService
         page.UpdateLayout();
         return page;
     }
+
+    private static TextBlock? CreateOrderHeader(double width, string orderNumber)
+    {
+        if (string.IsNullOrWhiteSpace(orderNumber)) return null;
+        var header = new TextBlock
+        {
+            Text = $"Замовлення №{orderNumber.Trim()}",
+            Width = width,
+            FontFamily = new FontFamily("Segoe UI"),
+            FontSize = 10,
+            FontWeight = FontWeights.Normal,
+            Foreground = Brushes.Black,
+            TextAlignment = TextAlignment.Center,
+            TextWrapping = TextWrapping.Wrap
+        };
+        header.Measure(new Size(width, double.PositiveInfinity));
+        return header;
+    }
+
+    private static double OrderHeaderHeight(TextBlock? header) =>
+        header is null ? 0 : header.DesiredSize.Height + MillimetersToDip(0.5);
 
     private static PrintTicket BuildTicket(PrintQueue queue, double widthDip, double heightDip)
     {

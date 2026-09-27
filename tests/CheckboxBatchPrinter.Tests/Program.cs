@@ -64,6 +64,7 @@ internal static class Program
         Tests.AddRange(NameMatchingTests.All);
         Tests.AddRange(AutomaticMatchCacheTests.All);
         Tests.AddRange(MarketplaceSyncTests.All);
+        Tests.AddRange(OrderHeaderPrintTests.All);
         Tests.AddRange(MarketplaceViewModelTests.All);
         var failed = 0;
         foreach (var (name, test) in Tests)
@@ -174,7 +175,7 @@ internal static class Program
             try
             {
                 var receipts = Enumerable.Range(1, 3)
-                    .Select(index => (CreatePng(100, 200), $"receipt-{index}"))
+                    .Select(index => new PrintReceiptDocument(CreatePng(100, 200), $"receipt-{index}"))
                     .ToArray();
                 var settings = new AppSettings { PaperWidth = PaperWidth.Mm50, PrintableWidthMm = 48 };
                 var page = WindowsPrintService.BuildBatchPage(receipts, settings, out var width, out var height);

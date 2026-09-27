@@ -229,7 +229,6 @@
                                       GridLinesVisibility="Horizontal" BorderBrush="#D9DEE7" AlternatingRowBackground="#F5F8FC">
                                 <DataGrid.Columns>
                                     <DataGridTextColumn Header="Маркетплейс" Binding="{Binding Marketplace}" Width="100" />
-                                    <DataGridTextColumn Header="Магазин" Binding="{Binding StoreName}" Width="130" />
                                     <DataGridTextColumn Header="№ замовлення" Binding="{Binding Number}" Width="125" />
                                     <DataGridTextColumn Header="Дата" Binding="{Binding CreatedAt, StringFormat=dd.MM.yyyy HH:mm}" Width="135" />
                                     <DataGridTextColumn Header="Сума / валюта" Binding="{Binding TotalDisplay}" Width="175">

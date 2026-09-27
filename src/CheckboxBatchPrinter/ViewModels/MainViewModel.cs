@@ -329,7 +329,7 @@ public sealed class MainViewModel : ObservableObject
                     row.PrintStatus = PrintItemStatus.Downloading;
                     var png = await _imageService.GetPngAsync(row.Id, (int)Math.Round(settings.EffectivePaperWidthMm), cancellationToken);
                     row.PrintStatus = PrintItemStatus.Printing;
-                    await _printService.PrintReceiptAsync(png, row.Id, settings, cancellationToken);
+                    await _printService.PrintReceiptAsync(new PrintReceiptDocument(png, row.Id, items[0].OrderNumber), settings, cancellationToken);
                     row.PrintStatus = PrintItemStatus.Done;
                     tab.SetMarked(row, false);
                     _logger.Info("receipt.print", row.Id, printStatus: "done");
@@ -345,7 +345,7 @@ public sealed class MainViewModel : ObservableObject
             }
             else
             {
-                var loaded = new List<(byte[] Png, string ReceiptId, ReceiptRowViewModel Row)>();
+                var loaded = new List<(PrintReceiptDocument Document, ReceiptRowViewModel Row)>();
                 for (var i = 0; i < selected.Length; i++)
                 {
                     var row = selected[i];
@@ -354,7 +354,7 @@ public sealed class MainViewModel : ObservableObject
                     {
                         row.PrintStatus = PrintItemStatus.Downloading;
                         var png = await _imageService.GetPngAsync(row.Id, (int)Math.Round(settings.EffectivePaperWidthMm));
-                        loaded.Add((png, row.Id, row));
+                        loaded.Add((new PrintReceiptDocument(png, row.Id, items[i].OrderNumber), row));
                     }
                     catch (Exception exception)
                     {
@@ -369,7 +369,7 @@ public sealed class MainViewModel : ObservableObject
                 if (loaded.Count > 0)
                 {
                     foreach (var item in loaded) item.Row.PrintStatus = PrintItemStatus.Printing;
-                    await _printService.PrintReceiptsAsSingleJobAsync(loaded.Select(x => (x.Png, x.ReceiptId)).ToArray(), settings);
+                    await _printService.PrintReceiptsAsSingleJobAsync(loaded.Select(x => x.Document).ToArray(), settings);
                     foreach (var item in loaded)
                     {
                         item.Row.PrintStatus = PrintItemStatus.Done;

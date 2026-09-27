@@ -38,6 +38,7 @@ internal static partial class MarketplaceViewModelTests
         ("STA table receipt number, date and order sorting determine backend order", () => StaAsync(SortedPrintAsync)),
         ("STA marketplace sync inside confirmation cannot change immutable batch", () => StaAsync(ConfirmationSyncAsync)),
         ("STA unlinked receipts print and confirmation count matches backend", () => StaAsync(UnlinkedPrintAsync)),
+        ("STA single linked receipts and mixed batches print frozen order numbers from confirmation", () => StaAsync(PrintedOrderNumbersAsync)),
         ("STA failed PNG preparation never submits a smaller confirmed batch", () => StaAsync(ImageFailureAsync)),
         ("STA cancelled confirmation never submits or changes print history", () => StaAsync(CancelPrintAsync)),
         ("STA marketplace sync preserves selection, confirmed print batch and existing print history", () => StaAsync(ConcurrentPrintAsync)),
@@ -431,6 +432,8 @@ internal static partial class MarketplaceViewModelTests
         True(confirmation.Items.Select(i => i.ReceiptId).SequenceEqual(expectedIds));
         True(confirmation.Items.Select(i => i.Position).SequenceEqual(Enumerable.Range(1, expectedIds.Length)));
         True(fixture.Printer.BatchIds.SequenceEqual(expectedIds));
+        True(fixture.Printer.Documents.Select(d => d.OrderNumber).SequenceEqual(confirmation.Items.Select(i => i.OrderNumber)),
+            "Printed order numbers must match the immutable confirmation snapshot.");
     }
 
     private static async Task ConcurrentPrintAsync()
@@ -2027,6 +2030,7 @@ internal static partial class MarketplaceViewModelTests
             DragSplitter(splitter, -40);
             LayoutContent(mainWindow);
             Equal(1, marketplaceOrdersGrid.Items.Count);
+            True(marketplaceOrdersGrid.Columns.All(c => c.Header?.ToString() != "Магазин"), "Removed shop column reappeared.");
             var displayedOrder = workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single();
             marketplaceOrdersGrid.SelectedItem = displayedOrder;
             await DrainDispatcherAsync();
@@ -2432,15 +2436,16 @@ internal static partial class MarketplaceViewModelTests
         public bool Fail;
         public string PrinterName = "";
         public string[] BatchIds = [];
+        public PrintReceiptDocument[] Documents = [];
         public TaskCompletionSource<bool>? Gate;
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public IReadOnlyList<string> GetInstalledPrinters() => ["mock-printer"];
         public bool PrinterExists(string name) => name == "mock-printer";
-        public Task PrintReceiptAsync(byte[] png, string id, AppSettings settings, CancellationToken ct = default) =>
-            PrintReceiptsAsSingleJobAsync([(png, id)], settings, ct);
-        public async Task PrintReceiptsAsSingleJobAsync(IReadOnlyList<(byte[] Png, string ReceiptId)> receipts, AppSettings settings, CancellationToken ct = default)
+        public Task PrintReceiptAsync(PrintReceiptDocument receipt, AppSettings settings, CancellationToken ct = default) =>
+            PrintReceiptsAsSingleJobAsync([receipt], settings, ct);
+        public async Task PrintReceiptsAsSingleJobAsync(IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings, CancellationToken ct = default)
         {
-            Calls++; PrinterName = settings.PrinterName; BatchIds = receipts.Select(r => r.ReceiptId).ToArray(); Entered.TrySetResult();
+            Calls++; PrinterName = settings.PrinterName; Documents = receipts.ToArray(); BatchIds = receipts.Select(r => r.ReceiptId).ToArray(); Entered.TrySetResult();
             if (Gate is not null) await Gate.Task.WaitAsync(ct);
             if (Fail) throw new InvalidOperationException("Synthetic printer error");
         }
