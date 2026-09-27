@@ -9,13 +9,16 @@ using CheckboxBatchPrinter.ViewModels;
 
 namespace CheckboxBatchPrinter.Tests;
 
-internal static class PromOrdersTests
+internal static partial class PromOrdersTests
 {
     public static IReadOnlyList<(string Name, Func<Task> Test)> All { get; } =
     [
         ("Prom pages overlap safely, deduplicate and use UTC dates", PaginationAsync),
         ("Prom exclusive cursor and short pages are fully scanned", ExclusiveCursorAsync),
         ("Prom normalizes documented detail fields without guessing currency or receipts", DetailAsync),
+        ("Prom prefers Ukrainian API product names in both list and detail for arbitrary goods", UkrainianNamesAsync),
+        ("Prom missing empty or malformed Ukrainian names retain the original without guessing translations", UkrainianFallbackAsync),
+        ("Prom Ukrainian API names match Checkbox baskets and invalidate old Russian-name graph cache", UkrainianMatchingCacheAsync),
         ("Prom preserves unknown amounts and tolerates null optional data", NullAndMoneyAsync),
         ("Prom localized money reaches totals item prices and UI without guessing malformed amounts", LocalizedMoneyAsync),
         ("Prom old encrypted cache restores raw totals without rewriting or changing freshness", CachedMoneyAsync),

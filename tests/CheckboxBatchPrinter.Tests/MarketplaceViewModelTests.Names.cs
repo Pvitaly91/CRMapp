@@ -5,6 +5,44 @@ namespace CheckboxBatchPrinter.Tests;
 
 internal static partial class MarketplaceViewModelTests
 {
+    private static async Task PromUkrainianNamesUiAsync()
+    {
+        var fixture = new Fixture(); var cache = new AutomaticCache();
+        var oldOrders = (await PromOrdersTests.ReadLanguageOrdersAsync(false))
+            .Select(o => o with { Key = o.Key with { ConnectionId = "prom-test" } }).ToArray();
+        var ukrainianOrders = (await PromOrdersTests.ReadLanguageOrdersAsync(true))
+            .Select(o => o with { Key = o.Key with { ConnectionId = "prom-test" } }).ToArray();
+        fixture.Source.Orders = oldOrders;
+        fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 20100), Receipt(ReceiptTwo, 2, 20100)];
+        fixture.Details.Values[ReceiptOne] = new(ReceiptOne, ukrainianOrders[0].Items) { ItemListComplete = true };
+        fixture.Details.Values[ReceiptTwo] = new(ReceiptTwo, ukrainianOrders[1].Items) { ItemListComplete = true };
+        var (main, workspace) = fixture.Create(automaticCache: cache);
+        await main.RefreshAsync(); await OpenOrdersAsync(main, workspace);
+        True(main.Receipts.All(r => r.OrderMatch!.Ambiguous && r.OrderMatch.Order is null));
+        main.Receipts[0].IsSelectedForOrders = true;
+        fixture.Source.Orders = ukrainianOrders;
+        await ExecuteAsync(workspace.AutoMatchCommand);
+        foreach (var row in main.Receipts)
+        {
+            Equal("Автозв’язок: сума й товари", row.LinkStatus);
+            Equal(row.Id == ReceiptOne ? ukrainianOrders[0].Key : ukrainianOrders[1].Key, row.OrderMatch!.Order!.Key);
+        }
+        True(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().All(o => o.LinkStatus == "Автозв’язок: сума й товари"));
+        True(main.Receipts[0].IsSelectedForOrders);
+        Equal(2, fixture.Details.Calls);
+
+        // Restart from serialized caches; no live refresh or repeated receipt details needed.
+        fixture.Source.Fail = true;
+        var fetches = fixture.Source.FetchCalls;
+        var (restarted, restored) = fixture.Create(automaticCache: cache);
+        await restarted.RefreshAsync(); restarted.SelectedTabIndex = 1; await restarted.PrepareOrdersAsync();
+        True(restarted.Receipts.All(r => r.OrderMatch?.Basis == AutomaticLinkBasis.AmountAndProducts));
+        True(restored.Orders.Cast<MarketplaceOrderRowViewModel>().All(o => o.HasSuggestedLink));
+        True(fixture.Cache.Snapshot.Orders.All(o => o.Items[0].Name.StartsWith("Кухонний рушник", StringComparison.Ordinal)));
+        Equal(fetches, fixture.Source.FetchCalls); Equal(2, fixture.Details.Calls);
+        Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
+    }
+
     private static async Task NameAutomaticUiAsync()
     {
         var fixture = new Fixture(); var cache = new AutomaticCache();

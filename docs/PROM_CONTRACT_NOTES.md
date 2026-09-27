@@ -10,6 +10,7 @@ Verified from the live official OpenAPI on 2026-09-23. These notes describe the 
 - [GET /orders/{id}](https://public-api.docs.prom.ua/documentation/Orders/paths/GetOrder.yaml)
 - [Order model](https://public-api.docs.prom.ua/documentation/Orders/schemas/Order.yaml)
 - [Order product model](https://public-api.docs.prom.ua/documentation/Orders/schemas/Product.yaml)
+- [Product name translations](https://public-api.docs.prom.ua/documentation/common/schemas/ProductNameMultilang.yaml)
 - [Delivery provider / tracking declaration](https://public-api.docs.prom.ua/documentation/Orders/schemas/DeliveryProvider.yaml)
 - [Delivery option](https://public-api.docs.prom.ua/documentation/Orders/schemas/DeliveryOption.yaml)
 - [Payment option](https://public-api.docs.prom.ua/documentation/Orders/schemas/PaymentOption.yaml)
@@ -50,7 +51,7 @@ Failures retain successfully read orders and explicitly report an incomplete res
 | Buyer | `client_last_name`, `client_first_name`, `client_second_name`, `phone` | Nullable, no invented recipient |
 | Amount | `price` | String amount **excluding delivery**, raw text preserved |
 | Currency | No separate field in the published Order schema | UAH only from an explicit supported `price` suffix; otherwise unknown |
-| Item | `products[].name`, `.sku`, `.quantity`, `.price`, `.total_price` | Nullable decimal values |
+| Item | `products[].name_multilang.uk` (fallback `.name`), `.sku`, `.quantity`, `.price`, `.total_price` | Explicit Ukrainian name for every item, nullable decimal values |
 | Payment | `payment_option.name`, `payment_data.status` | Unknown/custom text preserved |
 | Delivery | `delivery_option.name`, `delivery_cost` | Nullable |
 | Tracking number | `delivery_provider_data.declaration_number` | Optional shipment with provider and delivery address |
@@ -62,6 +63,8 @@ Failures retain successfully read orders and explicitly report an incomplete res
 `price` and product monetary values are documented as strings; quantity is an ordinary float count of units. They are **not** Checkbox's integer kopecks / thousandths of quantity. Correction on 2026-09-24: local API-derived cache actually contains `price` strings such as `300 грн`; rejecting all currency suffixes was an adapter bug. Monetary strings now support dot/comma decimals (one or two fractional digits), correctly grouped thousands using space/NBSP/narrow NBSP, and explicit `грн`, `грн.`, `UAH`, `₴` suffixes. Only a supported suffix establishes UAH; plain numeric text/JSON numbers do not establish currency. Mixed/ambiguous separators, unknown currencies, text/ranges, overflow and malformed grouping remain unknown, never zero. Quantity parsing is separate and retains fractional unit counts. The application does not infer discounts or substitute `full_price` (which may include delivery) for merchandise `price`.
 
 Old encrypted cache entries retain `RawTotal`: recognized Prom totals are recovered in memory on load without updating timestamps, completeness or links, or overwriting already-known totals. Raw product prices were not retained in older cache: refresh orders to retrieve missing item prices. Recovery alone never proves basket completeness or an exact fiscal link.
+
+Correction on 2026-09-27: the documented order product already includes `name_multilang.uk`. `X-LANGUAGE: uk` alone did not change the historical `name` field in the two inspected orders. Both list and detail parsing now prefer the nonblank string in `name_multilang.uk`, trimming boundary whitespace. This applies to arbitrary products, without a category dictionary, catalog lookup or translation service. If that value is absent/blank/malformed, keep the original `name`; do not guess a translation, read another locale or erase an existing name. Prices, quantities, SKU and completeness are unchanged. Refresh orders/automatic links once to replace old cached Russian names; the changed order fields invalidate graph fingerprints while preserving reusable receipt details and durable decisions. See [PROM_UKRAINIAN_NAMES_REPORT.md](PROM_UKRAINIAN_NAMES_REPORT.md).
 
 The Order schema has no `required` list. Optional objects may be missing/null. `delivery_provider_data` is explicitly nullable for unsupported providers. Documented providers are `nova_poshta`, `justin`, `delivery_auto`, `ukrposhta`; unknown strings are retained rather than rejected. `recipient_warehouse_id` identifies a delivery branch, not a person.
 

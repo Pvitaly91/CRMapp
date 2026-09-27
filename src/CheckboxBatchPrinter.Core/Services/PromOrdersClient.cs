@@ -177,7 +177,10 @@ public sealed class PromOrdersClient : IMarketplaceOrdersClient
                     // explicitly supplied unsupported total must not be ignored.
                     itemMoneyComplete &= price.Amount.HasValue &&
                         (rawLineTotal.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined || lineTotal.Amount.HasValue);
-                    items.Add(new OrderItem(Text(product, "name"), Text(product, "sku"),
+                    // X-LANGUAGE does not necessarily localize the historical order's
+                    // name. Prefer its explicit Ukrainian translation, not a guessed one.
+                    var ukrainianName = Text(Property(product, "name_multilang"), "uk");
+                    items.Add(new OrderItem(ukrainianName.Length > 0 ? ukrainianName : Text(product, "name"), Text(product, "sku"),
                         DecimalValue(Property(product, "quantity")), price.Amount, lineTotal.Amount));
                 }
 

@@ -67,7 +67,7 @@ Rozetka використовує `types=1` (всі групи). Старий `ty
 | Покупець | `client_*_name`, `phone` | `user_title`, `user.contact_fio`, `user_phone` | не використовується як точний ключ |
 | Отримувач | окремий підтверджений об’єкт у GET-схемі відсутній | `delivery.recipient_title/phone` | — |
 | Сума | `price` без доставки | `cost_with_discount` із доставкою/знижками | `total_sum` у копійках |
-| Товар | `products[].name/sku/quantity/price/total_price` | `purchases[].item_name/item.article/quantity/price_with_discount/cost_with_discount` | `goods[].good.name/code/price`, `goods[].quantity/sum` |
+| Товар | `products[].name_multilang.uk` (резерв: `name`), `sku/quantity/price/total_price` | `purchases[].item_name/item.article/quantity/price_with_discount/cost_with_discount` | `goods[].good.name/code/price`, `goods[].quantity/sum` |
 | Доставка/ТТН | `delivery_option`, `delivery_provider_data.declaration_number` | `delivery`, `ttn`, `carrier.carrier_track_num` | — |
 | Фіскальні дані замовлення | GET-схема не документує | `prro.prro_receipt_fiscal_code`, опціональний PRRO URL | `id`, `fiscal_code`, `related_receipt_id` |
 
