@@ -87,6 +87,8 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     }
     public event EventHandler? MatchesChanged;
     public ICollectionView Orders { get; }
+    public IReadOnlyList<MarketplaceOrderRowViewModel> AllOrderRows => _orderRows;
+    public ShippingLabelsViewModel? Labels { get; set; }
     public IReadOnlyList<string> OrderFilters { get; } = ["Усі", "Prom", "Rozetka", "Без чека", "Є чек", "Ймовірний зв’язок"];
     public string OrderSearch { get => _orderSearch; set { if (SetProperty(ref _orderSearch, value ?? "")) RefreshOrdersView(); } }
     public string OrderFilter { get => _orderFilter; set { if (SetProperty(ref _orderFilter, value)) RefreshOrdersView(); } }
@@ -461,6 +463,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
             { row = new(order); _orderRows.Add(row); }
             row.Update(order, _rows, decisions);
         }
+        if (Labels is not null) _ = Labels.RestoreHistoryAsync();
         RefreshOrdersView();
     }
 

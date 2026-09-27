@@ -141,7 +141,7 @@
                             <Button Content="Скасувати оновлення" Command="{Binding Marketplace.CancelCommand}" />
                             <Button Content="Налаштування маркетплейсів" Command="{Binding MarketplaceSettingsCommand}"
                                     Visibility="{Binding Marketplace.HasEnabledConnections, Converter={StaticResource BoolToVisibility}}" />
-                            <CheckBox x:Name="ExtraOrderColumns" Content="Покупець, статус, ТТН у таблиці" VerticalAlignment="Center" Margin="12,0" />
+                            <CheckBox x:Name="ExtraOrderColumns" Content="Покупець, статус у таблиці" VerticalAlignment="Center" Margin="12,0" />
                         </WrapPanel>
                         <WrapPanel>
                         <CheckBox x:Name="AutomaticOrderLinks" Content="Автоматично зіставляти за сумою й товарами"
@@ -164,6 +164,16 @@
                             </Button.ToolTip>
                         </Button>
                         </WrapPanel>
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                            <StackPanel Orientation="Horizontal">
+                                <Button Content="Вибрати видимі для наклейок" Command="{Binding Marketplace.Labels.SelectVisibleCommand}" />
+                                <Button Content="Зняти вибір наклейок" Command="{Binding Marketplace.Labels.ClearCommand}" />
+                                <Button Content="Друк наклейок" Command="{Binding Marketplace.Labels.PrintCommand}" />
+                                <Button Content="Налаштування наклейок" Command="{Binding Marketplace.Labels.SettingsCommand}" />
+                                <Button Content="Скасувати підготовку" Command="{Binding Marketplace.Labels.CancelCommand}" />
+                                <TextBlock Text="ⓘ" Margin="6" VerticalAlignment="Center" ToolTip="{Binding Marketplace.Labels.Status}" />
+                            </StackPanel>
+                        </ScrollViewer>
                     </StackPanel>
 
                     <Expander DockPanel.Dock="Bottom" Header="Пов’язане замовлення / кандидати" IsExpanded="{Binding Marketplace.DetailsExpanded, Mode=TwoWay}" Margin="2,6,2,2">
@@ -228,6 +238,11 @@
                                       IsReadOnly="True" SelectionMode="Single" HeadersVisibility="Column"
                                       GridLinesVisibility="Horizontal" BorderBrush="#D9DEE7" AlternatingRowBackground="#F5F8FC">
                                 <DataGrid.Columns>
+                                    <DataGridTemplateColumn Header="Наклейка ✓" Width="85" CanUserSort="False">
+                                        <DataGridTemplateColumn.CellTemplate><DataTemplate>
+                                            <CheckBox IsChecked="{Binding IsSelectedForLabels, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" HorizontalAlignment="Center" VerticalAlignment="Center" Focusable="False" />
+                                        </DataTemplate></DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
                                     <DataGridTextColumn Header="Маркетплейс" Binding="{Binding Marketplace}" Width="100" />
                                     <DataGridTextColumn Header="№ замовлення" Binding="{Binding Number}" Width="125" />
                                     <DataGridTextColumn Header="Дата" Binding="{Binding CreatedAt, StringFormat=dd.MM.yyyy HH:mm}" Width="135" />
@@ -265,8 +280,15 @@
                                         Visibility="{Binding IsChecked, Source={x:Reference ExtraOrderColumns}, Converter={StaticResource BoolToVisibility}}" />
                                     <DataGridTextColumn Header="Статус замовлення" Binding="{Binding Status}" Width="150"
                                         Visibility="{Binding IsChecked, Source={x:Reference ExtraOrderColumns}, Converter={StaticResource BoolToVisibility}}" />
-                                    <DataGridTextColumn Header="ТТН" Binding="{Binding TrackingDisplay}" Width="155"
-                                        Visibility="{Binding IsChecked, Source={x:Reference ExtraOrderColumns}, Converter={StaticResource BoolToVisibility}}" />
+                                    <DataGridTextColumn Header="Доставка" Binding="{Binding DeliveryDisplay}" Width="130" />
+                                    <DataGridTextColumn Header="ТТН" Binding="{Binding TrackingDisplay}" Width="150" />
+                                    <DataGridTemplateColumn Header="Етикетка" Width="145">
+                                        <DataGridTemplateColumn.CellTemplate><DataTemplate>
+                                            <Button Content="Перегляд наклейки" ToolTip="{Binding LabelStatus}"
+                                                Command="{Binding DataContext.Marketplace.Labels.PreviewCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" />
+                                        </DataTemplate></DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTextColumn Header="Друк наклейки" Binding="{Binding LabelPrintStatus}" Width="170" />
                                 </DataGrid.Columns>
                             </DataGrid>
                         </Grid>

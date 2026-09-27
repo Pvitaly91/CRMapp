@@ -90,7 +90,7 @@ internal static partial class PromOrdersTests
           "status": "custom-123", "status_name": "Власний статус", "payment_option": {"id": 1, "name": "Пром-оплата"},
           "payment_data": {"type": "evopay", "status": "paid"},
           "delivery_option": {"id": 2, "name": "Нова пошта"}, "delivery_address": "Тестове відділення",
-          "delivery_provider_data": {"provider": "nova_poshta", "declaration_number": "20400000000000"},
+          "delivery_provider_data": {"provider": "nova_poshta", "declaration_number": "20400000000000", "sender_warehouse_id": "synthetic-sender", "recipient_warehouse_id": "synthetic-recipient"},
           "products": [{"id": 55, "name": "Тестовий товар", "sku": "SYNTH-01", "quantity": 1.25, "price": "161.00", "total_price": "201.25"}],
           "receipt_url": "https://check.checkbox.ua/test-unverified", "receipt_id": "497f6eca-6276-4993-bfeb-53cbbbba6f08"
         }}
@@ -107,6 +107,9 @@ internal static partial class PromOrdersTests
         Assert(order.Buyer?.Name == "Приклад Тест Тестович" && order.Recipient is null, "Buyer/recipient invented.");
         Assert(order.Items.Single().Quantity == 1.25m && order.Items.Single().UnitPrice == 161.00m, "Item units were scaled.");
         Assert(order.DeliveryCost == 49m && order.TrackingDisplay == "20400000000000", "Shipment not mapped.");
+        Assert(ShippingCarrierNames.ForOrder(order).Single().Carrier == ShippingCarrier.NovaPoshta &&
+            order.Shipments.Single().SenderWarehouseId == "synthetic-sender" && order.Shipments.Single().RecipientWarehouseId == "synthetic-recipient" &&
+            order.Shipments.Single().Source == "Prom.delivery_provider_data", "Documented delivery context lost.");
         Assert(order.PaymentStatus == "paid" && order.PaymentMethod == "Пром-оплата", "Payment not mapped.");
         Assert(order.SourceStatus == "custom-123" && order.Status == "Власний статус", "Source status was lost.");
         Assert(order.ReceiptIds.Count == 0 && order.FiscalReceiptNumbers.Count == 0 && order.FiscalReceiptUrls.Count == 0,

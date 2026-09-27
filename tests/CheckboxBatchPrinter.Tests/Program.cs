@@ -34,6 +34,22 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--label-driver-smoke")
+        {
+            try
+            {
+                var printer = new WindowsLabelPrinter(); var formats = printer.Formats(args[1]);
+                if (formats.Count == 0) throw new InvalidOperationException("Driver supplied no sized formats.");
+                foreach (var format in formats)
+                {
+                    var settings = new LabelPrintSettings { PrinterName = args[1], DriverFormat = format.Name, WidthMm = format.WidthMm, HeightMm = format.HeightMm };
+                    var geometry = printer.Inspect(settings); // CreateDC/GetDeviceCaps only; no StartDoc.
+                    Console.WriteLine($"PASS readonly driver: {format.WidthMm:0.##}x{format.HeightMm:0.##} mm, actual {geometry.WidthMm:0.##}x{geometry.HeightMm:0.##} mm, {geometry.DpiX}x{geometry.DpiY} dpi; no job");
+                }
+                return 0;
+            }
+            catch (Exception exception) { Console.Error.WriteLine(exception.Message); return 1; }
+        }
         if (args.SequenceEqual(["--xaml-smoke"]))
         {
             try
@@ -65,6 +81,8 @@ internal static class Program
         Tests.AddRange(AutomaticMatchCacheTests.All);
         Tests.AddRange(MarketplaceSyncTests.All);
         Tests.AddRange(OrderHeaderPrintTests.All);
+        Tests.AddRange(ShippingLabelsTests.All);
+        Tests.AddRange(MarketplaceViewModelTests.ShippingScenarios);
         Tests.AddRange(MarketplaceViewModelTests.All);
         var failed = 0;
         foreach (var (name, test) in Tests)

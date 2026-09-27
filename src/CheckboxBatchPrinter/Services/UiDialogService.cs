@@ -11,7 +11,8 @@ public sealed class UiDialogService(
     IReceiptImageService imageService,
     IPrintService printService,
     IAppLogger logger,
-    Func<MarketplaceSettingsViewModel>? marketplaceSettingsFactory = null) : IUiDialogService
+    Func<MarketplaceSettingsViewModel>? marketplaceSettingsFactory = null,
+    ShippingLabelsViewModel? labels = null) : IUiDialogService
 {
     public bool ConfirmPrint(PrintBatchConfirmation batch) =>
         new PrintConfirmationWindow(batch) { Owner = Application.Current.MainWindow }.ShowDialog() == true;
@@ -25,6 +26,7 @@ public sealed class UiDialogService(
     public async Task<bool> OpenSettingsAsync(bool marketplace = false)
     {
         var viewModel = new SettingsViewModel(settingsService, authentication, imageService, printService, logger, marketplaceSettingsFactory?.Invoke());
+        viewModel.Labels = labels;
         await viewModel.LoadAsync();
         var window = new SettingsWindow
         {

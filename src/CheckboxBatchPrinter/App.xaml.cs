@@ -14,6 +14,7 @@ public partial class App : Application
 {
     private HttpClient? _httpClient;
     private HttpClient? _marketplaceHttpClient;
+    private HttpClient? _shippingHttpClient;
     private IAppLogger? _logger;
 
     protected override async void OnStartup(StartupEventArgs e)
@@ -57,8 +58,17 @@ public partial class App : Application
             var marketplace = new MarketplaceWorkspaceViewModel(marketplaceSettings, marketplaceSync, orderLinks,
                 new ReceiptDetailsService(apiClient, settingsService), new OrderLinkDialogService(), new FiscalReferenceVerifier(apiClient, settingsService),
                 automaticCache: automaticLinks);
+            var shippingData = Path.Combine(localData, "ShippingLabels");
+            var shippingSettings = new DpapiShippingSettingsStore(Path.Combine(shippingData, "settings.dpapi"));
+            var labelHistory = new DpapiLabelHistoryStore(Path.Combine(shippingData, "attempts.dpapi"));
+            _shippingHttpClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(60) };
+            var labelPrinter = new WindowsLabelPrinter();
+            var labelDialogs = new LabelDialogs(shippingSettings, marketplaceSettings, labelPrinter);
+            marketplace.Labels = new ShippingLabelsViewModel(marketplace, shippingSettings, labelHistory,
+                new OfficialShippingLabelSource(new ShippingLabelHttp(_shippingHttpClient), shippingSettings, marketplaceSettings, marketplaceSecrets),
+                new WindowsShippingLabelRenderer(), labelPrinter, labelDialogs);
             var dialogs = new UiDialogService(settingsService, authentication, imageService, printService, _logger,
-                () => new MarketplaceSettingsViewModel(marketplaceSettings, marketplaceSecrets, marketplaceSync));
+                () => new MarketplaceSettingsViewModel(marketplaceSettings, marketplaceSecrets, marketplaceSync), marketplace.Labels);
             _logger.Info("app.viewmodel.create");
             var viewModel = new MainViewModel(receiptService, imageService, settingsService, authentication,
                 printHistoryStore, printService, dialogs, _logger, marketplace);
@@ -82,6 +92,7 @@ public partial class App : Application
     {
         _httpClient?.Dispose();
         _marketplaceHttpClient?.Dispose();
+        _shippingHttpClient?.Dispose();
         base.OnExit(e);
     }
 

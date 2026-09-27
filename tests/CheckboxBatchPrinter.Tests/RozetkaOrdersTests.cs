@@ -65,7 +65,7 @@ internal static class RozetkaOrdersTests
                 id = 100, created = "2026-09-23 10:00:00", cost_with_discount = "123.45", amount = "120.00", amount_with_discount = "110.00",
                 status = 2, status_data = new { name_uk = "Обробляється" },
                 user_title = new { full_name = "Покупець А" }, user_phone = "test-buyer-phone",
-                delivery = new { recipient_title = "Одержувач Б", recipient_phone = "test-recipient-phone", delivery_service_name = "Тест доставка", cost = "13.45" },
+                delivery = new { recipient_title = "Одержувач Б", recipient_phone = "test-recipient-phone", delivery_service_name = "Нова пошта", delivery_service_id = 99, cost = "13.45" },
                 ttn = "TTN-TEST-1", carrier = new { carrier_track_num = "TTN-TEST-2", carrier_inner_id = 4 },
                 payment = new { payment_method_name = "Картка", payment_status = new { title = "Сплачено" } },
                 purchases = new[] { new { item_name = "Товар", quantity = 2, price_with_discount = "55.00", cost_with_discount = "110.00", item = new { article = "SKU-test" } } }
@@ -81,6 +81,10 @@ internal static class RozetkaOrdersTests
         Equal("SKU-test", first.Items.Single().Sku); Equal(2m, first.Items.Single().Quantity); Equal(55m, first.Items.Single().UnitPrice);
         Equal("Картка", first.PaymentMethod); Equal("Сплачено", first.PaymentStatus);
         Equal(2, first.Shipments.Count); Equal(TimeSpan.FromHours(3), first.CreatedAt!.Value.Offset);
+        Equal(ShippingCarrier.NovaPoshta, ShippingCarrierNames.ForOrder(first).First().Carrier);
+        Equal("99", first.Shipments.First().DeliveryServiceId);
+        Equal("TTN-TEST-2", first.Shipments.Last().TrackingNumber);
+        Equal(ShippingCarrier.Unknown, ShippingCarrierNames.ForOrder(first).Last().Carrier); // Unverified numeric carrier ID is never guessed.
         Equal("3", result.Orders.Single(o => o.Number == "101").SourceStatus);
     }
 

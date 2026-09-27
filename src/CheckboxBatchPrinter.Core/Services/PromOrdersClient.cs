@@ -220,7 +220,12 @@ public sealed class PromOrdersClient : IMarketplaceOrdersClient
                     !TryProperty(p, "discount_types", out var discounts) || discounts.ValueKind == JsonValueKind.Null ||
                         (discounts.ValueKind == JsonValueKind.Array && discounts.GetArrayLength() == 0)),
             Shipments = tracking.Length == 0 ? [] :
-                [new OrderShipment(Text(delivery, "provider"), tracking, Text(order, "delivery_address"))],
+                [new OrderShipment(Text(delivery, "provider").Length > 0 ? Text(delivery, "provider") : Text(deliveryOption, "name"), tracking, Text(order, "delivery_address"))
+                {
+                    Source = "Prom.delivery_provider_data", DeliveryServiceId = Text(deliveryOption, "id"),
+                    ShippingService = Text(deliveryOption, "shipping_service"), SenderWarehouseId = Text(delivery, "sender_warehouse_id"),
+                    RecipientWarehouseId = Text(delivery, "recipient_warehouse_id")
+                }],
             ReceiptIds = [],
             SellerUrl = null
         };

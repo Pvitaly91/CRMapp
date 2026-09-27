@@ -226,10 +226,12 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
             Text(delivery, "place_number") }.Where(s => s.Length > 0).Distinct());
         var shipments = new List<OrderShipment>();
         var ttn = Text(row, "ttn");
-        if (ttn.Length > 0 || carrier.Length > 0) shipments.Add(new(carrier, ttn, destination));
+        if (ttn.Length > 0 || carrier.Length > 0) shipments.Add(new(carrier, ttn, destination)
+        { Source = "Rozetka.ttn", DeliveryServiceId = Text(delivery, "delivery_service_id") });
         var extraCarrier = Field(row, "carrier");
         var extraTtn = Text(extraCarrier, "carrier_track_num");
-        if (extraTtn.Length > 0 && extraTtn != ttn) shipments.Add(new(Text(extraCarrier, "carrier_inner_id"), extraTtn, destination));
+        if (extraTtn.Length > 0 && extraTtn != ttn) shipments.Add(new(Text(extraCarrier, "carrier_inner_id"), extraTtn, destination)
+        { Source = "Rozetka.carrier.carrier_track_num" });
         var amount = Money(row, "amount");
         var discountedAmount = Money(row, "amount_with_discount");
         var rawTotal = First(Text(row, "cost_with_discount"), Text(row, "cost"), Text(row, "amount"));

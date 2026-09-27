@@ -24,7 +24,16 @@ public sealed class MarketplaceSettings
 public sealed record MarketplaceCredentials(string Token = "", string Login = "", string Password = "");
 public sealed record OrderPerson(string Name = "", string Phone = "");
 public sealed record OrderItem(string Name, string Sku, decimal? Quantity, decimal? UnitPrice, decimal? Total = null);
-public sealed record OrderShipment(string Carrier, string TrackingNumber, string Destination = "");
+public sealed record OrderShipment(string Carrier, string TrackingNumber, string Destination = "")
+{
+    public string ShipmentId { get; init; } = "";
+    public string Source { get; init; } = "";
+    public int Places { get; init; }
+    public string DeliveryServiceId { get; init; } = "";
+    public string ShippingService { get; init; } = "";
+    public string SenderWarehouseId { get; init; } = "";
+    public string RecipientWarehouseId { get; init; } = "";
+}
 
 public enum FiscalDocumentKeyKind { CheckboxReceiptUuid, CheckboxReceiptUrl, FiscalCode }
 

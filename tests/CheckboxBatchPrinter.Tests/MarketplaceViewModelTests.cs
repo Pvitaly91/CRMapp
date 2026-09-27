@@ -2242,7 +2242,7 @@ internal static partial class MarketplaceViewModelTests
         return completed.Task.WaitAsync(TimeSpan.FromSeconds(8));
     }
 
-    private static async Task StaAsync(Func<Task> action)
+    internal static async Task StaAsync(Func<Task> action)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Dispatcher? testDispatcher = null;

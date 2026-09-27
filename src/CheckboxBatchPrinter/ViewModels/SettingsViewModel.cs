@@ -9,6 +9,7 @@ namespace CheckboxBatchPrinter.ViewModels;
 
 public sealed class SettingsViewModel : ObservableObject
 {
+    public ShippingLabelsViewModel? Labels { get; set; }
     private readonly ISettingsService _settingsService;
     private readonly IAuthenticationService _authentication;
     private readonly IReceiptImageService _imageService;

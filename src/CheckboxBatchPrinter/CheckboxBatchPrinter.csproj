@@ -12,6 +12,8 @@
     <AppChannel Condition="'$(AppChannel)' == ''">Development</AppChannel>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="PDFiumCore" Version="155.0.8057" />
+    <EmbeddedResource Include="Resources\PDFium-NOTICES.txt" LogicalName="CheckboxBatchPrinter.PdfiumNotices" />
     <ProjectReference Include="..\CheckboxBatchPrinter.Core\CheckboxBatchPrinter.Core.csproj" />
   </ItemGroup>
   <Target Name="EmbedAppChannel" BeforeTargets="GetAssemblyAttributes">
