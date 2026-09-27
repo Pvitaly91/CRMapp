@@ -1,5 +1,47 @@
 # Shipping labels — implementation and acceptance
 
+## Direct NP / Prom follow-up — NOT COMPLETE
+
+2026-09-27 follow-up started at clean HEAD `7966c8665a9b8667a7c1d366d16b0deabeca6377`, branch `codex/checkbox-marketplace-orders`. GitHub's branch pointed to the same commit. No newer code or user changes were reverted.
+
+The main acceptance criterion **Prom + direct NP without Seller** is not achieved. This follow-up changes documentation only; it does not invent NP routes, add a success-reporting placeholder, change the printing pipeline or claim that the previous synthetic NP/Seller fixtures verify direct NP access.
+
+### Evidence and settings
+
+- Local PowerShell: official NP developer portal returned HTTP 403. Local browser: normal navigation remained on its security-check page. No protection was bypassed. The integration overview confirmed only the key/JSON entry point; it did not supply the model/method/print contract.
+- Legacy official devcenter TLS failed; TLS validation was not disabled. Exact unknown operations/fields and a **not-sent** support question are recorded in [the contract follow-up](SHIPPING_LABELS_API_CONTRACT.md#direct-np-follow-up-contract-still-unverified-2026-09-27).
+- The existing `JsonMarketplaceSettingsStore`, `DpapiMarketplaceSecretStore` and `DpapiShippingSettingsStore` were read for the **Development** profile (`%LOCALAPPDATA%/CheckboxBatchPrinter`). Only configured/not-configured flags/counts were emitted: two enabled Prom connections with saved tokens; zero configured Seller connections; no ShippingLabels/settings.dpapi; no Rozetka Delivery token. This is a store-level check, not an assumption based on Git. No secret values were printed or committed, and no production credentials were copied.
+- No NP key field exists in the current version; therefore no direct NP credential could be validated. Adding its storage, per-store selection and read-only adapter awaits the official contract. The existing receipt/label history was neither migrated nor overwritten.
+
+### Acceptance categories
+
+| Category | This follow-up |
+|---|---|
+| Implemented in code | Existing Seller/RD adapters and PDFium packet printing unchanged. Direct NP adapter/key/store routing still pending. |
+| Synthetic tests | Existing regression suite rerun below; **no new direct-NP contract test** can be legitimate without its verified contract. |
+| Genuine label obtained | **None.** No current Prom TTN was submitted to an unrelated account; no live label API requests were made. NP account visibility, PDF access/identity/all places/actual dimensions remain unchecked. RD access/actual document remains unchecked without its locally entered token. |
+| Physically printed | **None.** No StartDoc, printer-setting change, spooler restart, or physical print for this follow-up. |
+
+Next required input: current official NP read/marking documentation or support response, without secrets. After the adapter is implemented, enter NP/RD credentials only locally in the development app and choose the intended NP account explicitly for each store. Real acceptance must use an existing **Prom-origin** TTN, inspect the official NP and RD PDFs and mixed preview, then request separate user approval before physical printing. Neither a tracking success nor a valid key nor a synthetic PDF completes acceptance.
+
+### Follow-up verification / build
+
+- Release build: **0 warnings / 0 errors**; existing executable regression suite **215/215 passed**, including Windows/STA raster/preview/backend scenarios. No current tests were removed, and no real APIs were called by unit tests.
+- Separate **self-contained win-x64 single-file** PDFium build published to `artifacts/development/np-contract-review/CheckboxBatchPrinter.exe`. The copied EXE alone passed the guarded offline initial-launch and restart checks with its bundled .NET 8.0.31 runtime. The synthetic PDF packet preview was rendered and visually inspected. As source code is unchanged, the EXE intentionally retains implementation identity `7966c8665a9b8667a7c1d366d16b0deabeca6377`, channel Development, version 1.0.2; this follow-up commit contains documentation only.
+- This build has the same label capabilities as `7966c86`, **not** newly implemented direct NP support. Production deployment is not part of this task.
+- Production EXE SHA256 before/after remained `AB087874FB49E48611A2DF0157E6C0285DB9602DCEEEE09FC200B3F53E7B1992`. No production settings/history/credentials were opened for migration or written; production EXE was not replaced.
+
+Reproduce the unchanged implementation's follow-up package in an empty output folder (the existing folder is not overwritten):
+
+```powershell
+dotnet build CheckboxBatchPrinter.sln -c Release
+dotnet run --project tests/CheckboxBatchPrinter.Tests/CheckboxBatchPrinter.Tests.csproj -c Release --no-build
+dotnet publish src/CheckboxBatchPrinter/CheckboxBatchPrinter.csproj -c Release -r win-x64 --self-contained true -o artifacts/development/np-contract-review -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:IncludeAllContentForSelfExtract=true -p:AppChannel=Development -p:SourceRevisionId=7966c8665a9b8667a7c1d366d16b0deabeca6377
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Test-ProductionPackage.ps1 -Executable artifacts/development/np-contract-review/CheckboxBatchPrinter.exe -ExpectedCommit 7966c8665a9b8667a7c1d366d16b0deabeca6377 -ExpectedChannel Development
+```
+
+---
+
 2026-09-27, development branch codex/checkbox-marketplace-orders. Started at clean HEAD 07882a738da0471fb6f12be3ba87b26d1330577b; no newer/user work reverted. Production EXE/profile are not deployment targets.
 
 ## Implemented

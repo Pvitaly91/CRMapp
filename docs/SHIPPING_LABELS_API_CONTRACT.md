@@ -28,6 +28,34 @@ Ref and public TTN are distinct. TTN-module rights and actual document access ar
 
 Direct NP API/key support is **not implemented** pending a current official read/100×100-print contract. Do not advertise this alternative as access to all Prom shipments.
 
+### Direct NP follow-up: contract still unverified (2026-09-27)
+
+Rechecked from the local Windows PC, not just the remote web reader:
+
+- HTTPS GET `https://developers.novaposhta.ua/` through PowerShell returned HTTP 403.
+- Ordinary navigation to that same URL in the local Codex browser displayed the Cloudflare security-check page; the documentation did not become visible. No challenge was solved, cookies inspected, TLS disabled, or protection bypassed.
+- The official integration page loaded successfully. It documents an API key, the HTTPS JSON entry point `https://api.novaposhta.ua/v2.0/json/`, and links to the developer portal. It does **not** specify the required read/label methods or response shapes: [official integration overview](https://novaposhta.ua/for-business/cooperation/integration/).
+- The older official `devcenter.novaposhta.ua` address mentioned in the API licence could not establish TLS from this PC. Certificate verification remained enabled. It provided no contract evidence.
+
+This proves a documentation-access problem in this environment, **not** that direct NP label printing is impossible. No authenticated NP request was made. The following remain unverified:
+
+| Required contract | Missing evidence |
+|---|---|
+| Key authentication and connection check | Exact documented read-only operation, parameters, success/error response. |
+| Existing Prom-origin TTN lookup | Model/method, exact-number lookup, rights/account scope, distinction between public TTN and UUID document Ref. |
+| Official thermal marking | Documented HTTPS route/model/method, PDF response, 100×100 selection, allowed parameters, handling of a key in a URL. |
+| Multi-place shipment | Place-count field and whether/how all pages are returned; page/document identity, actual page dimensions. |
+
+The generic JSON entry point is **not** added to the transport allowlist. All direct NP requests currently fail closed: there is no verified modelName/calledMethod/parameter allowlist. A route guessed from a third-party example or a synthetic PDF would not satisfy this contract. No placeholder connection test reports success and no unchecked redirect can receive a key.
+
+Current source dispatch remains the previously verified Seller alternative / Rozetka Delivery implementation. Separate direct NP credentials, per-store NP connection selection and the direct adapter are **pending**, not represented as implemented. In particular, Seller cannot prove access to a Prom-origin TTN owned by another NP context. It must never be treated as proof that the TTN does not exist.
+
+### Draft question for NP technical support (not sent)
+
+> Потрібна read-only інтеграція: маємо номер вже створеної через Prom.ua ТТН і API-ключ акаунта Нової пошти. Підкажіть актуальні документовані modelName/calledMethod та параметри для перевірки доступу до саме цієї ТТН й отримання її document Ref (якщо потрібний), а також точний HTTPS-запит офіційного PDF-маркування 100×100 для **всіх місць**. Просимо приклади запиту/відповіді без секретів, поле кількості місць, спосіб перевірки номера документа, правила авторизації/redirect та пояснення, чи доступна форма для ТТН, створеної Prom під іншим обліковим контекстом, і яке підключення потрібне. Нічого створювати/змінювати не потрібно; tracking або перевірка валідності ключа не замінює доступу до PDF. Де доступна актуальна офіційна документація, якщо developers.novaposhta.ua повертає 403/сторінку перевірки безпеки?
+
+Send this only through the user's chosen official support channel. Do not include an API key, buyer information, private PDF or a credential-bearing URL. This request has **not** been sent by the application or agent.
+
 ## Rozetka Delivery
 
 | Operation | Contract |
