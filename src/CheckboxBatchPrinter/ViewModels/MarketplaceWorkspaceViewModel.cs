@@ -20,7 +20,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     private readonly CachedReceiptOrderMatchingService _matcher = new();
     private readonly IAutomaticMatchCacheStore? _automaticCacheStore;
     private AutomaticMatchCache _automaticCache = new();
-    private bool _allowCachedRestore, _showingCachedMatches;
+    private bool _allowCachedRestore, _legacyCoverageVerified, _showingCachedMatches;
     private string _cacheNotice = "";
     private IReadOnlyList<ReceiptRowViewModel> _rows = [];
     private MarketplaceSettings _config = new();
@@ -161,7 +161,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
             foreach (var row in rows) row.OrderMatch = null;
         }
         _receiptDetails.Clear(); // Restored only after validating each receipt fingerprint.
-        _allowCachedRestore = false; _showingCachedMatches = false; _cacheNotice = "";
+        _allowCachedRestore = false; _legacyCoverageVerified = false; _showingCachedMatches = false; _cacheNotice = "";
         _rows = rows; _account = account; _from = from; _to = to; _canApply = false;
         _basketAttempted.Clear(); _orderDatesValid = to >= from;
         _loadingDetails.Clear();
@@ -196,7 +196,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
             _scopeCancel.Cancel(); _scopeCancel.Dispose(); _scopeCancel = new();
             _cancel = null; _attachment = null; _attaching = false; IsBusy = false;
             _attachedGeneration = _canApply ? _generation : -1;
-            _coverageComplete = false; _allowCachedRestore = false;
+            _coverageComplete = false; _allowCachedRestore = false; _legacyCoverageVerified = false;
             if (valid) { _from = from!.Value; _to = to!.Value; }
         }
         _orderDatesValid = valid;
@@ -287,8 +287,10 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
             _attachedGeneration = generation;
             _coverageComplete = false; // Cached results are not a completed check of this newly selected range.
             var range = MatchScope.OrderRange;
-            _allowCachedRestore = _config.Connections.Where(c => c.Enabled).All(c => snapshot.States.Any(s =>
+            _legacyCoverageVerified = _config.Connections.Where(c => c.Enabled).All(c => snapshot.States.Any(s =>
                 s.ConnectionId == c.Id && s.Complete && s.Range == range));
+            _allowCachedRestore = _legacyCoverageVerified ||
+                account.Length > 0 && _matcher.HasVerifiedSnapshot(_automaticCache, account, MatchScope, EnabledConnectionIds);
             Status = "Локальні дані завантажено. Натисніть «Оновити замовлення» для перевірки API.";
             ApplyMatches();
             if (_showingCachedMatches) Status = "Автоприв’язки відновлено з кешу. Оновлення перевірить нові й змінені документи.";
@@ -340,9 +342,8 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
             token.ThrowIfCancellationRequested();
             if (generation != _generation) return;
             Status = "Завантаження замовлень… Друк чеків залишається доступним.";
-            _allowCachedRestore = false;
             _coverageComplete = false;
-            ApplyMatches(); // Withdraw unconfirmed uniqueness while the new snapshot is incomplete.
+            ApplyMatches(); // Keep only previously validated local pairs while the API is in flight.
             var range = MarketplaceSyncService.BuildRange(_from, _to, Math.Min(3650, _config.HistoryDays + _extraHistory));
             var known = _decisions.Where(d => d.ConfirmedOrder is not null).Select(d => d.ConfirmedOrder!).Distinct().ToArray();
             var snapshot = await _sync.SynchronizeAsync(_config, range, known, token);
@@ -519,6 +520,9 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         }
     }
 
+    private IReadOnlyList<string> EnabledConnectionIds => _config.Connections.Where(c => c.Enabled)
+        .Select(c => $"{c.Marketplace}:{c.Id}").Order(StringComparer.Ordinal).ToArray();
+
     private ReceiptRowViewModel[] DetailTargets()
     {
         var range = MatchScope.OrderRange!;
@@ -615,14 +619,33 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         if (HasEnabledConnections && _account.Length > 0)
         {
             if (_allowCachedRestore && !_coverageComplete &&
-                _matcher.TryRestore(_automaticCache, scope, _account, orders, decisions, out var restored, _receiptDetails, MatchScope, _loadingDetails))
+                _matcher.TryRestore(_automaticCache, scope, _account, orders, decisions, out var restored,
+                    _receiptDetails, MatchScope, _loadingDetails, EnabledConnectionIds, _legacyCoverageVerified))
             {
                 _showingCachedMatches = true;
                 matches = restored.ToDictionary(p => p.Key, p => p.Value with
                 { Explanation = "Збережений результат попередньої перевірки; очікує оновлення API. " + p.Value.Explanation });
             }
-            else matches = _matcher.MatchAll(_automaticCache, scope, _account, orders, decisions,
-                _coverageComplete, _receiptDetails, MatchScope, _loadingDetails).Matches;
+            else
+            {
+                var calculated = _matcher.MatchAll(_automaticCache, scope, _account, orders, decisions,
+                    _coverageComplete, _receiptDetails, MatchScope, _loadingDetails, EnabledConnectionIds).Matches;
+                if (_allowCachedRestore && !_coverageComplete)
+                {
+                    var known = _matcher.RestoreKnownSuggestions(_automaticCache, scope, _account, orders,
+                        decisions, _receiptDetails, MatchScope, _loadingDetails, EnabledConnectionIds);
+                    if (known.Count > 0)
+                    {
+                        _showingCachedMatches = true;
+                        var merged = calculated.ToDictionary(p => p.Key, p => p.Value);
+                        foreach (var (id, match) in known)
+                            merged[id] = match with { Explanation = "Збережений ймовірний зв’язок; очікує оновлення API. " + match.Explanation };
+                        matches = merged;
+                    }
+                    else matches = calculated;
+                }
+                else matches = calculated;
+            }
         }
         foreach (var row in _rows)
             row.OrderMatch = !HasEnabledConnections || _account.Length == 0

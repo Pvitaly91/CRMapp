@@ -76,6 +76,7 @@ internal static partial class MarketplaceViewModelTests
         ("STA history stays cached behind shared date filter while amount links use the same Kyiv day", () => StaAsync(AmountHistoryUiAsync)),
         ("STA September26 amounts355 and1400 link after completed sync without historical competitors", () => StaAsync(SameDayAmountsUiAsync)),
         ("STA cached automatic links restore after restart without detail requests", () => StaAsync(CachedAutomaticRestartAsync)),
+        ("STA cached links survive a new unrelated receipt and pending refresh", () => StaAsync(CachedAutomaticPartialRestartAsync)),
         ("STA201 count links flow through workspace tables cache and hidden competitor refresh", () => StaAsync(QuantityAutomaticUiAsync)),
         ("STA name links flow through workspace tables cache and unknown hidden competitor refresh", () => StaAsync(NameAutomaticUiAsync)),
         ("STA Prom Ukrainian API names replace cached Russian names through refresh tables and restart", () => StaAsync(PromUkrainianNamesUiAsync)),

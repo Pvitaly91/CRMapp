@@ -93,6 +93,11 @@ internal static class AutomaticMatchCacheTests
         var manyReceipts = service.MatchAll(cache, [r, Receipt(2)], Account, [o], [], true);
         Yes(!manyReceipts.CacheHit); Yes(manyReceipts.Matches.Values.All(m => m.State != ReceiptLinkState.Suggested));
         Yes(service.MatchAll(cache, [Receipt(2), r], Account, [o], [], true).CacheHit);
+        var legacy = Cache();
+        service.MatchAll(legacy, [r], Account, [o], [], true);
+        Yes(!service.TryRestore(legacy, [r], Account, [o], [], out _, enabledConnectionIds: ["Prom:shop"]));
+        Yes(service.TryRestore(legacy, [r], Account, [o], [], out _, enabledConnectionIds: ["Prom:shop"],
+            legacyCoverageVerified: true));
     }
 
     private static void DecisionsAndEvidence()
