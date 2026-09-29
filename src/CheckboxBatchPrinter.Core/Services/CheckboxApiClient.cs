@@ -72,8 +72,10 @@ public sealed class CheckboxApiClient(HttpClient httpClient, IAuthenticationServ
 
             var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             var status = response.StatusCode;
+            var retryAfter = status == (HttpStatusCode)429 ? GetRetryDelay(response, attempt) : (TimeSpan?)null;
             response.Dispose();
-            throw new ApiException($"Checkbox API повернув HTTP {(int)status}.", status, AuthenticationService.ExtractMessage(body));
+            throw new ApiException($"Checkbox API повернув HTTP {(int)status}.", status,
+                AuthenticationService.ExtractMessage(body), retryAfter: retryAfter);
         }
     }
 
@@ -84,11 +86,11 @@ public sealed class CheckboxApiClient(HttpClient httpClient, IAuthenticationServ
     private static TimeSpan GetRetryDelay(HttpResponseMessage response, int attempt)
     {
         var retryAfter = response.Headers.RetryAfter;
-        if (retryAfter?.Delta is { } delta) return delta > TimeSpan.FromSeconds(15) ? TimeSpan.FromSeconds(15) : delta;
+        if (retryAfter?.Delta is { } delta) return delta > TimeSpan.Zero ? delta : Backoff(attempt);
         if (retryAfter?.Date is { } date)
         {
             var calculated = date - DateTimeOffset.UtcNow;
-            if (calculated > TimeSpan.Zero) return calculated > TimeSpan.FromSeconds(15) ? TimeSpan.FromSeconds(15) : calculated;
+            if (calculated > TimeSpan.Zero) return calculated;
         }
         return Backoff(attempt);
     }

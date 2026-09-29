@@ -32,11 +32,11 @@ public sealed class ReceiptService(
                 if (seen.Add(receipt.Id)) { receipts.Add(receipt); added++; }
             }
 
-            if (pageItems.Count < PageSize || added == 0) break;
+            if (pageItems.Count < PageSize) return receipts;
+            if (added == 0) throw new InvalidDataException("Checkbox повернув повторну повну сторінку: вибірка неповна.");
             offset += pageItems.Count;
         }
-
-        return receipts;
+        throw new InvalidDataException("Ліміт сторінок Checkbox досягнуто: вибірка неповна.");
     }
 
     public static string BuildSearchUrl(string baseUrl, DateTimeOffset from, DateTimeOffset toExclusive, int limit, int offset)

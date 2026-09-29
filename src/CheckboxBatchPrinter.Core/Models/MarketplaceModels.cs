@@ -87,7 +87,7 @@ public sealed record MarketplaceOrder
 public sealed record MarketplaceRange(DateTimeOffset From, DateTimeOffset ToExclusive);
 public sealed record OrdersFetchResult(IReadOnlyList<MarketplaceOrder> Orders, bool Complete, string Message = "");
 public sealed record ConnectionSyncState(string ConnectionId, MarketplaceRange Range, bool Complete,
-    DateTimeOffset? LastSuccessUtc, string Message, DateTimeOffset AttemptedAtUtc);
+    DateTimeOffset? LastSuccessUtc, string Message, DateTimeOffset AttemptedAtUtc, string? DetailCursor = null);
 public sealed record MarketplaceSnapshot(IReadOnlyList<MarketplaceOrder> Orders, IReadOnlyList<ConnectionSyncState> States);
 
 public enum ReceiptLinkState { NotChecked, Exact, Manual, Candidates, NotFound, Conflict, Incomplete, Suggested }

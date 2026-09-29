@@ -1668,7 +1668,7 @@ internal static partial class MarketplaceViewModelTests
         await main.RefreshAsync();
         await main.PrepareOrdersAsync(); // Await the automatic operation started by the open tab's F5.
         var afterRefresh = main.Receipts.Single(r => r.Id == ReceiptOne);
-        True(!ReferenceEquals(beforeRefresh, afterRefresh), "F5 must exercise replacement receipt rows.");
+        True(ReferenceEquals(beforeRefresh, afterRefresh), "F5 must upsert the same receipt row without losing its selection.");
         Equal(ReceiptLinkState.Suggested, afterRefresh.OrderMatch!.State);
         Equal(BasketOrder().Key, afterRefresh.OrderMatch.Order!.Key);
         True(afterRefresh.IsSelectedForOrders, "Automatic linking must not clear receipt check marks.");

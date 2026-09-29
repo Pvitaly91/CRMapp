@@ -90,6 +90,7 @@
         </Border>
 
         <TextBlock DockPanel.Dock="Bottom" Text="{Binding StatusText}" Margin="14,4,14,8" Foreground="#48566A" />
+        <TextBlock DockPanel.Dock="Bottom" Text="{Binding BackgroundStatus}" Margin="14,3" Foreground="#667085" />
 
         <TabControl x:Name="ReceiptTabs" SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}" Margin="10,8,10,2">
             <TabItem Header="Усі чеки">

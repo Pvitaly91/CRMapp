@@ -64,6 +64,11 @@ internal static class Program
                 return 1;
             }
         }
+        if (args.SequenceEqual(["--background-smoke"]))
+        {
+            foreach (var (_, test) in BackgroundSyncTests.All) test().GetAwaiter().GetResult();
+            return 0;
+        }
         return RunAllAsync().GetAwaiter().GetResult();
     }
 
@@ -71,6 +76,7 @@ internal static class Program
     {
         Tests.AddRange(PromOrdersTests.All);
         Tests.AddRange(AppEnvironmentTests.All);
+        Tests.AddRange(BackgroundSyncTests.All);
         Tests.AddRange(RozetkaOrdersTests.All);
         Tests.AddRange(MarketplaceMatchingTests.All);
         Tests.AddRange(FiscalLinkTests.All);

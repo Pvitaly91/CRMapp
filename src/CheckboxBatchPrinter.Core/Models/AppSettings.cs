@@ -13,6 +13,12 @@ public sealed class AppSettings
     public bool SeparatePrintJobPerReceipt { get; set; } = true;
     public int CacheRetentionDays { get; set; } = 7;
     public int HttpTimeoutSeconds { get; set; } = 30;
+    public bool AutoRefreshEnabled { get; set; } = true;
+    public int BackgroundIntervalMinutes { get; set; } = 2;
+    public int BackgroundWorkingDays { get; set; } = 7;
+    public bool KeepInTray { get; set; }
+    public bool StartWithWindows { get; set; }
+    public bool StartMinimizedToTray { get; set; }
 
     public double EffectivePaperWidthMm => PaperWidth switch
     {
@@ -31,6 +37,8 @@ public sealed class AppSettings
         PrintableWidthMm = Math.Clamp(PrintableWidthMm, 20, EffectivePaperWidthMm);
         CacheRetentionDays = Math.Clamp(CacheRetentionDays, 1, 30);
         HttpTimeoutSeconds = Math.Clamp(HttpTimeoutSeconds, 10, 120);
+        if (BackgroundIntervalMinutes is not (1 or 2 or 5 or 10)) BackgroundIntervalMinutes = 2;
+        BackgroundWorkingDays = Math.Clamp(BackgroundWorkingDays, 1, 30);
     }
 }
 

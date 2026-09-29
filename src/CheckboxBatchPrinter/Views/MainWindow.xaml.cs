@@ -22,7 +22,7 @@ public partial class MainWindow : Window
         if (_initialized || DataContext is not MainViewModel viewModel) return;
         _initialized = true;
         await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
-        await viewModel.InitializeAsync();
+        if (!viewModel.CoordinatorManaged) await viewModel.InitializeAsync();
     }
 
     private void ReceiptsGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)

@@ -15,7 +15,16 @@ public sealed class ReceiptRowViewModel : ObservableObject
     public ReceiptRowViewModel(ReceiptRecord model) => Model = model;
 
     public event EventHandler? SelectionChanged;
-    public ReceiptRecord Model { get; }
+    public ReceiptRecord Model { get; private set; }
+    public void Update(ReceiptRecord model)
+    {
+        if (!string.Equals(model.Id, Id, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Не можна замінити ID чека.", nameof(model));
+        Model = model;
+        foreach (var name in new[] { nameof(RawType), nameof(Type), nameof(Status), nameof(LocalDate),
+            nameof(LocalTime), nameof(FiscalCode), nameof(Serial), nameof(Total), nameof(Payment), nameof(CashRegister) })
+            OnPropertyChanged(name);
+    }
     public string Id => Model.Id;
     public string RawType => Model.Type;
     public string Type => ReceiptTypes.ToUkrainian(Model.Type);

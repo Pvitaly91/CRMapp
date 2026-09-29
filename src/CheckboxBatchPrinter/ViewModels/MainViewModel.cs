@@ -18,15 +18,25 @@ public sealed class MainViewModel : ObservableObject
     private readonly IPrintService _printService;
     private readonly IUiDialogService _dialogs;
     private readonly IAppLogger _logger;
+    private readonly IReceiptSnapshotStore? _receiptSnapshots;
+    private readonly SemaphoreSlim _receiptRefreshGate = new(1, 1);
+    private readonly object _receiptFlightGate = new();
+    private Task? _receiptFlight;
+    private (DateOnly From, DateOnly To) _receiptFlightRange;
     private CancellationTokenSource? _operationCancellation;
     private DateTime? _dateFrom = DateRangeBuilder.TodayKyiv;
     private DateTime? _dateTo = DateRangeBuilder.TodayKyiv;
     private int _selectedTabIndex;
     private string _statusText = "Готово";
     private string _progressText = string.Empty;
+    private string _backgroundStatus = "Фонове оновлення: очікує";
     private bool _isBusy;
     private string? _loadedAccountContext;
+    private DateTimeOffset? _cachedReceiptSuccessUtc;
     private DateOnly? _loadedFrom, _loadedTo;
+    private bool _followToday = true;
+    private CancellationTokenSource? _dateLoadCancellation;
+    private readonly HashSet<(DateOnly From, DateOnly To)> _historicalLoads = [];
 
     public MainViewModel(
         IReceiptService receiptService,
@@ -37,7 +47,7 @@ public sealed class MainViewModel : ObservableObject
         IPrintService printService,
         IUiDialogService dialogs,
         IAppLogger logger,
-        MarketplaceWorkspaceViewModel? marketplace = null)
+        MarketplaceWorkspaceViewModel? marketplace = null, IReceiptSnapshotStore? receiptSnapshots = null)
     {
         _receiptService = receiptService;
         _imageService = imageService;
@@ -48,6 +58,7 @@ public sealed class MainViewModel : ObservableObject
         _dialogs = dialogs;
         _logger = logger;
         Marketplace = marketplace;
+        _receiptSnapshots = receiptSnapshots;
 
         ReceiptTypes = new ObservableCollection<ReceiptTypeOption>(
             new[] { new ReceiptTypeOption(string.Empty, "Усі типи") }
@@ -127,8 +138,14 @@ public sealed class MainViewModel : ObservableObject
     public ICommand SettingsCommand { get; }
     public ICommand MarketplaceSettingsCommand { get; }
 
-    public DateTime? DateFrom { get => _dateFrom; set { if (SetProperty(ref _dateFrom, value)) ApplyDisplayDates(); } }
-    public DateTime? DateTo { get => _dateTo; set { if (SetProperty(ref _dateTo, value)) ApplyDisplayDates(); } }
+    public DateTime? DateFrom { get => _dateFrom; set { if (SetProperty(ref _dateFrom, value)) { _followToday = false; ApplyDisplayDates(); } } }
+    public DateTime? DateTo { get => _dateTo; set { if (SetProperty(ref _dateTo, value)) { _followToday = false; ApplyDisplayDates(); } } }
+    public void AdvanceTodayIfFollowing(DateTime today)
+    {
+        if (!_followToday || DateFrom?.Date == today.Date && DateTo?.Date == today.Date) return;
+        DateFrom = today.Date; DateTo = today.Date;
+        _followToday = true;
+    }
     private void ApplyDisplayDates()
     {
         var from = DateFrom is { } first ? DateOnly.FromDateTime(first) : (DateOnly?)null;
@@ -139,6 +156,28 @@ public sealed class MainViewModel : ObservableObject
         OrdersReceiptsTab.SetDisplayDates(from, to);
         Marketplace?.SetDisplayDates(from, to);
         UpdateOrderDatesWithoutReceipts();
+        if (CoordinatorManaged && from is { } firstDate && to is { } lastDate && lastDate >= firstDate &&
+            (_loadedFrom is not { } coveredFrom || _loadedTo is not { } coveredTo ||
+                firstDate < coveredFrom || lastDate > coveredTo) &&
+            !_historicalLoads.Contains((firstDate, lastDate)))
+        {
+            _dateLoadCancellation?.Cancel();
+            _dateLoadCancellation?.Dispose();
+            _dateLoadCancellation = new CancellationTokenSource();
+            _ = LoadSelectedDatesAsync(firstDate, lastDate, _dateLoadCancellation.Token);
+        }
+    }
+
+    private async Task LoadSelectedDatesAsync(DateOnly from, DateOnly to, CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(350, token);
+            if (IsBusy) return;
+            await RefreshAsync();
+            if (!token.IsCancellationRequested) _historicalLoads.Add((from, to));
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
     }
     private void UpdateOrderDatesWithoutReceipts() => Marketplace?.SetOrderDatesWithoutReceipts(
         DateFrom is { } from ? DateOnly.FromDateTime(from) : null, DateTo is { } to ? DateOnly.FromDateTime(to) : null);
@@ -154,6 +193,7 @@ public sealed class MainViewModel : ObservableObject
     }
     public string StatusText { get => _statusText; private set => SetProperty(ref _statusText, value); }
     public string ProgressText { get => _progressText; private set => SetProperty(ref _progressText, value); }
+    public string BackgroundStatus { get => _backgroundStatus; set => SetProperty(ref _backgroundStatus, value); }
     public bool IsBusy
     {
         get => _isBusy;
@@ -163,6 +203,8 @@ public sealed class MainViewModel : ObservableObject
             RaiseCommands();
         }
     }
+    public bool IsPrinting { get; private set; }
+    public bool CoordinatorManaged { get; set; }
     public int SelectedCount => Receipts.Count(ActiveTab.IsMarked);
     public int VisibleSelectedCount => ReceiptsView.Cast<ReceiptRowViewModel>().Count(ActiveTab.IsMarked);
     public int HiddenSelectedCount => SelectedCount - VisibleSelectedCount;
@@ -179,6 +221,138 @@ public sealed class MainViewModel : ObservableObject
         }
         if (_authentication.HasStoredCredentials)
             await RefreshAsync();
+    }
+
+    public async Task InitializeCachedAsync(CancellationToken token = default)
+    {
+        if (_receiptSnapshots is null) return;
+        var settings = await _settingsService.LoadAsync(token);
+        if (string.IsNullOrWhiteSpace(settings.Login)) return;
+        var account = PrintAccountContext.Create(settings);
+        var cached = await _receiptSnapshots.LoadAsync(account, token);
+        if (cached is null) return;
+        var printed = await _printHistoryStore.LoadAsync(account, token);
+        ApplyReceipts(cached.Receipts, printed, account, cached.From, cached.To);
+        _cachedReceiptSuccessUtc = cached.LastSuccessUtc;
+        StatusText = $"Дані станом на {cached.LastSuccessUtc.ToLocalTime():dd.MM.yyyy HH:mm}; очікується оновлення мережі";
+        if (Marketplace is not null) await Marketplace.EnsureAttachedAsync();
+    }
+
+    public Task BackgroundRefreshAsync(DateOnly from, DateOnly to, CancellationToken token = default,
+        bool persistSnapshot = true)
+    {
+        lock (_receiptFlightGate)
+        {
+            if (_receiptFlight is { IsCompleted: false } && _receiptFlightRange == (from, to)) return _receiptFlight;
+            var result = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _receiptFlightRange = (from, to);
+            _receiptFlight = result.Task;
+            _ = RunReceiptFlightAsync(from, to, token, persistSnapshot, result);
+            return result.Task;
+        }
+    }
+
+    private async Task RunReceiptFlightAsync(DateOnly from, DateOnly to, CancellationToken token,
+        bool persistSnapshot, TaskCompletionSource result)
+    {
+        try { await BackgroundRefreshCoreAsync(from, to, token, persistSnapshot); result.TrySetResult(); }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { result.TrySetCanceled(token); }
+        catch (Exception ex) { result.TrySetException(ex); }
+        finally
+        {
+            lock (_receiptFlightGate)
+                if (ReferenceEquals(_receiptFlight, result.Task)) _receiptFlight = null;
+        }
+    }
+
+    private async Task BackgroundRefreshCoreAsync(DateOnly from, DateOnly to, CancellationToken token,
+        bool persistSnapshot)
+    {
+        if (!_authentication.HasStoredCredentials) return;
+        await _receiptRefreshGate.WaitAsync(token);
+        try
+        {
+            if (persistSnapshot && Marketplace is not null) Marketplace.ReceiptCoverageFresh = false;
+            var settings = await _settingsService.LoadAsync(token);
+            var account = PrintAccountContext.Create(settings);
+            var items = await _receiptService.GetReceiptsAsync(from, to, token);
+            token.ThrowIfCancellationRequested();
+            // A late response from the previous cashier must never enter the new profile.
+            if (PrintAccountContext.Create(await _settingsService.LoadAsync(token)) != account) return;
+            var printed = await _printHistoryStore.LoadAsync(account, token);
+            ApplyReceipts(items, printed, account, from, to);
+            if (persistSnapshot && Marketplace is not null) Marketplace.ReceiptCoverageFresh = true;
+            if (persistSnapshot && _receiptSnapshots is not null)
+            {
+                try
+                {
+                    await _receiptSnapshots.SaveAsync(new(account, from, to, DateTimeOffset.UtcNow, true,
+                        items, DpapiReceiptSnapshotStore.FingerprintsFor(items)), token);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                catch (Exception exception) { _logger.Error("receipts.cache.save", exception); }
+            }
+            StatusText = $"Завантажено чеків: {items.Count}";
+            _cachedReceiptSuccessUtc = DateTimeOffset.UtcNow;
+        }
+        finally { _receiptRefreshGate.Release(); }
+    }
+
+    public void MarkBackgroundOffline()
+    {
+        if (_cachedReceiptSuccessUtc is { } last)
+            StatusText = $"Дані станом на {last.ToLocalTime():dd.MM.yyyy HH:mm}; немає з’єднання";
+    }
+    public void CancelPendingOperations()
+    {
+        _dateLoadCancellation?.Cancel();
+        _operationCancellation?.Cancel();
+    }
+
+    private void ApplyReceipts(IReadOnlyList<ReceiptRecord> items,
+        IReadOnlyDictionary<string, PrintedReceiptRecord> printed, string account, DateOnly from, DateOnly to)
+    {
+        if (_loadedAccountContext is not null && _loadedAccountContext != account)
+        {
+            foreach (var old in Receipts) old.SelectionChanged -= OnSelectionChanged;
+            Receipts.Clear();
+        }
+        var known = Receipts.ToDictionary(x => x.Id, StringComparer.OrdinalIgnoreCase);
+        foreach (var model in items)
+        {
+            if (known.TryGetValue(model.Id, out var existing))
+            {
+                if (System.Text.Json.JsonSerializer.Serialize(existing.Model) != System.Text.Json.JsonSerializer.Serialize(model))
+                    Marketplace?.InvalidateReceiptDetails(model.Id);
+                existing.Update(model);
+            }
+            else
+            {
+                var row = new ReceiptRowViewModel(model);
+                row.SelectionChanged += OnSelectionChanged;
+                Receipts.Add(row);
+                known[model.Id] = row;
+                existing = row;
+            }
+            if (printed.TryGetValue(model.Id, out var history))
+            {
+                existing.PrintStatus = PrintItemStatus.Done;
+                existing.PrintError = $"Надруковано {history.PrintedAtUtc.ToLocalTime():dd.MM.yyyy HH:mm:ss} на «{history.PrinterName}».";
+            }
+        }
+        var fetchedIds = items.Select(x => x.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var stale in Receipts.Where(row => row.Model.DisplayDate is { } date &&
+            DateRangeBuilder.KyivDate(date) >= from && DateRangeBuilder.KyivDate(date) <= to &&
+            !fetchedIds.Contains(row.Id)).ToArray())
+        {
+            stale.SelectionChanged -= OnSelectionChanged;
+            Receipts.Remove(stale);
+        }
+        _loadedAccountContext = account;
+        _loadedFrom = from; _loadedTo = to;
+        AllReceiptsTab.View.Refresh(); OrdersReceiptsTab.View.Refresh();
+        OnSelectionChanged(this, EventArgs.Empty);
+        Marketplace?.UpdateReceiptScope(Receipts.ToArray(), account, from, to);
     }
 
     public async Task RefreshAsync()
@@ -207,36 +381,8 @@ public sealed class MainViewModel : ObservableObject
         {
             var settings = await _settingsService.LoadAsync(_operationCancellation.Token);
             var accountContext = PrintAccountContext.Create(settings);
-            var selectedIds = _loadedAccountContext == accountContext
-                ? Receipts.Where(r => r.IsSelected).Select(r => r.Id).ToHashSet(StringComparer.OrdinalIgnoreCase) : [];
-            var orderSelectedIds = _loadedAccountContext == accountContext
-                ? Receipts.Where(r => r.IsSelectedForOrders).Select(r => r.Id).ToHashSet(StringComparer.OrdinalIgnoreCase) : [];
-            var allCurrentId = _loadedAccountContext == accountContext ? AllReceiptsTab.SelectedReceipt?.Id : null;
-            var ordersCurrentId = _loadedAccountContext == accountContext ? OrdersReceiptsTab.SelectedReceipt?.Id : null;
-            var printedReceipts = await _printHistoryStore.LoadAsync(accountContext, _operationCancellation.Token);
-            var items = await _receiptService.GetReceiptsAsync(
-                from, to, _operationCancellation.Token);
-            foreach (var old in Receipts) old.SelectionChanged -= OnSelectionChanged;
-            Receipts.Clear();
-            foreach (var model in items)
-            {
-                var row = new ReceiptRowViewModel(model)
-                { IsSelected = selectedIds.Contains(model.Id), IsSelectedForOrders = orderSelectedIds.Contains(model.Id) };
-                if (printedReceipts.TryGetValue(model.Id, out var history))
-                {
-                    row.PrintStatus = PrintItemStatus.Done;
-                    row.PrintError = $"Надруковано {history.PrintedAtUtc.ToLocalTime():dd.MM.yyyy HH:mm:ss} на «{history.PrinterName}».";
-                }
-                row.SelectionChanged += OnSelectionChanged;
-                Receipts.Add(row);
-            }
-            _loadedAccountContext = accountContext;
-            _loadedFrom = from; _loadedTo = to;
-            AllReceiptsTab.SelectedReceipt = Receipts.FirstOrDefault(r => r.Id == allCurrentId);
-            OrdersReceiptsTab.SelectedReceipt = Receipts.FirstOrDefault(r => r.Id == ordersCurrentId);
+            await BackgroundRefreshAsync(from, to, _operationCancellation.Token, persistSnapshot: false);
             refreshed = true;
-            StatusText = items.Count == 0 ? "Чеків за обраний період не знайдено" : $"Завантажено чеків: {items.Count}";
-            OnSelectionChanged(this, EventArgs.Empty);
         }
         catch (OperationCanceledException) { StatusText = "Операцію скасовано"; }
         catch (ApiException exception)
@@ -253,7 +399,6 @@ public sealed class MainViewModel : ObservableObject
         finally { IsBusy = false; }
         if (refreshed && Marketplace is not null && _loadedAccountContext is not null)
         {
-            Marketplace.SetReceiptScope(Receipts.ToArray(), _loadedAccountContext, from, to);
             Marketplace.SelectedReceipt = OrdersReceiptsTab.SelectedReceipt;
             if (SelectedTabIndex == 1) _ = PrepareOrdersAsync();
         }
@@ -264,6 +409,7 @@ public sealed class MainViewModel : ObservableObject
         var today = DateRangeBuilder.TodayKyiv;
         DateFrom = today;
         DateTo = today;
+        _followToday = true;
         SearchText = string.Empty;
         SelectedType = ReceiptTypes[0];
         await RefreshAsync();
@@ -291,6 +437,7 @@ public sealed class MainViewModel : ObservableObject
         var items = selected.Select((row, index) => new PrintBatchItem(index + 1, row.Id, row.Serial, row.Marketplace, row.OrderNumber)).ToArray();
 
         IsBusy = true;
+        IsPrinting = true;
         var success = 0;
         var errors = 0;
         try
@@ -415,7 +562,7 @@ public sealed class MainViewModel : ObservableObject
             _logger.Error("batch.print", exception);
             _dialogs.ShowError($"Не вдалося завершити друк. {exception.Message}");
         }
-        finally { ProgressText = string.Empty; IsBusy = false; RaiseCommands(); }
+        finally { ProgressText = string.Empty; IsPrinting = false; IsBusy = false; RaiseCommands(); }
     }
 
     private async Task RetryFailedAsync()
@@ -455,10 +602,21 @@ public sealed class MainViewModel : ObservableObject
         if (Marketplace is not null)
         {
             var settings = await _settingsService.LoadAsync();
-            if (_loadedAccountContext != PrintAccountContext.Create(settings)) Marketplace.InvalidateAccount();
+            if (_loadedAccountContext != PrintAccountContext.Create(settings))
+            {
+                Marketplace.InvalidateAccount();
+                if (CoordinatorManaged)
+                {
+                    foreach (var old in Receipts) old.SelectionChanged -= OnSelectionChanged;
+                    Receipts.Clear();
+                    _loadedAccountContext = null;
+                    _cachedReceiptSuccessUtc = null;
+                    await InitializeCachedAsync();
+                }
+            }
             else if (_loadedAccountContext is not null && _loadedFrom is { } from && _loadedTo is { } to)
             {
-                Marketplace.SetReceiptScope(Receipts.ToArray(), _loadedAccountContext, from, to);
+                Marketplace.UpdateReceiptScope(Receipts.ToArray(), _loadedAccountContext, from, to);
                 Marketplace.SelectedReceipt = OrdersReceiptsTab.SelectedReceipt;
                 if (SelectedTabIndex == 1) await PrepareOrdersAsync();
             }

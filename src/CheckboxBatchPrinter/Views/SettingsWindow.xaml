@@ -47,6 +47,21 @@
                     <Button Grid.Row="5" Grid.Column="1" Content="Надрукувати тест" HorizontalAlignment="Left" Click="TestPrint_Click" />
                 </Grid>
             </TabItem>
+            <TabItem Header="Фоновий режим">
+                <StackPanel Margin="18">
+                    <CheckBox Content="Автоматично оновлювати дані" IsChecked="{Binding AutoRefreshEnabled}" />
+                    <WrapPanel Margin="4,8"><TextBlock Text="Інтервал, хвилин:" VerticalAlignment="Center" />
+                        <ComboBox Width="70" Margin="8,0" ItemsSource="{Binding BackgroundIntervals}" SelectedItem="{Binding BackgroundIntervalMinutes}" /></WrapPanel>
+                    <WrapPanel Margin="4,4"><TextBlock Text="Робочий період, днів:" VerticalAlignment="Center" />
+                        <TextBox Width="60" Margin="8,0" Text="{Binding BackgroundWorkingDays}" /></WrapPanel>
+                    <CheckBox Content="Залишати програму в треї після закриття вікна" IsChecked="{Binding KeepInTray}" />
+                    <CheckBox Content="Запускати разом із Windows" IsChecked="{Binding StartWithWindows}" />
+                    <CheckBox Content="Запускати згорнуто в трей" IsChecked="{Binding StartMinimizedToTray}" />
+                    <TextBlock Text="{Binding AutostartWarning}" Foreground="#A13B00" TextWrapping="Wrap" Margin="4,10" />
+                    <TextBlock Text="Фон лише читає дані. Друк, фіскальні операції та зміни замовлень не запускаються автоматично."
+                               TextWrapping="Wrap" Foreground="#667085" Margin="4,10" />
+                </StackPanel>
+            </TabItem>
             <TabItem x:Name="MarketplaceTab" Header="Маркетплейси">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="14" DataContext="{Binding Marketplace}">

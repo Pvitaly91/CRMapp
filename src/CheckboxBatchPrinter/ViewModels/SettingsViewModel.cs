@@ -27,10 +27,14 @@ public sealed class SettingsViewModel : ObservableObject
     private bool _isBusy;
     private string _originalLogin = string.Empty;
     private Task? _marketplaceLoad;
+    private readonly Func<AppSettings, Task>? _backgroundSettingsSaved;
+    private bool _autoRefreshEnabled, _keepInTray, _startWithWindows, _startMinimizedToTray;
+    private int _backgroundIntervalMinutes = 2, _backgroundWorkingDays = 7;
 
     public SettingsViewModel(ISettingsService settingsService, IAuthenticationService authentication,
         IReceiptImageService imageService, IPrintService printService, IAppLogger logger,
-        MarketplaceSettingsViewModel? marketplace = null)
+        MarketplaceSettingsViewModel? marketplace = null,
+        Func<AppSettings, Task>? backgroundSettingsSaved = null, string autostartWarning = "")
     {
         _settingsService = settingsService;
         _authentication = authentication;
@@ -38,6 +42,8 @@ public sealed class SettingsViewModel : ObservableObject
         _printService = printService;
         _logger = logger;
         Marketplace = marketplace;
+        _backgroundSettingsSaved = backgroundSettingsSaved;
+        AutostartWarning = autostartWarning;
         PaperWidths = new ObservableCollection<PaperWidthOption>
         {
             new(PaperWidth.Mm50, "50 мм"), new(PaperWidth.Mm58, "58 мм"),
@@ -57,6 +63,14 @@ public sealed class SettingsViewModel : ObservableObject
     public double PrintableWidthMm { get => _printableWidthMm; set => SetProperty(ref _printableWidthMm, value); }
     public bool SeparatePrintJobPerReceipt { get => _separatePrintJob; set => SetProperty(ref _separatePrintJob, value); }
     public string DiagnosticStatus { get => _diagnosticStatus; private set => SetProperty(ref _diagnosticStatus, value); }
+    public bool AutoRefreshEnabled { get => _autoRefreshEnabled; set => SetProperty(ref _autoRefreshEnabled, value); }
+    public bool KeepInTray { get => _keepInTray; set => SetProperty(ref _keepInTray, value); }
+    public bool StartWithWindows { get => _startWithWindows; set => SetProperty(ref _startWithWindows, value); }
+    public bool StartMinimizedToTray { get => _startMinimizedToTray; set => SetProperty(ref _startMinimizedToTray, value); }
+    public int BackgroundIntervalMinutes { get => _backgroundIntervalMinutes; set => SetProperty(ref _backgroundIntervalMinutes, value); }
+    public int BackgroundWorkingDays { get => _backgroundWorkingDays; set => SetProperty(ref _backgroundWorkingDays, value); }
+    public int[] BackgroundIntervals { get; } = [1, 2, 5, 10];
+    public string AutostartWarning { get; }
     public bool IsBusy { get => _isBusy; private set => SetProperty(ref _isBusy, value); }
     public string AppVersion => AppEnvironment.DisplayVersion;
     public string DataDirectory => AppEnvironment.DataRoot;
@@ -73,6 +87,12 @@ public sealed class SettingsViewModel : ObservableObject
         CustomPaperWidthMm = _settings.CustomPaperWidthMm;
         PrintableWidthMm = _settings.PrintableWidthMm;
         SeparatePrintJobPerReceipt = _settings.SeparatePrintJobPerReceipt;
+        AutoRefreshEnabled = _settings.AutoRefreshEnabled;
+        KeepInTray = _settings.KeepInTray;
+        StartWithWindows = _settings.StartWithWindows;
+        StartMinimizedToTray = _settings.StartMinimizedToTray;
+        BackgroundIntervalMinutes = _settings.BackgroundIntervalMinutes;
+        BackgroundWorkingDays = _settings.BackgroundWorkingDays;
         Printers.Clear();
         foreach (var printer in _printService.GetInstalledPrinters()) Printers.Add(printer);
         if (string.IsNullOrWhiteSpace(SelectedPrinter) && Printers.Count > 0) SelectedPrinter = Printers[0];
@@ -98,6 +118,7 @@ public sealed class SettingsViewModel : ObservableObject
                     throw new InvalidOperationException("Для зміни логіна введіть пароль Checkbox.");
             }
             await _settingsService.SaveAsync(_settings);
+            if (_backgroundSettingsSaved is not null) await _backgroundSettingsSaved(_settings);
             if (_marketplaceLoad is not null && Marketplace is not null)
             {
                 await _marketplaceLoad;
@@ -168,6 +189,12 @@ public sealed class SettingsViewModel : ObservableObject
         _settings.CustomPaperWidthMm = CustomPaperWidthMm;
         _settings.PrintableWidthMm = PrintableWidthMm;
         _settings.SeparatePrintJobPerReceipt = SeparatePrintJobPerReceipt;
+        _settings.AutoRefreshEnabled = AutoRefreshEnabled;
+        _settings.KeepInTray = KeepInTray;
+        _settings.StartWithWindows = StartWithWindows;
+        _settings.StartMinimizedToTray = StartMinimizedToTray;
+        _settings.BackgroundIntervalMinutes = BackgroundIntervalMinutes;
+        _settings.BackgroundWorkingDays = BackgroundWorkingDays;
         _settings.Normalize();
     }
 

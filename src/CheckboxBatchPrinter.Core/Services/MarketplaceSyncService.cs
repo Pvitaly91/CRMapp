@@ -37,6 +37,7 @@ public sealed class MarketplaceSyncService(
                 var complete = true;
                 var message = "Отримано всі сторінки замовлень.";
                 var lastSuccess = states.GetValueOrDefault(connection.Id)?.LastSuccessUtc;
+                var detailCursor = states.GetValueOrDefault(connection.Id)?.DetailCursor;
                 try
                 {
                     var credential = await secrets.LoadAsync(connection.Id, ct).ConfigureAwait(false)
@@ -56,9 +57,13 @@ public sealed class MarketplaceSyncService(
                     var relevantCachedKeys = previous.Orders.Where(o => o.CreatedAt is not { } created ||
                         created >= range.From && created < range.ToExclusive).Select(o => o.Key);
                     var refresh = knownOrders.Concat(relevantCachedKeys).Distinct()
-                        .Where(k => k.ConnectionId == connection.Id && k.Marketplace == connection.Marketplace && !fetchedKeys.Contains(k)).ToArray();
+                        .Where(k => k.ConnectionId == connection.Id && k.Marketplace == connection.Marketplace && !fetchedKeys.Contains(k))
+                        .OrderBy(k => k.OrderId, StringComparer.Ordinal).ToArray();
                     if (refresh.Length > 500) { complete = false; message = "Частково: понад 500 старих замовлень потребують перевірки."; }
-                    foreach (var key in refresh.Take(500))
+                    var start = detailCursor is null ? 0 : Array.FindIndex(refresh, k => string.CompareOrdinal(k.OrderId, detailCursor) > 0);
+                    if (start < 0) start = 0;
+                    var batch = refresh.Skip(start).Concat(refresh.Take(start)).Take(500).ToArray();
+                    foreach (var key in batch)
                     {
                         ct.ThrowIfCancellationRequested();
                         try
@@ -70,6 +75,7 @@ public sealed class MarketplaceSyncService(
                         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                         catch (Exception) { complete = false; message = "Частково: не всі старі замовлення вдалося оновити."; }
                     }
+                    if (fetched.Complete && batch.Length > 0) detailCursor = batch[^1].OrderId;
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)
@@ -78,7 +84,7 @@ public sealed class MarketplaceSyncService(
                     message = ex is MarketplaceApiException ? ex.Message : "API недоступне або підключення не налаштоване.";
                 }
                 if (complete) lastSuccess = _clock.GetUtcNow();
-                states[connection.Id] = new(connection.Id, range, complete, lastSuccess, message, _clock.GetUtcNow());
+                states[connection.Id] = new(connection.Id, range, complete, lastSuccess, message, _clock.GetUtcNow(), detailCursor);
                 await cache.SaveAsync(new(orders.Values.ToArray(), states.Values.ToArray()), ct).ConfigureAwait(false);
             }
             return new(orders.Values.ToArray(), states.Values.ToArray());

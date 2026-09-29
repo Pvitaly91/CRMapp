@@ -44,6 +44,8 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     private Task? _automaticTask;
     private CancellationTokenSource? _automaticCancel;
     private bool _active, _autoLinkEnabled;
+    public bool CoordinatorManaged { get; set; }
+    public bool ReceiptCoverageFresh { get; set; }
     private int _automaticGeneration = -1;
     private int _activeSyncGeneration = -1, _attachedGeneration = -1;
     private DateOnly _from = DateOnly.FromDateTime(DateRangeBuilder.TodayKyiv), _to = DateOnly.FromDateTime(DateRangeBuilder.TodayKyiv);
@@ -176,6 +178,46 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         NotifyConfiguration();
     }
 
+    // Background upsert retains the existing marketplace snapshot and user decisions.
+    public void UpdateReceiptScope(IReadOnlyList<ReceiptRowViewModel> rows, string account, DateOnly from, DateOnly to)
+    {
+        if (!CoordinatorManaged) { SetReceiptScope(rows, account, from, to); return; }
+        if (_account != account) { SetReceiptScope(rows, account, from, to); return; }
+        _rows = rows;
+        _from = from; _to = to;
+        ApplyMatches();
+    }
+
+    public void InvalidateReceiptDetails(string receiptId)
+    {
+        _receiptDetails.Remove(receiptId);
+        _basketAttempted.Remove(receiptId);
+        _loadingDetails.Remove(receiptId);
+        _coverageComplete = false;
+    }
+
+    public async Task SyncBackgroundAsync(CancellationToken cancellationToken = default)
+    {
+        await EnsureAttachedAsync();
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!HasEnabledConnections) throw new BackgroundSourceSkippedException("Не налаштовано");
+        await StartSyncAsync(cancellationToken);
+        if (_config.Connections.Where(c => c.Enabled).Any(c => !_snapshot.States.Any(s => s.ConnectionId == c.Id && s.Complete)))
+            throw new InvalidOperationException("Перевірка маркетплейсів неповна.");
+    }
+
+    public void SetBackgroundRange(DateOnly from, DateOnly to)
+    {
+        if (_account.Length == 0) SetOrderDatesWithoutReceipts(from, to);
+        else { _from = from; _to = to; }
+    }
+    public void CancelPendingOperations()
+    {
+        _cancel?.Cancel();
+        _automaticCancel?.Cancel();
+        _scopeCancel.Cancel();
+    }
+
     public async Task AttachAsync(IReadOnlyList<ReceiptRowViewModel> rows, string account, DateOnly from, DateOnly to)
     {
         SetReceiptScope(rows, account, from, to);
@@ -220,6 +262,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     // receipt generation prevents repeated tab events or API errors causing a retry storm.
     public Task OpenAsync()
     {
+        if (CoordinatorManaged) return EnsureAttachedAsync();
         if (!_active || !AutoLinkEnabled || (_account.Length == 0 && !_orderDatesValid)) return EnsureAttachedAsync();
         if (_automaticGeneration == _generation) return _automaticTask ?? Task.CompletedTask;
         _automaticGeneration = _generation;
@@ -358,7 +401,8 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
                 _snapshot = new(verified, snapshot.States);
             }
             var enabled = _config.Connections.Where(c => c.Enabled).ToArray();
-            _coverageComplete = enabled.All(c => _snapshot.States.Any(s => s.ConnectionId == c.Id && s.Complete && s.Range == range));
+            _coverageComplete = enabled.All(c => _snapshot.States.Any(s => s.ConnectionId == c.Id && s.Complete && s.Range == range)) &&
+                (!CoordinatorManaged || _account.Length == 0 || ReceiptCoverageFresh);
             Status = $"Діапазон замовлень: {range.From:dd.MM.yyyy} — {range.ToExclusive.AddDays(-1):dd.MM.yyyy} (Київ). " +
                 string.Join(" | ", enabled.Select(c => { var s = _snapshot.States.FirstOrDefault(s => s.ConnectionId == c.Id); return $"{c.Name}: {s?.Message} Успішне оновлення: {s?.LastSuccessUtc?.ToLocalTime().ToString("dd.MM HH:mm") ?? "немає"}"; }));
             _loadingDetails.UnionWith(DetailTargets().Take(100).Select(r => r.Id));
