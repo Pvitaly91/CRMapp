@@ -134,12 +134,13 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
             throw new InvalidOperationException("Для нового логіна Rozetka введіть пароль. Для іншого магазину додайте нове підключення.");
         return new(Login: login, Password: draft.Password.Length > 0 ? draft.Password : saved.Password);
     }
-    public async Task SaveAsync()
+    public async Task<bool> SaveAsync()
     {
-        if (!CanEdit) return;
+        if (!CanEdit) return false;
         if (HistoryDays is < 0 or > 3650 || CacheDays is < 1 or > 90)
             throw new InvalidOperationException("Запас історії: 0–3650 днів. Строк кешу: 1–90 днів.");
         StageCredentials();
+        var credentialsSaved = _pending.Count > 0;
         foreach (var connection in Connections)
         {
             if (string.IsNullOrWhiteSpace(connection.Name)) throw new InvalidOperationException("Вкажіть назву магазину.");
@@ -147,6 +148,7 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
         }
         await _settings.SaveAsync(new() { Connections = Connections.ToList(), HistoryDays = HistoryDays, CacheDays = CacheDays });
         _pending.Clear(); Token = Login = Password = ""; CredentialsCleared?.Invoke(this, EventArgs.Empty);
+        return credentialsSaved;
     }
     private async Task TestAsync()
     {

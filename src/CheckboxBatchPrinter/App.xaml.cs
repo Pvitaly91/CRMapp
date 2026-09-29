@@ -103,16 +103,19 @@ public partial class App : Application
                 new WindowsShippingLabelRenderer(), labelPrinter, labelDialogs);
             var dialogs = new UiDialogService(settingsService, authentication, imageService, printService, _logger,
                 () => new MarketplaceSettingsViewModel(marketplaceSettings, marketplaceSecrets, marketplaceSync), marketplace.Labels,
-                updated =>
+                (updated, credentialsVerified, marketplaceCredentialsSaved) =>
                 {
                     var prior = _appSettings;
                     _appSettings = updated;
                     if (prior?.StartWithWindows != updated.StartWithWindows || updated.StartWithWindows)
                         new WindowsAutostart(AppEnvironment.Channel).Apply(updated.StartWithWindows);
+                    if (credentialsVerified) _coordinator?.CredentialsVerified("Checkbox");
+                    if (marketplaceCredentialsSaved) _coordinator?.CredentialsVerified("Маркетплейси");
                     if (updated.AutoRefreshEnabled)
                     {
                         _coordinator?.Start();
-                        if (_coordinator is not null) _ = _coordinator.RefreshNowAsync(true);
+                        if (_coordinator is not null && (credentialsVerified || marketplaceCredentialsSaved || prior?.AutoRefreshEnabled != true))
+                            _ = _coordinator.RefreshNowAsync(true);
                     }
                     return Task.CompletedTask;
                 }, () => _appSettings?.StartWithWindows == true && new WindowsAutostart(AppEnvironment.Channel).IsMismatched
@@ -134,7 +137,7 @@ public partial class App : Application
             SessionEnding += (_, _) => { _exiting = true; _coordinator?.Stop(); };
             void OnUi(Action action) => Dispatcher.BeginInvoke(action);
             _tray = new TrayController(() => OnUi(OpenMainWindow),
-                () => OnUi(() => { if (_coordinator is not null) _ = _coordinator.RefreshNowAsync(); }),
+                () => OnUi(() => { if (_coordinator is not null) _ = _coordinator.RefreshNowAsync(true); }),
                 () => OnUi(() => _coordinator?.SetPaused(!_coordinator.Paused)),
                 () => OnUi(() => { OpenMainWindow(); if (viewModel.SettingsCommand.CanExecute(null)) viewModel.SettingsCommand.Execute(null); }),
                 () => OnUi(() => _ = ExitFromTrayAsync()));
@@ -210,7 +213,7 @@ public partial class App : Application
         Dispatcher.BeginInvoke(() =>
         {
             if (!_exiting && _appSettings?.AutoRefreshEnabled == true && _coordinator is { Paused: false })
-                _ = _coordinator.RefreshNowAsync();
+                _ = _coordinator.RecoveryRefreshAsync();
         });
     }
 

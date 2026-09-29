@@ -37,6 +37,7 @@ public sealed class MainViewModel : ObservableObject
     private bool _followToday = true;
     private CancellationTokenSource? _dateLoadCancellation;
     private readonly HashSet<(DateOnly From, DateOnly To)> _historicalLoads = [];
+    private readonly List<(DateOnly From, DateOnly To)> _receiptCoverage = [];
 
     public MainViewModel(
         IReceiptService receiptService,
@@ -157,8 +158,7 @@ public sealed class MainViewModel : ObservableObject
         Marketplace?.SetDisplayDates(from, to);
         UpdateOrderDatesWithoutReceipts();
         if (CoordinatorManaged && from is { } firstDate && to is { } lastDate && lastDate >= firstDate &&
-            (_loadedFrom is not { } coveredFrom || _loadedTo is not { } coveredTo ||
-                firstDate < coveredFrom || lastDate > coveredTo) &&
+            !_receiptCoverage.Any(r => r.From <= firstDate && r.To >= lastDate) &&
             !_historicalLoads.Contains((firstDate, lastDate)))
         {
             _dateLoadCancellation?.Cancel();
@@ -232,7 +232,7 @@ public sealed class MainViewModel : ObservableObject
         var cached = await _receiptSnapshots.LoadAsync(account, token);
         if (cached is null) return;
         var printed = await _printHistoryStore.LoadAsync(account, token);
-        ApplyReceipts(cached.Receipts, printed, account, cached.From, cached.To);
+        ApplyReceipts(cached.Receipts, printed, account, cached.From, cached.To, verifiedCoverage: false);
         _cachedReceiptSuccessUtc = cached.LastSuccessUtc;
         StatusText = $"Дані станом на {cached.LastSuccessUtc.ToLocalTime():dd.MM.yyyy HH:mm}; очікується оновлення мережі";
         if (Marketplace is not null) await Marketplace.EnsureAttachedAsync();
@@ -280,7 +280,7 @@ public sealed class MainViewModel : ObservableObject
             // A late response from the previous cashier must never enter the new profile.
             if (PrintAccountContext.Create(await _settingsService.LoadAsync(token)) != account) return;
             var printed = await _printHistoryStore.LoadAsync(account, token);
-            ApplyReceipts(items, printed, account, from, to);
+            ApplyReceipts(items, printed, account, from, to, background: persistSnapshot);
             if (persistSnapshot && Marketplace is not null) Marketplace.ReceiptCoverageFresh = true;
             if (persistSnapshot && _receiptSnapshots is not null)
             {
@@ -310,12 +310,14 @@ public sealed class MainViewModel : ObservableObject
     }
 
     private void ApplyReceipts(IReadOnlyList<ReceiptRecord> items,
-        IReadOnlyDictionary<string, PrintedReceiptRecord> printed, string account, DateOnly from, DateOnly to)
+        IReadOnlyDictionary<string, PrintedReceiptRecord> printed, string account, DateOnly from, DateOnly to,
+        bool background = false, bool verifiedCoverage = true)
     {
         if (_loadedAccountContext is not null && _loadedAccountContext != account)
         {
             foreach (var old in Receipts) old.SelectionChanged -= OnSelectionChanged;
             Receipts.Clear();
+            _receiptCoverage.Clear();
         }
         var known = Receipts.ToDictionary(x => x.Id, StringComparer.OrdinalIgnoreCase);
         foreach (var model in items)
@@ -349,10 +351,18 @@ public sealed class MainViewModel : ObservableObject
             Receipts.Remove(stale);
         }
         _loadedAccountContext = account;
-        _loadedFrom = from; _loadedTo = to;
+        if (verifiedCoverage && !_receiptCoverage.Contains((from, to)))
+        {
+            _receiptCoverage.Add((from, to));
+            if (_receiptCoverage.Count > 256) _receiptCoverage.RemoveAt(0);
+        }
+        if (background && DateFrom is { } displayFrom && DateTo is { } displayTo &&
+            DateOnly.FromDateTime(displayFrom) >= from && DateOnly.FromDateTime(displayTo) <= to)
+            _dateLoadCancellation?.Cancel();
+        if (!background) { _loadedFrom = from; _loadedTo = to; }
         AllReceiptsTab.View.Refresh(); OrdersReceiptsTab.View.Refresh();
         OnSelectionChanged(this, EventArgs.Empty);
-        Marketplace?.UpdateReceiptScope(Receipts.ToArray(), account, from, to);
+        Marketplace?.UpdateReceiptScope(Receipts.ToArray(), account, from, to, background, verifiedCoverage);
     }
 
     public async Task RefreshAsync()
@@ -610,13 +620,15 @@ public sealed class MainViewModel : ObservableObject
                     foreach (var old in Receipts) old.SelectionChanged -= OnSelectionChanged;
                     Receipts.Clear();
                     _loadedAccountContext = null;
+                    _receiptCoverage.Clear();
                     _cachedReceiptSuccessUtc = null;
                     await InitializeCachedAsync();
                 }
             }
             else if (_loadedAccountContext is not null && _loadedFrom is { } from && _loadedTo is { } to)
             {
-                Marketplace.UpdateReceiptScope(Receipts.ToArray(), _loadedAccountContext, from, to);
+                Marketplace.UpdateReceiptScope(Receipts.ToArray(), _loadedAccountContext, from, to,
+                    verifiedCoverage: _receiptCoverage.Any(r => r.From <= from && r.To >= to));
                 Marketplace.SelectedReceipt = OrdersReceiptsTab.SelectedReceipt;
                 if (SelectedTabIndex == 1) await PrepareOrdersAsync();
             }

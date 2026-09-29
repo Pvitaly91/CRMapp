@@ -1,4 +1,5 @@
 using System.IO;
+using System.Net.Http;
 using CheckboxBatchPrinter.Core.Models;
 using CheckboxBatchPrinter.Core.Services;
 using CheckboxBatchPrinter.Services;
@@ -12,6 +13,10 @@ internal static class BackgroundSyncTests
     {
         ("background startup, timer and manual requests coalesce under controlled time", CoordinatorAsync),
         ("429 Retry-After and authorization pause do not cause retry storms", BackoffAsync),
+        ("transient network recovery bypasses 30-minute local backoff once", NetworkRecoveryAsync),
+        ("recovery events during another source coalesce into one follow-up", InFlightRecoveryAsync),
+        ("network recovery and manual refresh respect 429 Retry-After", RateLimitRecoveryAsync),
+        ("authorization recovery waits for verified credentials", AuthorizationRecoveryAsync),
         ("protected receipt snapshot restores only matching account", SnapshotAsync),
         ("background receipt upsert preserves row selection and print state", UpsertAsync),
         ("concurrent F5 and background receipt refresh share one API request", ReceiptFlightAsync),
@@ -70,6 +75,96 @@ internal static class BackgroundSyncTests
         await auth.RefreshNowAsync(); await auth.RefreshNowAsync();
         if (auth.States.Single(s => s.Name == "Checkbox").NextAttemptUtc != DateTimeOffset.MaxValue)
             throw new Exception("Authorization failure was not paused.");
+    }
+
+    private static async Task NetworkRecoveryAsync()
+    {
+        var clock = new ManualClock(); var calls = 0;
+        await using var coordinator = new BackgroundSyncCoordinator(_ =>
+        {
+            if (++calls <= 5) throw new HttpRequestException("synthetic network failure");
+            return Task.CompletedTask;
+        }, _ => Task.CompletedTask, _ => Task.FromResult(new AppSettings()), clock);
+        for (var i = 0; i < 5; i++) await coordinator.RefreshNowAsync(true);
+        var state = coordinator.States.Single(s => s.Name == "Checkbox");
+        if (state.CooldownReason != BackgroundCooldownReason.Transient ||
+            state.NextAttemptUtc != clock.GetUtcNow().AddMinutes(30))
+            throw new Exception("Synthetic network failure did not enter 30-minute transient backoff.");
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await Task.WhenAll(coordinator.RecoveryRefreshAsync(), coordinator.RecoveryRefreshAsync());
+        await coordinator.RecoveryRefreshAsync();
+        if (calls != 6 || coordinator.States.Single(s => s.Name == "Checkbox").CooldownReason != BackgroundCooldownReason.None)
+            throw new Exception("Recovery did not make exactly one immediate request.");
+    }
+
+    private static async Task InFlightRecoveryAsync()
+    {
+        var clock = new ManualClock(); var receiptCalls = 0; var holdOrders = false;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var coordinator = new BackgroundSyncCoordinator(_ =>
+        {
+            if (++receiptCalls == 1) throw new HttpRequestException("synthetic offline");
+            return Task.CompletedTask;
+        }, async ct =>
+        {
+            if (!holdOrders) return;
+            entered.TrySetResult();
+            await release.Task.WaitAsync(ct);
+        }, _ => Task.FromResult(new AppSettings()), clock);
+        await coordinator.RefreshNowAsync();
+        holdOrders = true;
+        var active = coordinator.RefreshNowAsync(); // Checkbox is cooling; orders are still running.
+        await entered.Task;
+        var first = coordinator.RecoveryRefreshAsync();
+        var second = coordinator.RecoveryRefreshAsync();
+        if (!ReferenceEquals(first, second)) throw new Exception("Recovery events did not coalesce.");
+        release.SetResult();
+        await Task.WhenAll(active, first, second);
+        await coordinator.RecoveryRefreshAsync();
+        if (receiptCalls != 2) throw new Exception("Recovery during an active cycle was lost or duplicated.");
+    }
+
+    private static async Task RateLimitRecoveryAsync()
+    {
+        var clock = new ManualClock(); var calls = 0;
+        await using var coordinator = new BackgroundSyncCoordinator(_ =>
+        {
+            calls++;
+            throw new ApiException("synthetic limit", System.Net.HttpStatusCode.TooManyRequests,
+                retryAfter: TimeSpan.FromMinutes(10));
+        }, _ => Task.CompletedTask, _ => Task.FromResult(new AppSettings()), clock);
+        await coordinator.RefreshNowAsync();
+        clock.Advance(TimeSpan.FromMinutes(1));
+        coordinator.SetPaused(true);
+        coordinator.SetPaused(false);
+        await coordinator.RecoveryRefreshAsync();
+        await coordinator.RefreshNowAsync(true);
+        if (calls != 1 || coordinator.States.Single(s => s.Name == "Checkbox").CooldownReason != BackgroundCooldownReason.RateLimited)
+            throw new Exception("Recovery or manual refresh bypassed Retry-After.");
+        clock.Advance(TimeSpan.FromMinutes(9));
+        await coordinator.RefreshNowAsync();
+        if (calls != 2) throw new Exception("Rate-limit request did not resume at the deadline.");
+    }
+
+    private static async Task AuthorizationRecoveryAsync()
+    {
+        var clock = new ManualClock(); var calls = 0;
+        await using var coordinator = new BackgroundSyncCoordinator(_ =>
+        {
+            calls++;
+            throw new ApiException("synthetic denied", System.Net.HttpStatusCode.Forbidden);
+        }, _ => Task.CompletedTask, _ => Task.FromResult(new AppSettings()), clock);
+        await coordinator.RefreshNowAsync();
+        coordinator.SetPaused(true);
+        coordinator.SetPaused(false);
+        await coordinator.RecoveryRefreshAsync();
+        await coordinator.RefreshNowAsync(true);
+        if (calls != 1 || coordinator.States.Single(s => s.Name == "Checkbox").CooldownReason != BackgroundCooldownReason.Authorization)
+            throw new Exception("Unauthorized source was retried without verified credentials.");
+        coordinator.CredentialsVerified("Checkbox");
+        await coordinator.RefreshNowAsync(true);
+        if (calls != 2) throw new Exception("Verified credentials did not release authorization pause.");
     }
 
     private static async Task SnapshotAsync()

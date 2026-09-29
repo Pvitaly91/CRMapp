@@ -20,6 +20,7 @@ internal static class MarketplaceSyncTests
         ("sync: repeated refresh upserts and updates older orders by exact ID", RepeatedRefreshAsync),
         ("sync: platform/account keys remain isolated during detail refresh", CompoundKeysAsync),
         ("sync: partial pages and exceptions never advance last successful checkpoint", PartialFailureAsync),
+        ("sync: typed marketplace 401 and 429 cooldown evidence survives incomplete cache", FailureReasonAsync),
         ("sync: irrelevant dated history does not block current range completeness", HistoricalCacheScopeAsync),
         ("sync: durable outside-range order failures still block completeness", DurableHistoryFailureAsync),
         ("sync: relevant unknown-date and durable order safety limit stays incomplete", SafetyLimitAsync),
@@ -119,6 +120,24 @@ internal static class MarketplaceSyncTests
         var oldUnavailable = await service.SynchronizeAsync(Settings(), Range, []);
         True(!oldUnavailable.States.Single().Complete);
         Equal(previousSuccess, oldUnavailable.States.Single().LastSuccessUtc);
+    }
+
+    private static async Task FailureReasonAsync()
+    {
+        var client = new FakeClient(MarketplaceKind.Prom);
+        var cache = new MemoryCache();
+        var service = new MarketplaceSyncService([client], new MemorySecrets(), cache, new Clock());
+        client.Fetch = (_, _) => throw new MarketplaceApiException("synthetic unauthorized", HttpStatusCode.Unauthorized);
+        var unauthorized = await service.SynchronizeAsync(Settings(), Range, []);
+        True(!unauthorized.States.Single().Complete);
+        Equal(HttpStatusCode.Unauthorized, unauthorized.States.Single().FailureStatus);
+        client.Fetch = (_, _) => throw new MarketplaceApiException("synthetic limit", HttpStatusCode.TooManyRequests,
+            TimeSpan.FromMinutes(10));
+        var limited = await service.SynchronizeAsync(Settings(), Range, []);
+        True(!limited.States.Single().Complete);
+        Equal(HttpStatusCode.TooManyRequests, limited.States.Single().FailureStatus);
+        Equal(TimeSpan.FromMinutes(10), limited.States.Single().RetryAfter);
+        Equal(HttpStatusCode.TooManyRequests, (await cache.LoadAsync(30)).States.Single().FailureStatus);
     }
 
     private static async Task HistoricalCacheScopeAsync()

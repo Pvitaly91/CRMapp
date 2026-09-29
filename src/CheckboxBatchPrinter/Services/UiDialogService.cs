@@ -13,7 +13,7 @@ public sealed class UiDialogService(
     IAppLogger logger,
     Func<MarketplaceSettingsViewModel>? marketplaceSettingsFactory = null,
     ShippingLabelsViewModel? labels = null,
-    Func<CheckboxBatchPrinter.Core.Models.AppSettings, Task>? backgroundSettingsSaved = null,
+    Func<CheckboxBatchPrinter.Core.Models.AppSettings, bool, bool, Task>? backgroundSettingsSaved = null,
     Func<string>? autostartWarning = null) : IUiDialogService
 {
     public bool ConfirmPrint(PrintBatchConfirmation batch) =>

@@ -38,6 +38,7 @@ public sealed class MarketplaceSyncService(
                 var message = "Отримано всі сторінки замовлень.";
                 var lastSuccess = states.GetValueOrDefault(connection.Id)?.LastSuccessUtc;
                 var detailCursor = states.GetValueOrDefault(connection.Id)?.DetailCursor;
+                MarketplaceApiException? apiFailure = null;
                 try
                 {
                     var credential = await secrets.LoadAsync(connection.Id, ct).ConfigureAwait(false)
@@ -73,7 +74,11 @@ public sealed class MarketplaceSyncService(
                             else { complete = false; message = "Частково: одне з раніше пов’язаних замовлень недоступне."; }
                         }
                         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-                        catch (Exception) { complete = false; message = "Частково: не всі старі замовлення вдалося оновити."; }
+                        catch (Exception ex)
+                        {
+                            apiFailure = MoreRestrictive(apiFailure, ex as MarketplaceApiException);
+                            complete = false; message = "Частково: не всі старі замовлення вдалося оновити.";
+                        }
                     }
                     if (fetched.Complete && batch.Length > 0) detailCursor = batch[^1].OrderId;
                 }
@@ -81,10 +86,12 @@ public sealed class MarketplaceSyncService(
                 catch (Exception ex)
                 {
                     complete = false;
+                    apiFailure = MoreRestrictive(apiFailure, ex as MarketplaceApiException);
                     message = ex is MarketplaceApiException ? ex.Message : "API недоступне або підключення не налаштоване.";
                 }
                 if (complete) lastSuccess = _clock.GetUtcNow();
-                states[connection.Id] = new(connection.Id, range, complete, lastSuccess, message, _clock.GetUtcNow(), detailCursor);
+                states[connection.Id] = new ConnectionSyncState(connection.Id, range, complete, lastSuccess, message, _clock.GetUtcNow(), detailCursor)
+                { FailureStatus = apiFailure?.StatusCode, RetryAfter = apiFailure?.RetryAfter };
                 await cache.SaveAsync(new(orders.Values.ToArray(), states.Values.ToArray()), ct).ConfigureAwait(false);
             }
             return new(orders.Values.ToArray(), states.Values.ToArray());
@@ -98,5 +105,17 @@ public sealed class MarketplaceSyncService(
         var from = receiptFrom.AddDays(-Math.Clamp(historyDays, 0, 3650)).ToDateTime(TimeOnly.MinValue);
         var end = receiptTo.AddDays(1).ToDateTime(TimeOnly.MinValue);
         return new(new DateTimeOffset(from, zone.GetUtcOffset(from)), new DateTimeOffset(end, zone.GetUtcOffset(end)));
+    }
+
+    private static MarketplaceApiException? MoreRestrictive(MarketplaceApiException? previous, MarketplaceApiException? current)
+    {
+        static int Rank(MarketplaceApiException? error) => error?.StatusCode switch
+        {
+            System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden => 3,
+            (System.Net.HttpStatusCode)429 => 2,
+            _ when error is not null => 1,
+            _ => 0
+        };
+        return Rank(current) > Rank(previous) ? current : previous;
     }
 }

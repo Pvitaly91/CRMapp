@@ -5,9 +5,11 @@ using CheckboxBatchPrinter.Core.Models;
 
 namespace CheckboxBatchPrinter.Core.Services;
 
-public sealed class MarketplaceApiException(string message, HttpStatusCode? statusCode = null) : Exception(message)
+public sealed class MarketplaceApiException(string message, HttpStatusCode? statusCode = null,
+    TimeSpan? retryAfter = null) : Exception(message)
 {
     public HttpStatusCode? StatusCode { get; } = statusCode;
+    public TimeSpan? RetryAfter { get; } = retryAfter;
 }
 
 // No response bodies, credentials, customer fields or request URLs enter application logs.
@@ -65,7 +67,10 @@ public sealed class MarketplaceHttpTransport(HttpClient client,
                 var hint = response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
                     ? "Перевірте локальні облікові дані та права читання."
                     : "Оновлення неповне; повторіть пізніше.";
-                throw new MarketplaceApiException($"{marketplace}: HTTP {(int)response.StatusCode}. {hint}", response.StatusCode);
+                var serverRetry = response.Headers.RetryAfter;
+                var retryAfter = serverRetry?.Delta ?? (serverRetry?.Date is { } deadline ? deadline - DateTimeOffset.UtcNow : null);
+                throw new MarketplaceApiException($"{marketplace}: HTTP {(int)response.StatusCode}. {hint}",
+                    response.StatusCode, retryAfter > TimeSpan.Zero ? retryAfter : null);
             }
         }
         throw new MarketplaceApiException($"{marketplace}: API недоступне.");

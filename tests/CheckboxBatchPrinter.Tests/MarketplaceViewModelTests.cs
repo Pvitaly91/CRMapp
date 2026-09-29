@@ -85,6 +85,9 @@ internal static partial class MarketplaceViewModelTests
         ("STA manual and rejected decisions override automatic cache", () => StaAsync(CachedAutomaticDecisionOverridesAsync)),
         ("STA automatic cache failures never block matching or base workflow", () => StaAsync(CachedAutomaticFailureIsolationAsync)),
         ("STA cached matches require complete enabled connection coverage", () => StaAsync(CachedAutomaticCoverageAsync)),
+        ("STA August display, probable link, filters and selection survive September background sync", () => StaAsync(HistoricalBackgroundRangeAsync)),
+        ("STA recent background orders are cached and appear when switching to today", () => StaAsync(BackgroundTodayCacheAsync)),
+        ("STA old manual link and frozen print batch survive background sync", () => StaAsync(BackgroundManualPrintAsync)),
         ("STA changed same-ID receipt invalidates cached details", () => StaAsync(CachedAutomaticChangedReceiptAsync)),
         ("STA duplicate orders or competing receipts cannot create basket suggestions", () => StaAsync(BasketAmbiguousUiAsync)),
         ("STA cached and partial marketplace orders remain visible without claiming checked links", () => StaAsync(PartialOrderPanelAsync)),
@@ -1452,6 +1455,124 @@ internal static partial class MarketplaceViewModelTests
         Equal(2, workspace.Orders.Cast<object>().Count());
         True(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single(o => o.Key == historical.Key).HasSuggestedLink == false);
         Equal(0, fixture.Printer.Calls);
+    }
+
+    private static async Task<(Fixture Fixture, MainViewModel Main, MarketplaceWorkspaceViewModel Workspace,
+        ReceiptRowViewModel August, MarketplaceOrder AugustOrder, MarketplaceOrder SeptemberOrder)> BackgroundHistoryFixtureAsync()
+    {
+        var fixture = new Fixture();
+        fixture.ReceiptSource.FilterDates = true;
+        fixture.Settings.Market.HistoryDays = 30;
+        var augustOrder = Order() with
+        {
+            Number = "AUG-ORDER", CreatedAt = new DateTimeOffset(2026, 8, 5, 10, 0, 0, TimeSpan.FromHours(3))
+        };
+        var septemberOrder = augustOrder with
+        {
+            Key = new(MarketplaceKind.Prom, "prom-test", "september-order"), Number = "SEP-ORDER", Total = 200,
+            CreatedAt = new DateTimeOffset(2026, 9, 28, 10, 0, 0, TimeSpan.FromHours(3))
+        };
+        fixture.Source.Orders = [augustOrder];
+        fixture.ReceiptSource.Rows =
+        [
+            new ReceiptRecord { Id = ReceiptOne, Serial = 100, Status = "DONE", Type = ReceiptTypes.Sell,
+                TotalSumMinor = 10000, FiscalDate = new DateTimeOffset(2026, 8, 5, 12, 0, 0, TimeSpan.FromHours(3)) },
+            new ReceiptRecord { Id = ReceiptTwo, Serial = 101, Status = "DONE", Type = ReceiptTypes.Sell,
+                TotalSumMinor = 20000, FiscalDate = new DateTimeOffset(2026, 9, 28, 12, 0, 0, TimeSpan.FromHours(3)) }
+        ];
+        var (main, workspace) = fixture.Create();
+        main.DateFrom = new DateTime(2026, 8, 5);
+        main.DateTo = new DateTime(2026, 8, 5);
+        main.CoordinatorManaged = true;
+        workspace.CoordinatorManaged = true;
+        await main.RefreshAsync();
+        await OpenOrdersAsync(main, workspace);
+        var august = main.Receipts.Single();
+        Equal(ReceiptLinkState.Suggested, august.OrderMatch!.State);
+        Equal(augustOrder.Key, august.OrderMatch.Order!.Key);
+        return (fixture, main, workspace, august, augustOrder, septemberOrder);
+    }
+
+    private static async Task RefreshSeptemberInBackgroundAsync(Fixture fixture, MainViewModel main,
+        MarketplaceWorkspaceViewModel workspace, params MarketplaceOrder[] fetched)
+    {
+        fixture.Source.Orders = fetched;
+        workspace.SetBackgroundRange(new DateOnly(2026, 9, 22), new DateOnly(2026, 9, 28));
+        await main.BackgroundRefreshAsync(new DateOnly(2026, 9, 22), new DateOnly(2026, 9, 28));
+        await workspace.SyncBackgroundAsync();
+    }
+
+    private static async Task HistoricalBackgroundRangeAsync()
+    {
+        var (fixture, main, workspace, august, augustOrder, septemberOrder) = await BackgroundHistoryFixtureAsync();
+        main.SearchText = "100";
+        workspace.OrderSearch = "AUG";
+        workspace.OrderFilter = "Prom";
+        august.IsSelectedForOrders = true;
+        main.OrdersReceiptsTab.SelectedReceipt = august;
+        await RefreshSeptemberInBackgroundAsync(fixture, main, workspace, septemberOrder);
+        fixture.ReceiptSource.Rows =
+        [
+            fixture.ReceiptSource.Rows.Single(r => r.Id == ReceiptOne),
+            new ReceiptRecord { Id = ReceiptTwo, Serial = 101, Status = "DONE", Type = ReceiptTypes.Sell,
+                TotalSumMinor = 20100, FiscalDate = new DateTimeOffset(2026, 9, 28, 12, 0, 0, TimeSpan.FromHours(3)) }
+        ];
+        await RefreshSeptemberInBackgroundAsync(fixture, main, workspace, septemberOrder);
+        Equal(new DateTime(2026, 8, 5), main.DateFrom);
+        Equal(new DateTime(2026, 8, 5), main.DateTo);
+        Equal(augustOrder.Key, august.OrderMatch?.Order?.Key);
+        Equal(ReceiptLinkState.Suggested, august.OrderMatch!.State);
+        True(main.ReceiptsView.Cast<ReceiptRowViewModel>().All(r => r.Id == ReceiptOne));
+        True(august.IsSelectedForOrders && ReferenceEquals(august, main.OrdersReceiptsTab.SelectedReceipt));
+        Equal("100", main.SearchText);
+        Equal("AUG", workspace.OrderSearch);
+        Equal("Prom", workspace.OrderFilter);
+        Equal(0, fixture.Links.Saves);
+        Equal(0, fixture.Printer.Calls);
+    }
+
+    private static async Task BackgroundTodayCacheAsync()
+    {
+        var (fixture, main, workspace, august, _, septemberOrder) = await BackgroundHistoryFixtureAsync();
+        await RefreshSeptemberInBackgroundAsync(fixture, main, workspace, septemberOrder);
+        True(fixture.Cache.Snapshot.Orders.Any(o => o.Key == septemberOrder.Key));
+        True(workspace.AllOrderRows.Any(o => o.Key == septemberOrder.Key));
+        main.DateFrom = new DateTime(2026, 9, 28);
+        main.DateTo = new DateTime(2026, 9, 28);
+        True(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Any(o => o.Key == septemberOrder.Key));
+        True(main.ReceiptsView.Cast<ReceiptRowViewModel>().Any(r => r.Id == ReceiptTwo));
+        True(main.ReceiptsView.Cast<ReceiptRowViewModel>().All(r => r.Id != august.Id));
+        var receiptCalls = fixture.ReceiptSource.Calls;
+        await Task.Delay(450);
+        Equal(receiptCalls, fixture.ReceiptSource.Calls); // Covered by the recent cache, no delayed historical reload.
+        Equal(0, fixture.Printer.Calls);
+    }
+
+    private static async Task BackgroundManualPrintAsync()
+    {
+        var (fixture, main, workspace, august, augustOrder, septemberOrder) = await BackgroundHistoryFixtureAsync();
+        workspace.SelectedReceipt = august;
+        workspace.SelectedOrder = workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single(o => o.Key == augustOrder.Key);
+        fixture.Dialogs.Choice = new(augustOrder.Key, false);
+        await ExecuteAsync(workspace.LinkSelectedOrderCommand);
+        Equal(ReceiptLinkState.Manual, august.OrderMatch!.State);
+        august.IsSelectedForOrders = true;
+        fixture.Printer.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var print = ExecuteAsync(main.PrintSelectedCommand);
+        await fixture.Printer.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Equal("AUG-ORDER", fixture.Printer.Documents.Single().OrderNumber);
+        await RefreshSeptemberInBackgroundAsync(fixture, main, workspace, augustOrder, septemberOrder);
+        Equal(ReceiptLinkState.Manual, august.OrderMatch!.State);
+        Equal(augustOrder.Key, august.OrderMatch.Order?.Key);
+        Equal("AUG-ORDER", fixture.Dialogs.Confirmation!.Items.Single().OrderNumber);
+        Equal("AUG-ORDER", fixture.Printer.Documents.Single().OrderNumber);
+        True(fixture.Printer.BatchIds.SequenceEqual([august.Id]));
+        Equal(PrintItemStatus.Printing, august.PrintStatus);
+        fixture.Printer.Gate.SetResult(true);
+        await print;
+        Equal(PrintItemStatus.Done, august.PrintStatus);
+        Equal(1, fixture.History.Saves);
+        Equal(1, fixture.Links.Saves);
     }
 
     private static async Task SameDayAmountsUiAsync()

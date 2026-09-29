@@ -27,14 +27,14 @@ public sealed class SettingsViewModel : ObservableObject
     private bool _isBusy;
     private string _originalLogin = string.Empty;
     private Task? _marketplaceLoad;
-    private readonly Func<AppSettings, Task>? _backgroundSettingsSaved;
+    private readonly Func<AppSettings, bool, bool, Task>? _backgroundSettingsSaved;
     private bool _autoRefreshEnabled, _keepInTray, _startWithWindows, _startMinimizedToTray;
     private int _backgroundIntervalMinutes = 2, _backgroundWorkingDays = 7;
 
     public SettingsViewModel(ISettingsService settingsService, IAuthenticationService authentication,
         IReceiptImageService imageService, IPrintService printService, IAppLogger logger,
         MarketplaceSettingsViewModel? marketplace = null,
-        Func<AppSettings, Task>? backgroundSettingsSaved = null, string autostartWarning = "")
+        Func<AppSettings, bool, bool, Task>? backgroundSettingsSaved = null, string autostartWarning = "")
     {
         _settingsService = settingsService;
         _authentication = authentication;
@@ -110,7 +110,8 @@ public sealed class SettingsViewModel : ObservableObject
         try
         {
             ApplyToSettings();
-            if (!string.IsNullOrWhiteSpace(Password))
+            var credentialsVerified = !string.IsNullOrWhiteSpace(Password);
+            if (credentialsVerified)
                 await _authentication.SignInAndStoreAsync(Login, Password);
             else
             {
@@ -118,11 +119,13 @@ public sealed class SettingsViewModel : ObservableObject
                     throw new InvalidOperationException("Для зміни логіна введіть пароль Checkbox.");
             }
             await _settingsService.SaveAsync(_settings);
-            if (_backgroundSettingsSaved is not null) await _backgroundSettingsSaved(_settings);
+            if (_backgroundSettingsSaved is not null) await _backgroundSettingsSaved(_settings, credentialsVerified, false);
             if (_marketplaceLoad is not null && Marketplace is not null)
             {
                 await _marketplaceLoad;
-                await Marketplace.SaveAsync();
+                var marketplaceCredentialsSaved = await Marketplace.SaveAsync();
+                if (marketplaceCredentialsSaved && _backgroundSettingsSaved is not null)
+                    await _backgroundSettingsSaved(_settings, false, true);
             }
             _originalLogin = _settings.Login;
             Password = string.Empty;
@@ -147,6 +150,7 @@ public sealed class SettingsViewModel : ObservableObject
                 await _authentication.GetAccessTokenAsync(forceRefresh: true);
             }
             await _settingsService.SaveAsync(_settings);
+            if (_backgroundSettingsSaved is not null) await _backgroundSettingsSaved(_settings, true, false);
             _originalLogin = _settings.Login;
             DiagnosticStatus = "Підключення до Checkbox успішне";
         }
