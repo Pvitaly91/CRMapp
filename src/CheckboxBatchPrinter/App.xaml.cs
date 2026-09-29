@@ -199,7 +199,14 @@ public partial class App : Application
             MainWindow.Hide();
             _tray?.ExplainFirstHide();
         }
-        else { _exiting = true; Shutdown(); }
+        else
+        {
+            if (_viewModel?.IsPrinting == true && MessageBox.Show(MainWindow,
+                    "Триває друк. Завершити програму зараз? Результат передачі може бути невизначеним.",
+                    "CRMapp", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+            { e.Cancel = true; return; }
+            _exiting = true; Shutdown();
+        }
     }
 
     private void OpenMainWindow()
