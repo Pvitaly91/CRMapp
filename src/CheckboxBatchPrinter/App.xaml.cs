@@ -1,5 +1,6 @@
 using System.IO;
 using System.Net.Http;
+using System.Net.NetworkInformation;
 using System.Windows;
 using System.Windows.Threading;
 using System.ComponentModel;
@@ -165,6 +166,8 @@ public partial class App : Application
                     viewModel.MarkBackgroundOffline();
             };
             if (settings.AutoRefreshEnabled) _coordinator.Start();
+            Microsoft.Win32.SystemEvents.PowerModeChanged += OnPowerModeChanged;
+            NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
             _logger.Info("app.mainwindow.shown");
         }
         catch (Exception exception)
@@ -179,6 +182,8 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _exiting = true;
+        Microsoft.Win32.SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
         _coordinator?.Stop();
         _viewModel?.CancelPendingOperations();
         _marketplaceViewModel?.CancelPendingOperations();
@@ -188,6 +193,25 @@ public partial class App : Application
         _marketplaceHttpClient?.Dispose();
         _shippingHttpClient?.Dispose();
         base.OnExit(e);
+    }
+
+    private void OnPowerModeChanged(object? sender, Microsoft.Win32.PowerModeChangedEventArgs e)
+    {
+        if (e.Mode == Microsoft.Win32.PowerModes.Resume) RequestRecoveryRefresh();
+    }
+
+    private void OnNetworkAvailabilityChanged(object? sender, NetworkAvailabilityEventArgs e)
+    {
+        if (e.IsAvailable) RequestRecoveryRefresh();
+    }
+
+    private void RequestRecoveryRefresh()
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (!_exiting && _appSettings?.AutoRefreshEnabled == true && _coordinator is { Paused: false })
+                _ = _coordinator.RefreshNowAsync();
+        });
     }
 
     private void OnMainWindowClosing(object? sender, CancelEventArgs e)
