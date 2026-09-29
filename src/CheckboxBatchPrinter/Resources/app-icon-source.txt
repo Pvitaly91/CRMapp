@@ -1,0 +1,6 @@
+Original icon generated with the built-in imagegen tool on 2026-09-30.
+The transparent PNG is retained as the source asset. Rebuild the multi-resolution
+Windows ICO with: powershell -NoProfile -File scripts/Convert-AppIcon.ps1
+
+Prompt:
+Use case: logo-brand. Asset type: square Windows desktop app icon for CRMapp / Checkbox Batch Printer, a Ukrainian application for receipt printing and marketplace order matching. Create one polished original icon, not a sheet of variants: a compact deep-blue thermal receipt printer with a white receipt emerging from its upper slot, three short dark-blue receipt lines, and a clear emerald-green circular checkmark badge overlapping the lower-right part. Refined soft 3D product-icon style with subtle bevels, crisp silhouette and minimal detail, front three-quarter view. Centered large single object with balanced margins, readable at 32px, strong contrast on both light and dark Windows backgrounds. The receipt has a small zigzag paper edge. Restrained blue, white and green palette. No text, letters, numbers, external brand marks, watermarks, QR codes, decorative scene, or extra objects. True transparent background outside the icon, no checkerboard pattern baked into the image, no background tile. Square 1024x1024 composition.

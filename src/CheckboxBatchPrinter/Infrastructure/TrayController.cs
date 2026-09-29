@@ -1,6 +1,5 @@
 using System.Drawing;
-using System.Runtime.InteropServices;
-using System.Windows;
+using System.IO;
 using Forms = System.Windows.Forms;
 
 namespace CheckboxBatchPrinter.Infrastructure;
@@ -20,17 +19,10 @@ internal sealed class TrayController : IDisposable
         menu.Items.Add("Налаштування", null, (_, _) => settings());
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("Вийти", null, (_, _) => exit());
-        using var bitmap = new Bitmap(32, 32);
-        using (var graphics = Graphics.FromImage(bitmap))
-        {
-            graphics.Clear(Color.Transparent);
-            graphics.FillEllipse(Brushes.SteelBlue, 1, 1, 30, 30);
-            using var font = new Font("Segoe UI", 16, System.Drawing.FontStyle.Bold, GraphicsUnit.Pixel);
-            graphics.DrawString("C", font, Brushes.White, 8, 5);
-        }
-        var handle = bitmap.GetHicon();
-        try { _ownedIcon = (Icon)Icon.FromHandle(handle).Clone(); }
-        finally { DestroyIcon(handle); }
+        using var stream = typeof(TrayController).Assembly.GetManifestResourceStream("CheckboxBatchPrinter.AppIcon")
+            ?? throw new InvalidDataException("Не знайдено іконку програми.");
+        using var resourceIcon = new Icon(stream, 32, 32);
+        _ownedIcon = (Icon)resourceIcon.Clone();
         _icon = new Forms.NotifyIcon { Icon = _ownedIcon, Text = "CRMapp — фонове оновлення", ContextMenuStrip = menu, Visible = true };
         _icon.DoubleClick += (_, _) => open();
     }
@@ -50,6 +42,4 @@ internal sealed class TrayController : IDisposable
         _icon.Dispose();
         _ownedIcon.Dispose();
     }
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool DestroyIcon(IntPtr handle);
 }

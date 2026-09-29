@@ -7,15 +7,18 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <Platforms>x64</Platforms>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Resources\app-icon.ico</ApplicationIcon>
     <AssemblyName>CheckboxBatchPrinter</AssemblyName>
     <RootNamespace>CheckboxBatchPrinter</RootNamespace>
-    <Version>1.0.4</Version>
+    <Version>1.0.5</Version>
     <DebugType>embedded</DebugType>
     <AppChannel Condition="'$(AppChannel)' == ''">Development</AppChannel>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="PDFiumCore" Version="155.0.8057" />
     <EmbeddedResource Include="Resources\PDFium-NOTICES.txt" LogicalName="CheckboxBatchPrinter.PdfiumNotices" />
+    <EmbeddedResource Include="Resources\app-icon.ico" LogicalName="CheckboxBatchPrinter.AppIcon" />
+    <Resource Include="Resources\app-icon.ico" />
     <ProjectReference Include="..\CheckboxBatchPrinter.Core\CheckboxBatchPrinter.Core.csproj" />
   </ItemGroup>
   <Target Name="EmbedAppChannel" BeforeTargets="GetAssemblyAttributes">
