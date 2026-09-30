@@ -22,7 +22,13 @@ public sealed class LabelBatchPreparation(IShippingLabelSource source, IShipping
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!seenShipments.Add((shipment.Carrier, shipment.TrackingNumber, shipment.ShipmentId))) continue;
-                var document = await source.GetAsync(shipment, cancellationToken);
+                ShippingLabelDocument document;
+                try { document = await source.GetAsync(shipment, cancellationToken); }
+                catch (ShippingLabelException ex)
+                {
+                    throw new ShippingLabelException(ex.Kind, $"Замовлення №{shipment.OrderNumber} · ТТН {shipment.TrackingNumber}: {ex.Message}")
+                    { RetryAtUtc = ex.RetryAtUtc };
+                }
                 if (document.Shipment.TrackingNumber != shipment.TrackingNumber || document.Shipment.Carrier != shipment.Carrier ||
                     document.Shipment.Order != shipment.Order || document.DocumentId.Length == 0)
                     throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "Етикетка належить іншому відправленню.");

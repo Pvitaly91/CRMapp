@@ -217,8 +217,14 @@ public sealed class NovaPoshtaVerifiedSession
         if (_verified.Count >= 100) _verified.Clear();
         _verified[(connection.Id, result.Lookup.TrackingNumber)] = (connection.ApiKey, result.Lookup);
     }
+    public bool TryGet(NovaPoshtaConnection connection, string ttn, out NovaPoshtaLookup lookup)
+    {
+        if (_verified.TryGetValue((connection.Id, ttn), out var evidence) && evidence.Key == connection.ApiKey)
+        { lookup = evidence.Lookup; return true; }
+        lookup = null!; return false;
+    }
     public NovaPoshtaLookup Require(NovaPoshtaConnection connection, string ttn) =>
-        _verified.TryGetValue((connection.Id, ttn), out var evidence) && evidence.Key == connection.ApiKey ? evidence.Lookup :
+        TryGet(connection, ttn, out var lookup) ? lookup :
         throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Цю ТТН спочатку явно перевірте через «Перевірити наявну накладну» у поточному сеансі та вибраному NP-акаунті.");
 }
 
@@ -232,7 +238,18 @@ public sealed class NovaPoshtaDirectLabelSource(IShippingSettingsStore settings,
         var connection = config.NovaPoshtaConnections.SingleOrDefault(c => c.Id == binding?.NovaPoshtaConnectionId)
             ?? throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Збережіть API-ключ Нової пошти для цього магазину Prom у налаштуваннях наклейок.");
         if (connection.ApiKey.Length == 0) throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Очікує локального введення ключа Нової пошти.");
-        var lookup = session.Require(connection, shipment.TrackingNumber);
+        if (!session.TryGet(connection, shipment.TrackingNumber, out var lookup))
+        {
+            // Explicit label preparation verifies this selected shipment in its bound account.
+            // Evidence stays operation-local; only the diagnostic acceptance action updates the session.
+            var today = DateOnly.FromDateTime(DateRangeBuilder.TodayKyiv);
+            var verified = await new NovaPoshtaDiagnostics(client, inspector).CheckAsync(connection, shipment,
+                new(today.AddDays(-6), today), cancellationToken);
+            if (!verified.CanUseInBatch) throw new ShippingLabelException(
+                verified.Lookup.Complete && !verified.Lookup.Found ? LabelFailureKind.MissingDocument : LabelFailureKind.InvalidDocument,
+                "Накладна не пройшла перевірку для пакета. " + verified.Message);
+            return verified.Document!;
+        }
         if (shipment.ShipmentId.Length > 0 && shipment.ShipmentId != lookup.DocumentRef) throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "ТТН/Ref змінилися після діагностики.");
         var document = await client.ReadMarkingAsync(connection, shipment, lookup, cancellationToken);
         var result = NovaPoshtaDiagnostics.Evaluate(lookup, document, await inspector.InspectAsync(document.Pdf, cancellationToken));

@@ -1,5 +1,17 @@
 # Shipping labels — implementation and acceptance
 
+## 1.0.13 — verify every selected NP label during packet preparation (2026-10-01)
+
+Started at clean `2b11038a222c9cb4f5e0084a2202f7d34487751b`. The two-label screenshot was caused by `NovaPoshtaDirectLabelSource.GetAsync` requiring individual manual session approval for every TTN. The settings diagnostic operates on the current order only, so approving one label still blocked a packet containing another existing label.
+
+Reproduced before the production fix through the actual `ShippingLabelsViewModel` → configured/direct NP source → synthetic HTTP → PDFium/render pipeline. The first TTN was manually checked through the real diagnostics path; selecting both then reproduced the exact "Цю ТТН спочатку явно перевірте..." error. The regression groups failed **0/2** before the fix and passed **2/2** after it. Initial fixture compilation needed the existing PDF helper's namespace; this was a test setup repair before the observed product failure.
+
+Explicit packet preparation now verifies a missing TTN proof using the existing read-only, recent seven-Kyiv-day lookup plus PDF identity/places/format checks. Prior approved evidence still receives a fresh PDF inspection and exact Ref guard. New evidence remains local to that operation, never a manual approval or saved PDF/cache. The existing complete-packet preview/confirmation gates one Windows job. A second-document failure cancels the entire packet and identifies its order/TTN; rate-limit deadlines are retained. Shop routing, shared pacing/cooldown, driver geometry, receipt printing and profile/history paths are unchanged. Unknown/multi-place/incomplete/wrong-identity/incompatible PDFs remain blocked.
+
+Release Development verification: **305/305 full-suite tests passed**, preserving all previous 295 and adding eight direct-source plus two workspace/viewmodel regression groups. Tests cover one or neither TTN previously approved, whole-packet confirmation/cancellation, wrong/missing/incomplete/multi-place/incompatible second documents, cancelled lookup, retained 429 deadlines, key rotation, exact shop binding/Ref and changed PDF after prior approval. Isolated compilation has no errors; the full rebuild retains the pre-existing WFAC010 warning. Production packaging uses the unchanged clean-commit workflow; its exact results are recorded separately in the package metadata and local build log. This work uses synthetic keys/TTNs/PDFs and a fake printer backend; real two-document NP retrieval and paper output have not been tested.
+
+---
+
 ## 1.0.12 — one NP key editor, read-only diagnostic (2026-10-01)
 
 Started at clean `419e98aa32df20e3e9907faa5b138aeea75dc468`. The user's second screenshot showed a duplicate NP editor inside the diagnostic. Removed that entire control tree and its account/key/binding save paths: account selectors, account creation/name, second password field, binding selector, date pickers and save button. Removed the duplicate advanced entry point from the main label settings. The one primary masked NP-key field remains per explicitly selected Prom shop; existing account records, stable bindings, encrypted settings and history are not deleted or migrated.
