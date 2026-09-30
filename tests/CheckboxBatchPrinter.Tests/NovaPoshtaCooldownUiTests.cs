@@ -60,16 +60,27 @@ internal static class NovaPoshtaCooldownUiTests
     private static HttpResponseMessage Json(object value) => new(HttpStatusCode.OK)
     { Content = new StringContent(JsonSerializer.Serialize(value), Encoding.UTF8, "application/json") };
 
-    private static Stores Settings()
+    private sealed class ReadOnlyStore : IShippingSettingsStore
+    {
+        public ShippingLabelSettings Config = new();
+        public MarketplaceSettings Market = new();
+        public int Saves;
+        public Task<ShippingLabelSettings> LoadAsync(CancellationToken ct = default)
+        { ct.ThrowIfCancellationRequested(); return Task.FromResult(Config); }
+        public Task SaveAsync(ShippingLabelSettings value, CancellationToken ct = default)
+        { Saves++; throw new Exception("Read-only diagnostic tried to save settings during cooldown/cancellation."); }
+    }
+
+    private static ReadOnlyStore Settings()
     {
         var order = Order("selected", ShippingCarrier.NovaPoshta, Tracking);
-        var stores = new Stores();
+        var stores = new ReadOnlyStore();
         stores.Config = stores.Config with { NovaPoshtaConnections = [Connection], NovaPoshtaStoreBindings = [new(order.Key.ConnectionId, Connection.Id)] };
         stores.Market.Connections.Add(new() { Id = order.Key.ConnectionId, Name = "Synthetic Prom", Enabled = true, Marketplace = MarketplaceKind.Prom });
         return stores;
     }
 
-    private static NovaPoshtaConnectionWindow Window(Stores stores, NovaPoshtaDiagnostics diagnostics, NoDocuments documents) =>
+    private static NovaPoshtaConnectionWindow Window(ReadOnlyStore stores, NovaPoshtaDiagnostics diagnostics, NoDocuments documents) =>
         new(stores, stores.Config, stores.Market, diagnostics, new(), documents, Order("selected", ShippingCarrier.NovaPoshta, Tracking));
 
     private static T Field<T>(NovaPoshtaConnectionWindow window, string name) =>
@@ -88,8 +99,8 @@ internal static class NovaPoshtaCooldownUiTests
         if (Environment.GetEnvironmentVariable("CHECKBOX_TEST_RENDER_DIR") is not { Length: > 0 } output) return;
         Directory.CreateDirectory(output);
         var content = (FrameworkElement)window.Content;
-        content.Measure(new Size(660, 430)); content.Arrange(new Rect(0, 0, 660, 430)); content.UpdateLayout();
-        var bitmap = new RenderTargetBitmap(660, 430, 96, 96, PixelFormats.Pbgra32); bitmap.Render(content);
+        content.Measure(new Size(660, 340)); content.Arrange(new Rect(0, 0, 660, 340)); content.UpdateLayout();
+        var bitmap = new RenderTargetBitmap(660, 340, 96, 96, PixelFormats.Pbgra32); bitmap.Render(content);
         var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
         using var file = File.Create(Path.Combine(output, "nova-poshta-cooldown.png")); encoder.Save(file);
     }
@@ -159,8 +170,8 @@ internal static class NovaPoshtaCooldownUiTests
                 check.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 await Until(() => handler.Calls == 2 && Field<StackPanel>(window, "_form").IsEnabled,
                     "Explicit retry after expiry did not complete its request.");
-                Check(documents.Inspections == 0 && documents.Renders == 0 && handler.Calls == 2,
-                    "Rate-limited or empty lookup reached PDF work or sent an extra request.");
+                Check(documents.Inspections == 0 && documents.Renders == 0 && handler.Calls == 2 && stores.Saves == 0,
+                    "Rate-limited or empty lookup reached PDF work, sent an extra request, or saved settings.");
             }
             finally
             {
@@ -208,7 +219,8 @@ internal static class NovaPoshtaCooldownUiTests
             Check(handler.Calls == 1 && check.IsEnabled && !cancel.IsEnabled && cancel.Visibility == Visibility.Collapsed &&
                 Field<TextBlock>(window, "_status").Text.Contains("скасовано", StringComparison.Ordinal) && diagnostics.GetRetryDelay(Connection) == TimeSpan.Zero,
                 "Cancelling pacing sent another request, lost cancellation status, or fabricated a rate-limit cooldown.");
-            Check(documents.Inspections == 0 && documents.Renders == 0, "Cancelled pagination reached PDF work.");
+            Check(documents.Inspections == 0 && documents.Renders == 0 && stores.Saves == 0,
+                "Cancelled pagination reached PDF work or saved settings.");
         }
         finally { window.Close(); }
     }

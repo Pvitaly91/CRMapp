@@ -80,11 +80,14 @@ public sealed class LabelSettingsWindow : Window
             try
             {
                 if (diagnostics is null || session is null) throw new InvalidOperationException("Перевірка накладних зараз недоступна.");
+                var order = currentOrder?.Invoke();
+                if (order?.Key.Marketplace != MarketplaceKind.Prom || order.Key.ConnectionId != _npStoreId)
+                    throw new InvalidOperationException("Виберіть у налаштуваннях той самий магазин Prom, що й у вибраному замовленні з ТТН.");
                 CommitNpDraft();
                 var latest = await _store.LoadAsync(); var updated = ApplyNpDrafts(latest);
                 if (!ReferenceEquals(latest, updated)) await _store.SaveAsync(updated);
                 ClearNpDrafts(updated);
-                new NovaPoshtaConnectionWindow(_store, await _store.LoadAsync(), marketplaces, diagnostics, session, new WindowsShippingLabelRenderer(), currentOrder?.Invoke())
+                new NovaPoshtaConnectionWindow(_store, await _store.LoadAsync(), marketplaces, diagnostics, session, new WindowsShippingLabelRenderer(), order)
                     { Owner = this }.ShowDialog();
                 ClearNpDrafts(await _store.LoadAsync());
             }
@@ -92,13 +95,17 @@ public sealed class LabelSettingsWindow : Window
             finally { _saving = false; IsEnabled = true; }
         }
         var verify = new Button { Content = "Перевірка накладної…", HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0,6,0,0),
-            IsEnabled = selectedOrder is not null && selectedOrder.Key.Marketplace == MarketplaceKind.Prom &&
-                ShippingCarrierNames.ForOrder(selectedOrder).Any(s => s.Carrier == ShippingCarrier.NovaPoshta),
-            ToolTip = "Виберіть замовлення Prom з ТТН у таблиці. Перевірка зберігає введений ключ і читає лише цю накладну та PDF; друк не запускається." };
+            ToolTip = "Виберіть замовлення Prom з ТТН у таблиці та його магазин у цих налаштуваннях. Перевірка зберігає введений ключ і читає накладну та PDF; друк не запускається." };
+        void UpdateVerificationAvailability()
+        {
+            var order = currentOrder?.Invoke();
+            verify.IsEnabled = order?.Key.Marketplace == MarketplaceKind.Prom && order.Key.ConnectionId == _npStoreId &&
+                _promStores.Any(s => s.Id == _npStoreId) && ShippingCarrierNames.ForOrder(order).Any(s => s.Carrier == ShippingCarrier.NovaPoshta);
+        }
+        _npStores.SelectionChanged += (_, _) => UpdateVerificationAvailability();
+        UpdateVerificationAvailability();
         ToolTipService.SetShowOnDisabled(verify, true);
         verify.Click += OpenNp; npBasic.Children.Add(verify);
-        var np = new Button { Content = "Кілька NP-акаунтів / діагностика…", HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0,10,0,10) };
-        np.Click += OpenNp; advanced.Children.Add(np);
         advanced.Children.Add(new TextBlock { Text = "ⓘ Про пряме NP-підключення", FontSize = 11,
             ToolTip = "Read-only, за відкритим SDK. Не створює накладних. Доступ до конкретної ТТН, відповідність PDF і повнота місць перевіряються окремо. Без підтвердженого PDF пакет блокується." });
         root.Children.Add(_status);

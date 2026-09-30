@@ -126,7 +126,7 @@ public sealed class NovaPoshtaReadOnlyClient(ShippingLabelHttp http)
         {
             var match = matches.Values.SingleOrDefault();
             return new(shipment.TrackingNumber, match.Ref ?? "", match.Places, complete, pagesRead,
-                !complete ? "Вибірка неповна: досягнуто ліміт або сервер повторив сторінку. Пошук не завершений; змініть період і запустіть окрему перевірку."
+                !complete ? "Вибірка неповна: досягнуто ліміт або сервер повторив сторінку. Доступ до PDF не підтверджено; друк цієї накладної недоступний."
                 : matches.Count == 0 ? "Не знайдено у перевіреній вибірці цього акаунта. Це не означає, що ТТН не існує або ключ неправильний."
                 : string.IsNullOrEmpty(match.Ref) ? "Номер знайдено, але document Ref не надано; його значення не підставляється. Маршрут SDK використовує публічний номер."
                 : "Точний номер ТТН знайдено у перевіреній вибірці вибраного акаунта.", matches.Count == 1);
@@ -230,7 +230,7 @@ public sealed class NovaPoshtaDirectLabelSource(IShippingSettingsStore settings,
         var config = await settings.LoadAsync(cancellationToken);
         var binding = config.NovaPoshtaStoreBindings.SingleOrDefault(b => b.MarketplaceConnectionId == shipment.Order.ConnectionId);
         var connection = config.NovaPoshtaConnections.SingleOrDefault(c => c.Id == binding?.NovaPoshtaConnectionId)
-            ?? throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Виберіть пряме NP-підключення для цього магазину Prom.");
+            ?? throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Збережіть API-ключ Нової пошти для цього магазину Prom у налаштуваннях наклейок.");
         if (connection.ApiKey.Length == 0) throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Очікує локального введення ключа Нової пошти.");
         var lookup = session.Require(connection, shipment.TrackingNumber);
         if (shipment.ShipmentId.Length > 0 && shipment.ShipmentId != lookup.DocumentRef) throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "ТТН/Ref змінилися після діагностики.");
@@ -252,7 +252,7 @@ public sealed class ConfiguredShippingLabelSource(IShippingSettingsStore setting
             if (config.NovaPoshtaStoreBindings.Any(b => b.MarketplaceConnectionId == shipment.Order.ConnectionId))
                 return await direct.GetAsync(shipment, cancellationToken);
             if (config.NovaPoshtaSellerConnectionId.Length == 0)
-                throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Для магазину Prom явно виберіть NP-підключення у налаштуваннях наклейок. Rozetka Seller не потрібний; акаунти не перебираються.");
+                throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Для магазину Prom збережіть API-ключ Нової пошти у налаштуваннях наклейок. Rozetka Seller не потрібний; акаунти не перебираються.");
         }
         return await existing.GetAsync(shipment, cancellationToken);
     }

@@ -1,4 +1,5 @@
 using System.IO;
+using System.Net.Http;
 using System.Reflection;
 using System.Text;
 using System.Windows;
@@ -41,6 +42,7 @@ internal static class SimpleShippingSettingsTests
         ("DPAPI simple NP key and explicit shop binding survive restart without changing label history", Persistence),
         ("STA simple label settings show one masked NP field and collapse advanced options", () => MarketplaceViewModelTests.StaAsync(SimplifiedUi)),
         ("STA simple label settings save the explicitly selected Prom shop only", () => MarketplaceViewModelTests.StaAsync(SelectedShopUi)),
+        ("STA NP verify follows selected order shop and rejects a programmatic mismatched click without saving", () => MarketplaceViewModelTests.StaAsync(VerificationShopUi)),
         ("STA simple label settings keep typed keys separate while switching shops", () => MarketplaceViewModelTests.StaAsync(DraftsUi)),
         ("STA simple label settings closing without save writes no typed key", () => MarketplaceViewModelTests.StaAsync(CancelUi)),
         ("STA simple label settings blank key preserves latest credentials and collapsed print options", () => MarketplaceViewModelTests.StaAsync(PreserveUi)),
@@ -217,6 +219,18 @@ internal static class SimpleShippingSettingsTests
             Check(!advancedNodes.Contains(Field<PasswordBox>(window, "_npKey")) &&
                 Field<PasswordBox>(window, "_npKey").Password == "" && !advancedNodes.Contains(Field<TextBox>(window, "_copies")),
                 "Primary NP key is missing, exposes the stored key, or copies moved into advanced settings.");
+            var nodes = Nodes(window).ToArray();
+            Check(nodes.OfType<PasswordBox>().Where(p => !advancedNodes.Contains(p)).SequenceEqual([Field<PasswordBox>(window, "_npKey")]) &&
+                advancedNodes.OfType<PasswordBox>().SequenceEqual([Field<PasswordBox>(window, "_token")]),
+                "The settings window contains a duplicate NP key input outside its single primary editor.");
+            var verify = nodes.OfType<Button>().Where(b => Equals(b.Content, "Перевірка накладної…")).ToArray();
+            Check(verify.Length == 1 && !advancedNodes.Contains(verify[0]) &&
+                !advancedNodes.OfType<Button>().Any(b => b.Content?.ToString() is { } text &&
+                    (text.Contains("NP", StringComparison.OrdinalIgnoreCase) || text.Contains("діагност", StringComparison.OrdinalIgnoreCase) ||
+                     text.Contains("Перевірка накладної", StringComparison.OrdinalIgnoreCase))),
+                "Advanced settings still expose a duplicate NP account editor or diagnostic entry point.");
+            Check(advancedNodes.OfType<ComboBox>().SequenceEqual([Field<ComboBox>(window, "_seller")]),
+                "Advanced settings still contain a direct NP account or store-binding selector.");
             Check(store.Saves == 0 && printer.Inspections == 0, "Opening simplified settings writes credentials or checks a print job.");
             if (Environment.GetEnvironmentVariable("CHECKBOX_TEST_RENDER_DIR") is { Length: > 0 } output)
             {
@@ -248,6 +262,44 @@ internal static class SimpleShippingSettingsTests
                 store.Value.NovaPoshtaStoreBindings.Single(b => b.MarketplaceConnectionId == ShopA).NovaPoshtaConnectionId == Account,
                 "Settings saved the key against a different shop or changed the old shop's key.");
             OtherSettingsUnchanged(Bound, store.Value);
+        }
+        finally { window.Close(); }
+    }
+    private sealed class NoDiagnosticAccess : HttpMessageHandler, ILabelPdfInspector
+    {
+        public int Requests, Inspections;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        { Requests++; throw new Exception("Mismatched shop verification contacted the API."); }
+        public Task<LabelPdfInspection> InspectAsync(byte[] pdf, CancellationToken ct = default)
+        { Inspections++; throw new Exception("Mismatched shop verification inspected a PDF."); }
+    }
+    private static async Task VerificationShopUi()
+    {
+        var original = Bound;
+        var store = new MemoryStore(original);
+        var access = new NoDiagnosticAccess();
+        using var http = new HttpClient(access);
+        var order = Order("selected", ShippingCarrier.NovaPoshta, "20400000000001") with
+            { Key = new(MarketplaceKind.Prom, ShopA, "selected") };
+        var diagnostics = new NovaPoshtaDiagnostics(new(NovaPoshtaRequestPolicyTests.FastTransport(http)), access);
+        var window = new LabelSettingsWindow(store, new Printer(), store.Value, Market(multiple: true), diagnostics, new(), () => order);
+        try
+        {
+            var shops = Field<ComboBox>(window, "_npStores");
+            var verify = Nodes(window).OfType<Button>().Single(b => Equals(b.Content, "Перевірка накладної…"));
+            Check(Equals(shops.SelectedValue, ShopA) && verify.IsEnabled, "Selected order's matching Prom shop cannot open verification.");
+            shops.SelectedValue = ShopB;
+            Field<PasswordBox>(window, "_npKey").Password = NewKey;
+            Check(!verify.IsEnabled, "Switching the key editor to another shop left verification enabled.");
+            verify.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await Task.Yield();
+            Check(store.Saves == 0 && ReferenceEquals(store.Value, original) &&
+                store.Value.NovaPoshtaConnections.Single().ApiKey == OldKey && access.Requests == 0 && access.Inspections == 0 &&
+                window.OwnedWindows.Count == 0 && window.IsEnabled,
+                "Programmatic mismatched verification saved a key, contacted API/PDF, or opened a diagnostic window.");
+            shops.SelectedValue = ShopA;
+            Check(verify.IsEnabled && store.Saves == 0 && access.Requests == 0,
+                "Returning to the selected order's shop did not restore the manual verification action.");
         }
         finally { window.Close(); }
     }

@@ -24,7 +24,7 @@ public static class NovaPoshtaKeySettings
 
         var binding = latest.NovaPoshtaStoreBindings.SingleOrDefault(b => b.MarketplaceConnectionId == selectedStore.Id);
         var account = binding is null ? null : latest.NovaPoshtaConnections.SingleOrDefault(c => c.Id == binding.NovaPoshtaConnectionId)
-            ?? throw new InvalidOperationException("Збережене NP-підключення магазину недоступне. Перевірте розширені налаштування.");
+            ?? throw new InvalidOperationException("Збережене NP-підключення магазину недоступне. Потрібно відновити прив’язку магазину.");
         if (account?.ApiKey == key) return latest;
         var shared = account is not null && latest.NovaPoshtaStoreBindings.Any(b =>
             b.NovaPoshtaConnectionId == account.Id && b.MarketplaceConnectionId != selectedStore.Id);
@@ -32,7 +32,7 @@ public static class NovaPoshtaKeySettings
             return latest with { NovaPoshtaConnections = latest.NovaPoshtaConnections.Select(c => c.Id == account.Id ? c with { ApiKey = key } : c).ToArray() };
 
         if (latest.NovaPoshtaConnections.Count >= 30)
-            throw new InvalidOperationException("Досягнуто межі 30 NP-підключень. Перевірте їх у розширених налаштуваннях.");
+            throw new InvalidOperationException("Досягнуто межі 30 NP-підключень. Новий ключ не збережено; наявні підключення не змінені.");
         var created = new NovaPoshtaConnection(Guid.NewGuid().ToString("N"), "Нова пошта — підключення магазину", key);
         return latest with
         {

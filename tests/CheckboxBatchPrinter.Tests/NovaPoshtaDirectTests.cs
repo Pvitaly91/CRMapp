@@ -46,7 +46,9 @@ internal static class NovaPoshtaDirectTests
         ("direct NP session evidence rejects restart rotation foreign account and unverified document", Session),
         ("direct NP missing explicit store binding never falls through to a random Seller account", MissingBinding),
         ("DPAPI direct NP settings survive rotation without touching label or receipt history", Persistence),
-        ("STA real NP settings window saves masked key and explicit store binding with no printer or Seller", () => MarketplaceViewModelTests.StaAsync(SettingsUi)),
+        ("STA NP diagnostic has no account editor and never saves settings on open or check", () => MarketplaceViewModelTests.StaAsync(SettingsUi)),
+        ("STA NP diagnostic reloads each check and uses only the selected Prom shop binding", () => MarketplaceViewModelTests.StaAsync(LatestDiagnosticSettingsUi)),
+        ("STA NP diagnostic refuses missing selection shop key or binding without an API request", () => MarketplaceViewModelTests.StaAsync(UnconfiguredDiagnosticUi)),
         ("STA manual NP check blocks reentry and cancellation stops the selected account request", () => MarketplaceViewModelTests.StaAsync(ManualUiCancellation))
     ];
     private sealed class Handler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> response) : HttpMessageHandler
@@ -468,32 +470,157 @@ internal static class NovaPoshtaDirectTests
         try { await source.GetAsync(Shipment()); throw new Exception("Absent binding accepted."); }
         catch(ShippingLabelException ex) { Check(ex.Kind == LabelFailureKind.ConnectionRequired && ex.Message.Contains("Rozetka Seller не потрібний"),"Misreported missing explicit NP selection."); }
     }
+    private sealed class DiagnosticStore(ShippingLabelSettings initial) : IShippingSettingsStore
+    {
+        public ShippingLabelSettings Config = initial;
+        public int Loads, Saves;
+        public Task<ShippingLabelSettings> LoadAsync(CancellationToken ct = default)
+        { ct.ThrowIfCancellationRequested(); Loads++; return Task.FromResult(Config); }
+        public Task SaveAsync(ShippingLabelSettings value, CancellationToken ct = default)
+        { Saves++; throw new Exception("Read-only NP diagnostic tried to save settings."); }
+    }
+    private static IEnumerable<DependencyObject> DiagnosticNodes(DependencyObject parent)
+    {
+        yield return parent;
+        foreach (var child in LogicalTreeHelper.GetChildren(parent).OfType<DependencyObject>())
+            foreach (var node in DiagnosticNodes(child)) yield return node;
+    }
+    private static T DiagnosticField<T>(NovaPoshtaConnectionWindow window, string name) =>
+        (T)(typeof(NovaPoshtaConnectionWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(window)
+            ?? throw new Exception("Missing NP diagnostic field " + name));
+    private static async Task DiagnosticIdle(NovaPoshtaConnectionWindow window)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+        await Task.Yield();
+        while (!DiagnosticField<StackPanel>(window, "_form").IsEnabled) await Task.Delay(10, timeout.Token);
+    }
+    private static async Task DiagnosticPage(HttpRequestMessage request, string expectedKey)
+    {
+        Check(request.Method == HttpMethod.Post && request.RequestUri?.AbsoluteUri == NovaPoshtaReadOnlyContract.EntryPoint,
+            "Diagnostic contacted an unexpected endpoint or requested a PDF.");
+        using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+        var props = body.RootElement.GetProperty("methodProperties");
+        var today = DateRangeBuilder.TodayKyiv;
+        Check(body.RootElement.GetProperty("apiKey").GetString() == expectedKey &&
+            body.RootElement.GetProperty("calledMethod").GetString() == "getDocumentList" &&
+            props.GetProperty("DateTimeFrom").GetString() == today.AddDays(-6).ToString("dd.MM.yyyy") &&
+            props.GetProperty("DateTimeTo").GetString() == today.ToString("dd.MM.yyyy") &&
+            !props.GetProperty("GetFullList").GetBoolean() && props.GetProperty("Page").GetString() == "1",
+            "Diagnostic used a stale/foreign key or did not use the fixed recent seven Kyiv days.");
+    }
     private static async Task SettingsUi()
     {
-        var stores = new Stores(); stores.Config = new();
         var promId = Shipment().Order.ConnectionId;
-        stores.Market.Connections.Add(new() { Id = promId,Name = "Synthetic Prom",Enabled = true,Marketplace = MarketplaceKind.Prom });
-        var handler = new Handler((_,_)=>throw new Exception("Settings automatically called API.")); using var http = new HttpClient(handler);
-        var window = new NovaPoshtaConnectionWindow(stores,stores.Config,stores.Market,new(new(NovaPoshtaRequestPolicyTests.FastTransport(http)),new NoInspector()),new(),new WindowsShippingLabelRenderer(),Order("selected",ShippingCarrier.NovaPoshta,Ttn));
-        IEnumerable<DependencyObject> Nodes(DependencyObject parent)
-        { yield return parent; foreach (var child in LogicalTreeHelper.GetChildren(parent).OfType<DependencyObject>()) foreach(var node in Nodes(child)) yield return node; }
-        var add = Nodes(window).OfType<Button>().Single(b=>Equals(b.Content,"Додати NP-підключення")); add.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-        T Field<T>(string name) => (T)typeof(NovaPoshtaConnectionWindow).GetField(name,BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(window)!;
-        Field<TextBox>("_name").Text = "Saved synthetic NP"; Field<PasswordBox>("_key").Password = Connection.ApiKey;
-        Field<ComboBox>("_boundAccount").SelectedIndex = 1;
-        var save = Nodes(window).OfType<Button>().Single(b=>Equals(b.Content,"Зберегти NP-підключення")); save.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-        await Task.Yield();
-        Check(stores.Config.NovaPoshtaConnections.Single().ApiKey == Connection.ApiKey && stores.Config.NovaPoshtaStoreBindings.Single().MarketplaceConnectionId == promId &&
-            Field<PasswordBox>("_key").Password == "" && handler.Calls == 0,"Actual UI failed masked key/store binding or auto-scanned.");
-        if (Environment.GetEnvironmentVariable("CHECKBOX_TEST_RENDER_DIR") is { Length: > 0 } output)
+        var initial = new ShippingLabelSettings { NovaPoshtaConnections = [Connection], NovaPoshtaStoreBindings = [new(promId, Connection.Id)] };
+        var store = new DiagnosticStore(initial);
+        var marketplaces = new MarketplaceSettings { Connections = [new() { Id = promId, Name = "Synthetic Prom", Enabled = true, Marketplace = MarketplaceKind.Prom }] };
+        var handler = new Handler(async (request, _) => { await DiagnosticPage(request, Connection.ApiKey); return List(); });
+        using var http = new HttpClient(handler);
+        var window = new NovaPoshtaConnectionWindow(store, initial, marketplaces, new(new(NovaPoshtaRequestPolicyTests.FastTransport(http)), new NoInspector()),
+            new(), new WindowsShippingLabelRenderer(), Order("selected", ShippingCarrier.NovaPoshta, Ttn));
+        try
         {
-            var content = (FrameworkElement)window.Content;
-            content.Measure(new Size(760,710)); content.Arrange(new Rect(0,0,760,710)); content.UpdateLayout();
-            var bitmap = new RenderTargetBitmap(760,710,96,96,PixelFormats.Pbgra32); bitmap.Render(content);
-            var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap)); Directory.CreateDirectory(output);
-            await using var file = File.Create(Path.Combine(output,"np-connection-settings.png")); encoder.Save(file);
+            var nodes = DiagnosticNodes(window).ToArray();
+            Check(!nodes.Any(n => n is PasswordBox or TextBox or DatePicker or Expander),
+                "The diagnostic still contains a key/name/date editor or a hidden advanced NP block.");
+            Check(nodes.OfType<ComboBox>().SequenceEqual([DiagnosticField<ComboBox>(window, "_shipments")]),
+                "The diagnostic still contains a shop/account/binding selector.");
+            Check(!nodes.OfType<Button>().Any(b => b.Content?.ToString() is { } text &&
+                (text.Contains("Зберег", StringComparison.OrdinalIgnoreCase) || text.Contains("Додати", StringComparison.OrdinalIgnoreCase))),
+                "The read-only diagnostic exposes account creation or settings persistence.");
+            Check(handler.Calls == 0 && store.Saves == 0, "Opening the diagnostic contacted the API or saved settings.");
+            var displayed = string.Join("\n", nodes.OfType<TextBlock>().Select(t => t.Text));
+            Check(displayed.Contains("Synthetic Prom", StringComparison.Ordinal) && displayed.Contains("7 днів", StringComparison.Ordinal) &&
+                displayed.Contains("Київ", StringComparison.Ordinal) &&
+                !displayed.Contains(Connection.ApiKey, StringComparison.Ordinal), "Read-only shop/period context is missing or exposes the key.");
+            if (Environment.GetEnvironmentVariable("CHECKBOX_TEST_RENDER_DIR") is { Length: > 0 } output)
+            {
+                var content = (FrameworkElement)window.Content;
+                content.Measure(new Size(660, 340)); content.Arrange(new Rect(0, 0, 660, 340)); content.UpdateLayout();
+                var bitmap = new RenderTargetBitmap(660, 340, 96, 96, PixelFormats.Pbgra32); bitmap.Render(content);
+                var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap)); Directory.CreateDirectory(output);
+                await using var file = File.Create(Path.Combine(output, "np-connection-settings.png")); encoder.Save(file);
+            }
+            DiagnosticField<Button>(window, "_check").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await DiagnosticIdle(window);
+            Check(handler.Calls == 1 && store.Loads >= 1 && store.Saves == 0 && ReferenceEquals(store.Config, initial) &&
+                DiagnosticField<TextBlock>(window, "_status").Text.Contains("Не знайдено", StringComparison.Ordinal),
+                "Manual diagnostic failed to reload settings, sent extra requests, or changed persisted configuration.");
         }
-        window.Close();
+        finally { window.Close(); }
+    }
+    private static async Task LatestDiagnosticSettingsUi()
+    {
+        var promId = Shipment().Order.ConnectionId;
+        const string otherShop = "10000000000000000000000000000004";
+        var other = new NovaPoshtaConnection("10000000000000000000000000000005", "Other shop NP", "synthetic_other_shop_key");
+        var replacement = new NovaPoshtaConnection("10000000000000000000000000000006", "Current selected NP", "synthetic_latest_selected_key");
+        var initial = new ShippingLabelSettings { NovaPoshtaConnections = [other, Connection], NovaPoshtaStoreBindings = [new(otherShop, other.Id), new(promId, Connection.Id)] };
+        var store = new DiagnosticStore(initial);
+        var marketplaces = new MarketplaceSettings { Connections =
+            [new() { Id = otherShop, Name = "First other Prom", Enabled = true, Marketplace = MarketplaceKind.Prom },
+             new() { Id = promId, Name = "Selected Prom", Enabled = true, Marketplace = MarketplaceKind.Prom }] };
+        var expectedKey = replacement.ApiKey;
+        var handler = new Handler(async (request, _) => { await DiagnosticPage(request, expectedKey); return List(); });
+        using var http = new HttpClient(handler);
+        var window = new NovaPoshtaConnectionWindow(store, initial, marketplaces, new(new(NovaPoshtaRequestPolicyTests.FastTransport(http)), new NoInspector()),
+            new(), new WindowsShippingLabelRenderer(), Order("selected", ShippingCarrier.NovaPoshta, Ttn));
+        try
+        {
+            store.Config = initial with { NovaPoshtaConnections = [other, Connection, replacement],
+                NovaPoshtaStoreBindings = [new(otherShop, other.Id), new(promId, replacement.Id)] };
+            for (var attempt = 1; attempt <= 2; attempt++)
+            {
+                if (attempt == 2)
+                {
+                    replacement = replacement with { ApiKey = "synthetic_selected_rotated_again" };
+                    expectedKey = replacement.ApiKey;
+                    store.Config = store.Config with { NovaPoshtaConnections = [other, Connection, replacement] };
+                }
+                var before = store.Config;
+                DiagnosticField<Button>(window, "_check").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                await DiagnosticIdle(window);
+                Check(handler.Calls == attempt && store.Loads >= attempt && store.Saves == 0 && ReferenceEquals(store.Config, before),
+                    "Each manual check must reload the selected shop's current binding without writing settings.");
+                Check(DiagnosticField<TextBlock>(window, "_status").Text.Contains("Не знайдено", StringComparison.Ordinal),
+                    "The selected-shop check did not complete using its latest saved key.");
+            }
+        }
+        finally { window.Close(); }
+    }
+    private static async Task UnconfiguredDiagnosticUi()
+    {
+        foreach (var scenario in new[] { "no-order", "no-binding", "missing-account", "empty-key", "disabled-shop", "missing-shop", "non-prom" })
+        {
+            var order = Order("selected", ShippingCarrier.NovaPoshta, Ttn);
+            var initial = new ShippingLabelSettings { NovaPoshtaConnections = [Connection], NovaPoshtaStoreBindings = [new(order.Key.ConnectionId, Connection.Id)] };
+            var store = new DiagnosticStore(initial);
+            var marketplaces = new MarketplaceSettings { Connections =
+                [new() { Id = "10000000000000000000000000000004", Name = "Other enabled Prom", Enabled = true, Marketplace = MarketplaceKind.Prom },
+                 new() { Id = order.Key.ConnectionId, Name = "Selected Prom", Enabled = scenario != "disabled-shop", Marketplace = MarketplaceKind.Prom }] };
+            if (scenario == "missing-shop") marketplaces.Connections.RemoveAt(1);
+            if (scenario == "non-prom") order = order with { Key = order.Key with { Marketplace = MarketplaceKind.Rozetka } };
+            var handler = new Handler((_, _) => throw new Exception("Unconfigured diagnostic contacted an API."));
+            using var http = new HttpClient(handler);
+            var window = new NovaPoshtaConnectionWindow(store, initial, marketplaces, new(new(NovaPoshtaRequestPolicyTests.FastTransport(http)), new NoInspector()),
+                new(), new WindowsShippingLabelRenderer(), scenario == "no-order" ? null : order);
+            try
+            {
+                // Invalidate persisted data after opening so the stale constructor snapshot cannot grant access.
+                store.Config = scenario switch
+                {
+                    "no-binding" => initial with { NovaPoshtaStoreBindings = [] },
+                    "missing-account" => initial with { NovaPoshtaConnections = [] },
+                    "empty-key" => initial with { NovaPoshtaConnections = [Connection with { ApiKey = "" }] },
+                    _ => initial
+                };
+                DiagnosticField<Button>(window, "_check").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                await DiagnosticIdle(window);
+                Check(handler.Calls == 0 && store.Saves == 0,
+                    "Missing diagnostic selection/configuration fell back to another shop/account or saved settings: " + scenario);
+            }
+            finally { window.Close(); }
+        }
     }
     private static async Task ManualUiCancellation()
     {
@@ -501,19 +628,17 @@ internal static class NovaPoshtaDirectTests
         stores.Config = stores.Config with { NovaPoshtaConnections = [Connection], NovaPoshtaStoreBindings = [new(promId,Connection.Id)] };
         stores.Market.Connections.Add(new() {Id=promId,Name="Synthetic Prom",Enabled=true,Marketplace=MarketplaceKind.Prom});
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var handler = new Handler(async (r,ct)=>{await Page(r); entered.TrySetResult(); await Task.Delay(Timeout.Infinite,ct); return List();});
+        var handler = new Handler(async (r,ct)=>{await DiagnosticPage(r, Connection.ApiKey); entered.TrySetResult(); await Task.Delay(Timeout.Infinite,ct); return List();});
         using var http = new HttpClient(handler);
         var window = new NovaPoshtaConnectionWindow(stores,stores.Config,stores.Market,new(new(NovaPoshtaRequestPolicyTests.FastTransport(http)),new NoInspector()),new(),new WindowsShippingLabelRenderer(),Order("selected",ShippingCarrier.NovaPoshta,Ttn));
         T Field<T>(string name) => (T)typeof(NovaPoshtaConnectionWindow).GetField(name,BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(window)!;
-        Field<DatePicker>("_from").SelectedDate = Period.From.ToDateTime(TimeOnly.MinValue); Field<DatePicker>("_to").SelectedDate = Period.To.ToDateTime(TimeOnly.MinValue);
-        var buttons = Field<StackPanel>("_form").Children.OfType<StackPanel>().Single().Children.OfType<Button>().ToArray();
-        var check = buttons.Single(b=>Equals(b.Content,"Перевірити наявну накладну"));
+        var check = Field<Button>("_check");
         Check(handler.Calls == 0,"Opening settings automatically scanned history.");
-        check.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await entered.Task;
+        check.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await entered.Task.WaitAsync(TimeSpan.FromSeconds(4));
         check.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Check(handler.Calls == 1 && !Field<StackPanel>("_form").IsEnabled,"Manual check reentered while saving/loading.");
         Field<Button>("_cancel").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-        for(var i=0;i<200 && !Field<StackPanel>("_form").IsEnabled;i++) await Task.Delay(1);
+        await DiagnosticIdle(window);
         Check(Field<StackPanel>("_form").IsEnabled && Field<TextBlock>("_status").Text.Contains("скасовано") && handler.Calls == 1,"Cancellation did not stop bounded API check.");
         window.Close();
     }
