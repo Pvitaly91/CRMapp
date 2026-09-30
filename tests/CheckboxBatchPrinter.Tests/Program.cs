@@ -77,6 +77,7 @@ internal static class Program
         Tests.AddRange(PromOrdersTests.All);
         Tests.AddRange(AppEnvironmentTests.All);
         Tests.AddRange(BackgroundSyncTests.All);
+        Tests.AddRange(OrderNotificationTests.All);
         Tests.AddRange(RozetkaOrdersTests.All);
         Tests.AddRange(MarketplaceMatchingTests.All);
         Tests.AddRange(FiscalLinkTests.All);

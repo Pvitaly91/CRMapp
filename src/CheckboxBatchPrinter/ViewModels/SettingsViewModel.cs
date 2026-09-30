@@ -29,6 +29,7 @@ public sealed class SettingsViewModel : ObservableObject
     private Task? _marketplaceLoad;
     private readonly Func<AppSettings, bool, bool, Task>? _backgroundSettingsSaved;
     private bool _autoRefreshEnabled, _keepInTray, _startWithWindows, _startMinimizedToTray;
+    private bool _notifyNewOrders = true;
     private int _backgroundIntervalMinutes = 2, _backgroundWorkingDays = 7;
 
     public SettingsViewModel(ISettingsService settingsService, IAuthenticationService authentication,
@@ -64,6 +65,7 @@ public sealed class SettingsViewModel : ObservableObject
     public bool SeparatePrintJobPerReceipt { get => _separatePrintJob; set => SetProperty(ref _separatePrintJob, value); }
     public string DiagnosticStatus { get => _diagnosticStatus; private set => SetProperty(ref _diagnosticStatus, value); }
     public bool AutoRefreshEnabled { get => _autoRefreshEnabled; set => SetProperty(ref _autoRefreshEnabled, value); }
+    public bool NotifyNewOrders { get => _notifyNewOrders; set => SetProperty(ref _notifyNewOrders, value); }
     public bool KeepInTray { get => _keepInTray; set => SetProperty(ref _keepInTray, value); }
     public bool StartWithWindows { get => _startWithWindows; set => SetProperty(ref _startWithWindows, value); }
     public bool StartMinimizedToTray { get => _startMinimizedToTray; set => SetProperty(ref _startMinimizedToTray, value); }
@@ -88,6 +90,7 @@ public sealed class SettingsViewModel : ObservableObject
         PrintableWidthMm = _settings.PrintableWidthMm;
         SeparatePrintJobPerReceipt = _settings.SeparatePrintJobPerReceipt;
         AutoRefreshEnabled = _settings.AutoRefreshEnabled;
+        NotifyNewOrders = _settings.NotifyNewOrders;
         KeepInTray = _settings.KeepInTray;
         StartWithWindows = _settings.StartWithWindows;
         StartMinimizedToTray = _settings.StartMinimizedToTray;
@@ -194,6 +197,7 @@ public sealed class SettingsViewModel : ObservableObject
         _settings.PrintableWidthMm = PrintableWidthMm;
         _settings.SeparatePrintJobPerReceipt = SeparatePrintJobPerReceipt;
         _settings.AutoRefreshEnabled = AutoRefreshEnabled;
+        _settings.NotifyNewOrders = NotifyNewOrders;
         _settings.KeepInTray = KeepInTray;
         _settings.StartWithWindows = StartWithWindows;
         _settings.StartMinimizedToTray = StartMinimizedToTray;

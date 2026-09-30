@@ -253,6 +253,22 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     {
         _backgroundFrom = from; _backgroundTo = to;
     }
+
+    public OrderNotificationSnapshot GetOrderNotificationSnapshot(DateTimeOffset? completedSince = null)
+    {
+        var range = _backgroundFrom is { } from && _backgroundTo is { } to ? ScopeFor(from, to).OrderRange : null;
+        var sources = _config.Connections.Where(c => c.Enabled)
+            .GroupBy(c => _deduplication.NormalizeKey(new(c.Marketplace, c.Id, "notification-source")))
+            .Select(group =>
+            {
+                var states = _snapshot.States.Where(s => group.Any(c => c.Id == s.ConnectionId)).ToArray();
+                var complete = states.Any(s => s.Complete && (completedSince is null ||
+                    s.Range == range && s.AttemptedAtUtc >= completedSince));
+                return new NotificationSourceSnapshot(new(group.Key.Marketplace, group.Key.ConnectionId),
+                    complete, states.MaxBy(s => s.LastSuccessUtc)?.LastSuccessUtc);
+            }).ToArray();
+        return new(ActiveOrders, sources);
+    }
     public void CancelPendingOperations()
     {
         _cancel?.Cancel();

@@ -91,6 +91,8 @@ internal static partial class MarketplaceViewModelTests
         ("STA background links recent receipts despite incomplete wider interactive coverage", () => StaAsync(BackgroundRecentLinksAsync)),
         ("STA partial background check preserves cached pairs but cannot link new receipts", () => StaAsync(BackgroundPartialLinksAsync)),
         ("STA hidden background competitors withdraw stale cached automatic links", () => StaAsync(BackgroundCompetingLinksAsync)),
+        ("STA background coordinator notifications ignore display filters and duplicate Prom aliases after restart", () => StaAsync(BackgroundNotificationsAsync)),
+        ("STA background notifications require fresh completed source coverage and defer partial shops", () => StaAsync(BackgroundPartialNotificationsAsync)),
         ("STA changed same-ID receipt invalidates cached details", () => StaAsync(CachedAutomaticChangedReceiptAsync)),
         ("STA duplicate orders or competing receipts cannot create basket suggestions", () => StaAsync(BasketAmbiguousUiAsync)),
         ("STA cached and partial marketplace orders remain visible without claiming checked links", () => StaAsync(PartialOrderPanelAsync)),

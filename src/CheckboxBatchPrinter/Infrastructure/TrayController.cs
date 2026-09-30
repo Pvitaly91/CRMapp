@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.IO;
+using CheckboxBatchPrinter.Core.Models;
 using Forms = System.Windows.Forms;
 
 namespace CheckboxBatchPrinter.Infrastructure;
@@ -25,6 +26,7 @@ internal sealed class TrayController : IDisposable
         _ownedIcon = (Icon)resourceIcon.Clone();
         _icon = new Forms.NotifyIcon { Icon = _ownedIcon, Text = "CRMapp — фонове оновлення", ContextMenuStrip = menu, Visible = true };
         _icon.DoubleClick += (_, _) => open();
+        _icon.BalloonTipClicked += (_, _) => open();
     }
 
     public void ExplainFirstHide()
@@ -34,6 +36,9 @@ internal sealed class TrayController : IDisposable
         _icon.ShowBalloonTip(5000, "CRMapp працює у треї",
             "Подвійний клік відкриє вікно. Для повного закриття виберіть «Вийти» у меню значка.", Forms.ToolTipIcon.Info);
     }
+
+    public void ShowNewOrders(NewOrdersNotification notification) =>
+        _icon.ShowBalloonTip(8000, notification.Title, notification.Body, Forms.ToolTipIcon.Info);
 
     public void Dispose()
     {

@@ -10,7 +10,7 @@
     <ApplicationIcon>Resources\app-icon.ico</ApplicationIcon>
     <AssemblyName>CheckboxBatchPrinter</AssemblyName>
     <RootNamespace>CheckboxBatchPrinter</RootNamespace>
-    <Version>1.0.6</Version>
+    <Version>1.0.7</Version>
     <DebugType>embedded</DebugType>
     <AppChannel Condition="'$(AppChannel)' == ''">Development</AppChannel>
   </PropertyGroup>

@@ -50,6 +50,7 @@
             <TabItem Header="Фоновий режим">
                 <StackPanel Margin="18">
                     <CheckBox Content="Автоматично оновлювати дані" IsChecked="{Binding AutoRefreshEnabled}" />
+                    <CheckBox Content="Сповіщати Windows про нові замовлення" IsChecked="{Binding NotifyNewOrders}" />
                     <WrapPanel Margin="4,8"><TextBlock Text="Інтервал, хвилин:" VerticalAlignment="Center" />
                         <ComboBox Width="70" Margin="8,0" ItemsSource="{Binding BackgroundIntervals}" SelectedItem="{Binding BackgroundIntervalMinutes}" /></WrapPanel>
                     <WrapPanel Margin="4,4"><TextBlock Text="Робочий період, днів:" VerticalAlignment="Center" />

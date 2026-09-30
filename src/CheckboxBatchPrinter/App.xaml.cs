@@ -25,6 +25,7 @@ public partial class App : Application
     private MainViewModel? _viewModel;
     private MarketplaceWorkspaceViewModel? _marketplaceViewModel;
     private AppSettings? _appSettings;
+    private NewOrderNotificationService? _orderNotifications;
     private bool _exiting;
 
     protected override async void OnStartup(StartupEventArgs e)
@@ -128,6 +129,10 @@ public partial class App : Application
             marketplace.CoordinatorManaged = true;
             await viewModel.InitializeCachedAsync();
             await marketplace.EnsureAttachedAsync();
+            _orderNotifications = new NewOrderNotificationService(new DpapiOrderNotificationStore(
+                Path.Combine(marketplaceData, "order-notifications.dpapi")));
+            try { await _orderNotifications.SeedFromCacheAsync(marketplace.GetOrderNotificationSnapshot()); }
+            catch (Exception exception) { _logger.Error("orders.notifications.initialize", exception); }
             _logger.Info("app.window.create");
             var window = new MainWindow { DataContext = viewModel };
             _logger.Info("app.window.created");
@@ -156,8 +161,27 @@ public partial class App : Application
                 {
                     var current = await settingsService.LoadAsync(token);
                     var today = DateOnly.FromDateTime(DateRangeBuilder.TodayKyiv);
-                    marketplace.SetBackgroundRange(today.AddDays(1 - current.BackgroundWorkingDays), today);
-                    await marketplace.SyncBackgroundAsync(token);
+                    var from = today.AddDays(1 - current.BackgroundWorkingDays);
+                    marketplace.SetBackgroundRange(from, today);
+                    var started = DateTimeOffset.UtcNow;
+                    try { await marketplace.SyncBackgroundAsync(token); }
+                    finally
+                    {
+                        // A failed shop must not hide new orders from another successfully checked shop.
+                        if (!_exiting && !token.IsCancellationRequested)
+                        {
+                            try
+                            {
+                                var notification = await _orderNotifications.ObserveAsync(
+                                    marketplace.GetOrderNotificationSnapshot(started), from, today,
+                                    _appSettings?.NotifyNewOrders ?? current.NotifyNewOrders, token);
+                                if (notification is not null && !_exiting && _appSettings?.NotifyNewOrders != false)
+                                    _tray?.ShowNewOrders(notification);
+                            }
+                            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+                            catch (Exception exception) { _logger.Error("orders.notifications.update", exception); }
+                        }
+                    }
                 }, token => settingsService.LoadAsync(token));
             _coordinator.StateChanged += (_, _) =>
             {

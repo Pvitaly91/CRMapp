@@ -14,6 +14,7 @@ public sealed class AppSettings
     public int CacheRetentionDays { get; set; } = 7;
     public int HttpTimeoutSeconds { get; set; } = 30;
     public bool AutoRefreshEnabled { get; set; } = true;
+    public bool NotifyNewOrders { get; set; } = true;
     public int BackgroundIntervalMinutes { get; set; } = 2;
     public int BackgroundWorkingDays { get; set; } = 7;
     public bool KeepInTray { get; set; }
