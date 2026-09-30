@@ -752,6 +752,8 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         var backgroundMode = backgroundOnly ?? _backgroundSyncing;
         var orders = ActiveOrders;
         var decisions = ActiveDecisions;
+        var appliedCoverageComplete = _coverageComplete;
+        var appliedScopeDescription = MatchScope.Description;
         _showingCachedMatches = false;
         var matches = new Dictionary<string, ReceiptOrderMatch>(StringComparer.OrdinalIgnoreCase);
         if (HasEnabledConnections && _account.Length > 0)
@@ -772,6 +774,11 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
                     (!CoordinatorManaged || ReceiptCoverageFresh) &&
                     _config.Connections.Where(c => c.Enabled).All(c => _snapshot.States.Any(s =>
                         s.ConnectionId == c.Id && s.Complete && s.Range == scope.OrderRange));
+                if (backgroundMode)
+                {
+                    appliedCoverageComplete = freshCoverage;
+                    appliedScopeDescription = scope.Description;
+                }
                 foreach (var (id, match) in CalculateMatches(recent, scope,
                              freshCoverage, orders, decisions, false, restoreBackgroundCache: true))
                     if (!matches.ContainsKey(id)) matches[id] = match;
@@ -790,13 +797,13 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
             .Count(group => group.Select(o => o.Key.ConnectionId).Distinct().Skip(1).Any());
         FiscalSummary = !HasEnabledConnections ? "" : $"Завантажено замовлень: {orders.Count}. Точних зв’язків: {_rows.Count(r => r.OrderMatch?.State == ReceiptLinkState.Exact)}. " +
             (_showingCachedMatches ? $"Автоприв’язок із кешу: {_rows.Count(r => r.OrderMatch?.State == ReceiptLinkState.Suggested)}; очікують оновлення API. " :
-                _coverageComplete ? $"Ймовірних за сумою й товарами: {_rows.Count(r => r.OrderMatch?.State == ReceiptLinkState.Suggested)}. " :
+                appliedCoverageComplete ? $"Ймовірних за сумою й товарами: {_rows.Count(r => r.OrderMatch?.State == ReceiptLinkState.Suggested)}. " :
                 "Ймовірні зв’язки: перевірка замовлень ще неповна. ") +
             (unmatchedKeys > 0 ? $"Замовлень із непідтвердженими фіскальними ключами: {unmatchedKeys}. Перевірте контекст каси/продавця, період і права касира; це не означає, що чека немає. " : "") +
             (unavailable > 0 ? $"Фіскальні дані потребують перевірки: {unavailable}. " : "") +
             (repeatedIds > 0 ? "Є однакові API-ID замовлень у різних підключеннях. Перевірте, чи той самий магазин не додано двічі; такі записи не об’єднуються автоматично. " : "") +
             (orders.Any(o => o.Key.Marketplace == MarketplaceKind.Prom && o.FiscalReferences.Count == 0)
-                ? "Prom: частина замовлень без фіскальних ключів. Взаємно унікальна сума в той самий день дає ймовірний, не фіскальний автозв’язок. " : "") + MatchScope.Description;
+                ? "Prom: частина замовлень без фіскальних ключів. Взаємно унікальна сума в той самий день дає ймовірний, не фіскальний автозв’язок. " : "") + appliedScopeDescription;
         NotifyDetails(); MatchesChanged?.Invoke(this, EventArgs.Empty); RaiseCommands();
     }
 

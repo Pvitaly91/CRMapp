@@ -41,6 +41,8 @@ internal static partial class MarketplaceViewModelTests
         Equal(fixture.Source.Orders.Single().Key, row.OrderMatch.Order!.Key);
         True(workspace.AllOrderRows.Single().HasSuggestedLink);
         True(workspace.AllOrderRows.Single().LinkedReceipts.Contains(row));
+        True(workspace.FiscalSummary.Contains("Ймовірних за сумою й товарами: 1."));
+        True(workspace.FiscalSummary.Contains("Чеки 24.09.2026 — 30.09.2026"));
         Equal(new DateTime(2026, 9, 1), main.DateFrom);
         Equal(new DateTime(2026, 9, 30), main.DateTo);
         Equal("no visible receipts", main.SearchText);
