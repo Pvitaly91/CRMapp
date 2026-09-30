@@ -1,8 +1,8 @@
 # Shipping-label contracts and SDK diagnostic candidates
 
-Checked 2026-09-27. Existing documents only; no shipment, registry, order or receipt mutations. POST /sites is authentication.
+Checked 2026-09-27; direct NP live-response follow-up 2026-10-01. Existing documents only; no shipment, registry, order or receipt mutations. POST /sites is authentication.
 
-## Current direct NP implementation: SDK-derived, awaiting a local key
+## Current direct NP implementation: SDK-derived, one live document verified
 
 The user explicitly authorized research of a pinned **unofficial** SDK after documentation commit `2bb0740`. The following code was read from revision `1c7027da068363d9d06792a1e698b025d852b41d`; PHP/SDK was **not installed**:
 
@@ -10,7 +10,7 @@ The user explicitly authorized research of a pinned **unofficial** SDK after doc
 - [InternetDocument.php](https://github.com/sashalenz/nova-poshta-api/blob/1c7027da068363d9d06792a1e698b025d852b41d/src/ApiModels/InternetDocument/InternetDocument.php) and [GetDocumentListRequest.php](https://github.com/sashalenz/nova-poshta-api/blob/1c7027da068363d9d06792a1e698b025d852b41d/src/ApiModels/InternetDocument/RequestData/GetDocumentListRequest.php): model/method, StudlyCase properties, `d.m.Y` dates and string page.
 - [BaseModel.php](https://github.com/sashalenz/nova-poshta-api/blob/1c7027da068363d9d06792a1e698b025d852b41d/src/ApiModels/BaseModel.php), [Request.php](https://github.com/sashalenz/nova-poshta-api/blob/1c7027da068363d9d06792a1e698b025d852b41d/src/Request.php), [DocumentListData.php](https://github.com/sashalenz/nova-poshta-api/blob/1c7027da068363d9d06792a1e698b025d852b41d/src/ApiModels/InternetDocument/ResponseData/DocumentListData.php): JSON envelope and IntDocNumber / Ref / SeatsAmount / DeletionMark. Unneeded buyer/address fields are discarded, not copied to diagnostics/history.
 
-**Evidence levels:** the key/HTTPS JSON entry point are confirmed by the official integration overview; the specific methods, parameters, response assumptions and marking route are **found in SDK source**, exercised synthetically, **not yet checked with a real NP response**, and **not confirmed by current official documentation**. The historical documentation-access observations below do not substitute for live acceptance.
+**Evidence levels:** the key/HTTPS JSON entry point are confirmed by the official integration overview; the specific methods, parameters and marking route were **found in SDK source** and are **not confirmed by current official documentation**. On 2026-10-01 the user's selected existing TTN was found through a completed three-page lookup using its explicitly bound local account, and the route returned a one-place/one-page PDF with matching text identity and actual 101 × 101.5 mm size. This is live evidence for one document, not all accounts, formats or multi-place shipments. No physical print was performed. The historical documentation-access observations below remain separate from this acceptance.
 
 ### Restricted requests
 
@@ -23,11 +23,15 @@ Neither operation creates/edits shipments, registries, addresses, afterpayment, 
 
 ### Lookup and PDF acceptance
 
-The user selects one existing NP TTN from the currently selected Prom order and explicitly starts the check. Its NP connection is bound to that Prom store, independent of Seller. The date interval defaults to today and is explicitly editable; it is **not inferred from order creation time**. No lookup runs on startup, opening settings, selecting an account or saving a key.
+The user selects one existing NP TTN from the currently selected Prom order and explicitly starts the check. Its NP connection is bound to that Prom store, independent of Seller. Since 1.0.9 the date interval defaults to the last seven days and is explicitly editable; it is **not inferred from order creation time**. No lookup runs on startup, opening settings, selecting an account or saving a key.
 
 The response must contain boolean success, array data and array errors. Validate exact string IntDocNumber, separate UUID Ref when supplied, optional positive SeatsAmount and DeletionMark. No missing values are invented. A found public number without Ref can be inspected because the SDK marking route uses NUMBER, not Ref; internal document identity is explicitly `ttn:{PUBLIC_NUMBER}`, never presented as a UUID Ref. A supplied shipment Ref must agree.
 
+The observed `DeletionMark` representation is string `"0"`, not a JSON boolean. Version 1.0.10 accepts only exact `"0"`/`false` as active and `"1"`/`true` as deleted. An absent optional flag remains allowed as before; an explicit unknown/null/object/numeric value is not silently coerced to active. Deleted/invalid selected records cannot proceed to marking. The real response also uses a string positive `SeatsAmount`, already supported by the original parser.
+
 The SDK does not establish page size/total/last-page semantics. A short page is **not** terminal: continue until an empty successful page. Repeated pages or page-limit exhaustion mean **incomplete**, even if the number was encountered; no marking request follows. A complete empty match means **“Не знайдено у перевіреній вибірці цього акаунта”**, not nonexistent TTN or invalid key. Period expansion is a separate manual check.
+
+Failed HTTP 200 envelopes whose errors are exclusively the exact messages `Too many requests` / `To many requests` stop as `Temporary` with a fixed rate-limit explanation. They do not establish invalid credentials, completed pagination or PDF eligibility, and they do not trigger automatic retries. Unknown/mixed errors still fail closed; raw errors are never displayed. A later live recheck encountered throttling and was stopped; no rate-limit duration/code was inferred.
 
 The marking response requires successful HTTP, application/pdf, PDF header and native PDFium parse; HTTP 200 alone does not establish identity. The PDFium inspector reads each page's physical dimensions and operation-local text. It excludes text outside page bounds and compares maximal numeric runs (not 14-digit prefixes of longer numbers); conflicting numbers fail closed. Missing text/unknown formatting remains unconfirmed and goes only to **diagnostic preview**. Raw extracted buyer text/PDF/PNG is never written to disk or a profile.
 
@@ -35,13 +39,13 @@ Multi-page diagnostics retain all pages and display API place count, PDF count a
 
 ### Conditional packet source
 
-`NovaPoshtaDirectLabelSource` implements IShippingLabelSource. After a completed diagnostic for a single-place/one-page, text-identified, actual 100×100 mm PDF, the user may explicitly allow **that TTN** in the current session. Session evidence holds account/TTN/lookup metadata, not PDF or buyer text; restart/changed key/another account/unverified result cannot inherit permission. The label is fetched and inspected again for the confirmed packet. Multi-place, unidentified or incompatible PDF cannot silently enter it.
+`NovaPoshtaDirectLabelSource` implements IShippingLabelSource. After a completed diagnostic for a single-place/one-page, text-identified thermal PDF, the user may explicitly allow **that TTN** in the current session. Supported actual sizes are the original 100×100 mm (0.8 mm tolerance) and the observed 101×101.5 mm (0.1 mm rounding tolerance); A4/other formats remain blocked. Actual page dimensions are preserved through rendering and the independent printer fit check; eligibility never implies paper fits. Session evidence holds account/TTN/lookup metadata, not PDF or buyer text; restart/changed key/another account/unverified result cannot inherit permission. The label is fetched and inspected again for the confirmed packet. Multi-place, unidentified or incompatible PDF cannot silently enter it.
 
 `ConfiguredShippingLabelSource` routes explicitly bound Prom/NP to that direct source. Failure never falls through to other accounts/Seller. Existing explicitly selected Seller alternative and Rozetka Delivery remain available. Unbound Prom/NP without explicitly selected Seller asks for an NP store binding, not mandatory Seller.
 
 Existing LabelBatchPreparation, rasterizer, preview, WindowsLabelPrinter and separate attempt journal remain in use: stable NP→RD→NP pages, one job, complete preparation before confirmation, no partial transmission after a document failure. Printer scaling, receipt geometry and fiscal headers are unchanged.
 
-Connections (stable ID/name/key) and per-Prom-store bindings are in the existing channel-specific ShippingLabels/settings.dpapi. Blank key field preserves its old value; rotating a key retains connection ID/binding and does not alter label/receipt history. Diagnostic settings can be saved without a printer, Checkbox or Seller. Keys/fingerprints are not included in reports. Real direct NP acceptance status: **“Очікує локального введення ключа”**.
+Connections (stable ID/name/key) and per-Prom-store bindings are in the existing channel-specific ShippingLabels/settings.dpapi. Blank key field preserves its old value; rotating a key retains connection ID/binding and does not alter label/receipt history. Diagnostic settings can be saved without a printer, Checkbox or Seller. Keys/fingerprints are not included in reports. Real direct NP acceptance status: **one selected existing TTN and its one-page PDF verified; physical print and multi-place completeness not verified**.
 
 ## Primary sources
 
@@ -67,7 +71,7 @@ Rozetka: preserve delivery.delivery_service_name/id, ttn and carrier.carrier_tra
 
 Ref and public TTN are distinct. TTN-module rights and actual document access are required. Prom origin does not prove that a Seller account can access its NP document. Seller is selected separately; existing Rozetka-origin Seller connection can be used. No carrier registry is created.
 
-The direct NP SDK candidate is separate from this verified Seller alternative. It is not advertised as access to all Prom shipments: real NP/account/PDF acceptance is still pending, as described above.
+The direct NP SDK candidate is separate from this verified Seller alternative. Its one-document acceptance above is not advertised as access to all Prom shipments or other NP accounts.
 
 ### Historical documentation-only follow-up at 2bb0740 (2026-09-27)
 

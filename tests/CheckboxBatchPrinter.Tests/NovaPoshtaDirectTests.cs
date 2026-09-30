@@ -29,10 +29,15 @@ internal static class NovaPoshtaDirectTests
         ("direct NP absent and missing Ref mean account sample result, not invalid key or invented identity", Missing),
         ("direct NP repeated and exhausted pages remain incomplete and never request marking", Incomplete),
         ("direct NP malformed envelope and account denial stop without exposing response or key", Malformed),
+        ("STA direct NP live-shaped string deletion flag and legacy bool finish pagination before PDF", () => MarketplaceViewModelTests.StaAsync(ActiveDeletionFlag)),
+        ("direct NP deleted string and bool flags stop before PDF", DeletedDeletionFlag),
+        ("direct NP unknown deletion flags fail closed without PDF or response disclosure", MalformedDeletionFlag),
+        ("direct NP API rate limits are temporary and stop pagination without PDF retries or key advice", RateLimitResponse),
         ("direct NP cancels bounded lookup without a marking request", Cancellation),
         ("direct NP transport rejects write methods, extra parameters and duplicate JSON keys", MutationGuards),
         ("direct NP rejects HTML JSON wrong PDF header redirect and secret-bearing network errors", TransportErrors),
         ("STA PDFium direct NP checks text identity dimensions and text outside page", () => MarketplaceViewModelTests.StaAsync(Identity)),
+        ("STA direct NP observed marking size remains exact and cannot bypass printer clipping checks", () => MarketplaceViewModelTests.StaAsync(ObservedMarkingGeometry)),
         ("STA direct NP can inspect a found public TTN without fabricating a missing Ref", () => MarketplaceViewModelTests.StaAsync(OptionalRef)),
         ("STA NP multi-place PDFs retain every page but count alone cannot confirm completeness", () => MarketplaceViewModelTests.StaAsync(Places)),
         ("STA NP unconfirmed multi-page diagnostic preview has no print or batch acceptance button", () => MarketplaceViewModelTests.StaAsync(DiagnosticPreview)),
@@ -104,6 +109,127 @@ internal static class NovaPoshtaDirectTests
             catch (ShippingLabelException ex) { Check(!ex.ToString().Contains(Connection.ApiKey) && !ex.ToString().Contains("buyer data") && handler.Calls == 1, "Secret/error body leaked or retried."); }
         }
     }
+    private static object FlagRow(object? deletionMark, string number = Ttn) => new
+    {
+        IntDocNumber = number, Ref, SeatsAmount = "1", DeletionMark = deletionMark,
+        RecipientContactPerson = "synthetic buyer data", UnusedSecret = Connection.ApiKey
+    };
+    private static async Task ActiveDeletionFlag()
+    {
+        foreach (var flag in new object[] { "0", false })
+        {
+            var pages = new List<int>(); var pdfRequests = 0;
+            var handler = new Handler(async (request, _) =>
+            {
+                if (request.Method == HttpMethod.Post)
+                {
+                    var page = await Page(request); pages.Add(page);
+                    return page switch
+                    {
+                        1 => List(Enumerable.Range(10, 99).Select(i => FlagRow(flag, "204" + i.ToString("00000000000")))
+                            .Append(FlagRow(flag)).ToArray()),
+                        2 => List(FlagRow(flag, OtherTtn)),
+                        _ => List()
+                    };
+                }
+                Check(pages.SequenceEqual(new[] { 1, 2, 3 }), "Marking was requested before the terminating empty page.");
+                pdfRequests++;
+                return Pdf(SyntheticShippingPdf.Create(pageTexts: [Ttn]));
+            });
+            using var http = new HttpClient(handler);
+            var result = await new NovaPoshtaDiagnostics(new(new(http)), new WindowsLabelPdfInspector()).CheckAsync(Connection, Shipment(), Period);
+            Check(result.Lookup.Complete && result.Lookup.Found && result.Lookup.PagesRead == 3 && result.Lookup.DocumentRef == Ref &&
+                result.Lookup.Places == 1 && result.CanUseInBatch && pdfRequests == 1 && handler.Calls == 4,
+                "An active live-shaped record failed lookup, pagination, or PDF identity verification.");
+        }
+    }
+    private static async Task DeletedDeletionFlag()
+    {
+        foreach (var flag in new object[] { "1", true })
+        {
+            var handler = new Handler(async (request, _) =>
+            {
+                Check(request.Method == HttpMethod.Post, "Deleted document reached the PDF endpoint.");
+                await Page(request);
+                return List(FlagRow(flag));
+            });
+            using var http = new HttpClient(handler);
+            try
+            {
+                await new NovaPoshtaDiagnostics(new(new(http)), new NoInspector()).CheckAsync(Connection, Shipment(), Period);
+                throw new Exception("Deleted document accepted.");
+            }
+            catch (ShippingLabelException ex)
+            {
+                Check(ex.Kind == LabelFailureKind.MissingDocument && handler.Calls == 1 &&
+                    !ex.ToString().Contains(Connection.ApiKey) && !ex.ToString().Contains("synthetic buyer data"),
+                    "Deletion was misclassified, continued to PDF, or disclosed response data.");
+            }
+        }
+    }
+    private static async Task MalformedDeletionFlag()
+    {
+        foreach (var flag in new object?[] { null, 0, 1, 2, "", "false", "true", "00", "2", " 0", "1 ",
+            Connection.ApiKey + " synthetic buyer data", Array.Empty<object>(), new { value = "0" } })
+        {
+            var handler = new Handler(async (request, _) =>
+            {
+                Check(request.Method == HttpMethod.Post, "Unknown deletion state reached the PDF endpoint.");
+                await Page(request);
+                return List(FlagRow(flag));
+            });
+            using var http = new HttpClient(handler);
+            try
+            {
+                await new NovaPoshtaDiagnostics(new(new(http)), new NoInspector()).CheckAsync(Connection, Shipment(), Period);
+                throw new Exception("Unknown deletion state accepted.");
+            }
+            catch (ShippingLabelException ex)
+            {
+                Check(ex.Kind == LabelFailureKind.InvalidDocument && handler.Calls == 1 &&
+                    !ex.ToString().Contains(Connection.ApiKey) && !ex.ToString().Contains("synthetic buyer data"),
+                    "Unknown deletion state continued to PDF, was misclassified, or disclosed response data.");
+            }
+        }
+    }
+    private static async Task RateLimitResponse()
+    {
+        foreach (var errors in new[]
+        {
+            new[] { "Too many requests" }, new[] { "To many requests" },
+            new[] { "Too many requests", "Invalid API key " + Connection.ApiKey + " synthetic buyer data" }
+        })
+        {
+            var handler = new Handler(async (request, _) =>
+            {
+                Check(request.Method == HttpMethod.Post, "Incomplete rate-limited lookup requested a PDF.");
+                return await Page(request) switch
+                {
+                    1 => List(FlagRow("0")),
+                    2 => List(FlagRow("0", OtherTtn)),
+                    3 => Json(new { success = false, data = Array.Empty<object>(), errors }),
+                    _ => throw new Exception("API rate limit was retried automatically.")
+                };
+            });
+            using var http = new HttpClient(handler);
+            try
+            {
+                await new NovaPoshtaDiagnostics(new(new(http)), new NoInspector()).CheckAsync(Connection, Shipment(), Period);
+                throw new Exception("A rate-limited account scan was treated as complete.");
+            }
+            catch (ShippingLabelException ex)
+            {
+                var isRateLimit = errors.Length == 1;
+                Check(ex.Kind == (isRateLimit ? LabelFailureKind.Temporary : LabelFailureKind.AccessDenied) && handler.Calls == 3,
+                    "Rate limit or mixed account error was misclassified, retried, or allowed PDF access.");
+                Check(!ex.ToString().Contains(Connection.ApiKey) && !ex.ToString().Contains("synthetic buyer data"),
+                    "API limit/account error disclosed response data.");
+                if (isRateLimit) Check(ex.Message.Contains("обмежила частоту запитів") &&
+                    ex.Message.Contains("повторіть перевірку пізніше") && !ex.Message.Contains("Перевірте ключ", StringComparison.OrdinalIgnoreCase),
+                    "A temporary API limit omitted retry-later guidance or incorrectly advised checking the key.");
+            }
+        }
+    }
     private static async Task Cancellation()
     {
         using var cancel = new CancellationTokenSource();
@@ -161,6 +287,62 @@ internal static class NovaPoshtaDirectTests
             Check(result.Identity == (kind == "wrong" ? LabelIdentityCheck.Contradiction : kind is "empty" or "outside" or "longer" ? LabelIdentityCheck.Unconfirmed : LabelIdentityCheck.Verified), "Text identity classification wrong.");
             Check(result.CanUseInBatch == (kind is "right" or "formatted"), "Unconfirmed/wrong geometry admitted.");
             Check(Math.Abs(result.Inspection!.Pages[0].WidthMm - (kind == "a4" ? 210 : 100)) < .01, "Physical size unknown.");
+        }
+    }
+    private static async Task ObservedMarkingGeometry()
+    {
+        foreach (var (width, height, accepted) in new[]
+        {
+            (100d, 100d, true), (101d, 101.5d, true), (101.05d, 101.55d, true),
+            (210d, 297d, false), (100.81d, 100d, false), (100.89d, 101.5d, false),
+            (101.11d, 101.5d, false), (101d, 101.39d, false), (101d, 101.61d, false), (101.5d, 101d, false)
+        })
+        {
+            var handler = new Handler(async (request, _) => request.Method == HttpMethod.Post
+                ? await Page(request) == 1 ? List(FlagRow("0")) : List()
+                : Pdf(SyntheticShippingPdf.Create(width, height, pageTexts: [Ttn])));
+            using var http = new HttpClient(handler);
+            var result = await new NovaPoshtaDiagnostics(new(new(http)), new WindowsLabelPdfInspector()).CheckAsync(Connection, Shipment(), Period);
+            var inspected = result.Inspection!.Pages.Single();
+            Check(result.Identity == LabelIdentityCheck.Verified && result.AllPlacesVerified && handler.Calls == 3,
+                "Synthetic marking did not complete account lookup and real PDF identity inspection.");
+            Check(Math.Abs(inspected.WidthMm - width) < .01 && Math.Abs(inspected.HeightMm - height) < .01,
+                "Inspection replaced the PDF's physical dimensions.");
+            Check(result.HasSupportedPageFormat == accepted && result.CanUseInBatch == accepted,
+                $"Marking format {width}x{height} eligibility is wrong.");
+            if (!accepted)
+            {
+                Check(result.Message.Contains("непідтримуваний розмір") && result.Message.Contains("пакет не дозволено"),
+                    "Unsupported PDF geometry was reported as successful batch eligibility.");
+                continue;
+            }
+
+            var rendered = (await new WindowsShippingLabelRenderer().RenderAsync(result.Document!, 203, 203)).Single();
+            Check(Math.Abs(rendered.WidthMm - width) < .01 && Math.Abs(rendered.HeightMm - height) < .01,
+                "Renderer resized an accepted marking to the nominal 100mm format.");
+            using var stream = new MemoryStream(rendered.Png);
+            var frame = new PngBitmapDecoder(stream, BitmapCreateOptions.None, BitmapCacheOption.OnLoad).Frames[0];
+            Check(Math.Abs(frame.PixelWidth - Math.Ceiling(width * 203 / 25.4)) <= 1 &&
+                Math.Abs(frame.PixelHeight - Math.Ceiling(height * 203 / 25.4)) <= 1,
+                "Accepted marking raster no longer follows the actual PDF size and printer DPI.");
+            var placement = LabelPageLayout.Place(rendered, Settings, ShippingLabelsTests.Geometry with { HeightMm = 102, PrintableHeightMm = 102 });
+            Check(Math.Abs(placement.WidthMm - width) < .01 && Math.Abs(placement.HeightMm - height) < .01,
+                "Default printer placement silently changed the marking's physical size.");
+            if (width == 100 && height == 100) continue;
+            foreach (var printer in new[]
+            {
+                new LabelPrinterGeometry(100, 100, 0, 0, 100, 100, 203, 203),
+                ShippingLabelsTests.Geometry with { LeftMm = .5, PrintableWidthMm = 101 }
+            })
+            {
+                try
+                {
+                    LabelPageLayout.Place(rendered, Settings, printer);
+                    throw new Exception("Accepted marking bypassed physical paper or hard-margin clipping checks.");
+                }
+                catch (ShippingLabelException ex)
+                { Check(ex.Kind == LabelFailureKind.UnsupportedFormat, "Physical clipping was misclassified."); }
+            }
         }
     }
     private static async Task Places()

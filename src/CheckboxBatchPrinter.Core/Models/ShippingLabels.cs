@@ -74,9 +74,13 @@ public sealed record LabelPdfInspection(IReadOnlyList<LabelPdfPageInfo> Pages);
 public sealed record NovaPoshtaDiagnosticResult(NovaPoshtaLookup Lookup, ShippingLabelDocument? Document,
     LabelPdfInspection? Inspection, LabelIdentityCheck Identity, bool AllPlacesVerified, string Message)
 {
+    // Keep actual PDF dimensions. Eligibility is separate from the printer's imageable-area check.
+    // The NP nominal "100x100" route also returns 101 x 101.5 mm (observed 2026-10-01).
+    public bool HasSupportedPageFormat => Inspection is { Pages.Count: > 0 } && Inspection.Pages.All(p =>
+        Math.Abs(p.WidthMm - 100) <= 0.8 && Math.Abs(p.HeightMm - 100) <= 0.8 ||
+        Math.Abs(p.WidthMm - 101) <= 0.1 && Math.Abs(p.HeightMm - 101.5) <= 0.1);
     public bool CanUseInBatch => Lookup.Complete && Lookup.Found && Document is not null && Identity == LabelIdentityCheck.Verified && AllPlacesVerified &&
-        (Lookup.DocumentRef.Length == 0 || Guid.TryParse(Lookup.DocumentRef, out _)) && Inspection is { Pages.Count: > 0 } &&
-        Inspection.Pages.All(p => Math.Abs(p.WidthMm - 100) <= 0.8 && Math.Abs(p.HeightMm - 100) <= 0.8);
+        (Lookup.DocumentRef.Length == 0 || Guid.TryParse(Lookup.DocumentRef, out _)) && HasSupportedPageFormat;
 }
 
 public static class ShippingCarrierNames

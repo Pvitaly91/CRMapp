@@ -71,7 +71,15 @@ public sealed class NovaPoshtaReadOnlyClient(ShippingLabelHttp http)
                     data.ValueKind != JsonValueKind.Array || !root.TryGetProperty("errors", out var errors) || errors.ValueKind != JsonValueKind.Array)
                     throw InvalidResponse();
                 if (success.ValueKind == JsonValueKind.False || errors.GetArrayLength() != 0)
+                {
+                    // NP can report throttling in a HTTP 200 JSON envelope. Do not blame the key,
+                    // retry automatically, or treat a failed empty page as completed pagination.
+                    if (errors.GetArrayLength() > 0 && errors.EnumerateArray().All(e =>
+                        e.ValueKind == JsonValueKind.String && e.GetString() is "Too many requests" or "To many requests"))
+                        throw new ShippingLabelException(LabelFailureKind.Temporary,
+                            "Нова пошта тимчасово обмежила частоту запитів. Зачекайте й повторіть перевірку пізніше. Це не означає, що ключ неправильний.");
                     throw new ShippingLabelException(LabelFailureKind.AccessDenied, "NP відхилила читання. Перевірте ключ і права саме вибраного акаунта; тіло помилки приховано.");
+                }
                 if (data.GetArrayLength() > 1000) throw InvalidResponse();
                 if (data.GetArrayLength() == 0) return Result(true, page);
                 var identities = new List<string>();
@@ -92,8 +100,7 @@ public sealed class NovaPoshtaReadOnlyClient(ShippingLabelHttp http)
                     }
                     identities.Add(ttn + ":" + reference);
                     if (ttn != shipment.TrackingNumber) continue;
-                    if (item.TryGetProperty("DeletionMark", out var deleted) && deleted.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) throw InvalidResponse();
-                    if (deleted.ValueKind == JsonValueKind.True) throw new ShippingLabelException(LabelFailureKind.MissingDocument, "Вибрана ТТН позначена видаленою в цьому акаунті.");
+                    if (IsDeleted(item)) throw new ShippingLabelException(LabelFailureKind.MissingDocument, "Вибрана ТТН позначена видаленою в цьому акаунті.");
                     if (shipment.ShipmentId.Length > 0 && shipment.ShipmentId != reference)
                         throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "NP повернула інший document Ref для вибраної ТТН.");
                     if (matches.Count > 0 && (!matches.TryGetValue(reference, out var previous) || previous.Places != places)) throw InvalidResponse();
@@ -137,7 +144,22 @@ public sealed class NovaPoshtaReadOnlyClient(ShippingLabelHttp http)
         if (shipment.Carrier != ShippingCarrier.NovaPoshta || !Regex.IsMatch(shipment.TrackingNumber, @"\A[0-9]{14}\z"))
             throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "Оберіть існуючу ТТН Нової пошти з 14 цифр із замовлення Prom.");
     }
-    private static ShippingLabelException InvalidResponse() => new(LabelFailureKind.InvalidDocument, "NP: структура відповіді не відповідає дослідженому SDK. Запит зупинено без вгадування методів або полів.");
+    private static bool IsDeleted(JsonElement item)
+    {
+        // The live getDocumentList response uses string "0"/"1"; retain boolean compatibility.
+        // Do not coerce arbitrary non-empty strings or default an unknown value to active.
+        if (!item.TryGetProperty("DeletionMark", out var flag)) return false;
+        return flag.ValueKind switch
+        {
+            JsonValueKind.False => false,
+            JsonValueKind.True => true,
+            JsonValueKind.String when flag.GetString() == "0" => false,
+            JsonValueKind.String when flag.GetString() == "1" => true,
+            _ => throw new ShippingLabelException(LabelFailureKind.InvalidDocument,
+                "Нова пошта повернула невідомий формат ознаки видалення накладної (DeletionMark). Перевірку зупинено; друк не запускався.")
+        };
+    }
+    private static ShippingLabelException InvalidResponse() => new(LabelFailureKind.InvalidDocument, "Нова пошта повернула неочікуваний формат даних накладної. Перевірку зупинено; друк не запускався.");
 }
 
 public sealed class NovaPoshtaDiagnostics(NovaPoshtaReadOnlyClient client, ILabelPdfInspector inspector)
@@ -169,7 +191,10 @@ public sealed class NovaPoshtaDiagnostics(NovaPoshtaReadOnlyClient client, ILabe
             : identity != LabelIdentityCheck.Verified ? "Ідентичність ТТН не підтверджена текстовим шаром. Лише діагностичний перегляд, не пакет."
             : !allPlaces ? "ТТН у текстовому шарі збігається. Повнота місць не підтверджена: кількість сторінок не доводить номери всіх місць. Лише діагностичний перегляд."
             : "ТТН підтверджена текстовим шаром; одне місце та одна сторінка. Фізичний друк не виконувався.";
-        return new(lookup, document, inspection, identity, allPlaces, message);
+        var result = new NovaPoshtaDiagnosticResult(lookup, document, inspection, identity, allPlaces, message);
+        return allPlaces && !result.HasSupportedPageFormat
+            ? result with { Message = "ТТН і одне місце підтверджені, але PDF має непідтримуваний розмір сторінки. Лише діагностичний перегляд; пакет не дозволено." }
+            : result;
     }
 }
 

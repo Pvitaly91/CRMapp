@@ -1,5 +1,22 @@
 # Shipping labels — implementation and acceptance
 
+## 1.0.10 — live NP response compatibility (2026-10-01)
+
+Started at clean `35255488faf5fdb89d57cfe16325f3a8f4050ef3`, branch `codex/checkbox-marketplace-orders`. A read-only diagnostic of the existing TTN selected by the user confirmed that the locally saved, explicitly bound NP key works for that document. Neither the real number, account IDs, key nor customer data is included here or in test fixtures.
+
+- Root cause of the screenshot error: `getDocumentList` returned `DeletionMark: "0"`, but the parser accepted only JSON booleans. The client now explicitly supports `"0"`/`false` (active) and `"1"`/`true` (deleted). Unknown representations still stop before any PDF request; a missing optional field retains previous compatibility. Error messages are plain Ukrainian and never echo response values.
+- The full real lookup completed after three pages (100, 48 and 0 rows), found the exact requested document and reported one place. The existing read-only marking route returned a one-page PDF whose text matched that TTN. Its physical size was **101 × 101.5 mm**, exposing a second gate that only accepted nominal 100 × 100 mm. This observed format is supported explicitly with 0.1 mm rounding tolerance, in addition to the existing 100 × 100 tolerance. No general tolerance increase, cropping, PDF editing or printer-setting change. The renderer retains actual dimensions; the existing printer imageable-area/fit checks still decide whether it can be printed on the selected stock.
+- No change to account routing, endpoints, pagination completion, identity/places verification, per-session approval, matching, receipt printing or history paths. Other accounts/TTNs and multi-place documents were not tried. A valid one-place sample does not establish universal account access or multi-place completeness.
+- A later live recheck reached the server's rate limit (HTTP 200 / failed JSON envelope with a “many requests” error), so further live requests were stopped. Exact `Too many requests` / `To many requests` errors are now reported as a temporary rate limit, not wrong credentials. No automatic retry, ignored failure, shortened pagination or invented Retry-After was added. An unknown/mixed error still cannot be interpreted as successful termination.
+
+Regression before the flag fix: **280/282 passed**; the new active string-0 case reproduced the screenshot error, and the string-1 case failed correct deletion classification. The unknown-value guard passed. After the flag fix: **282/282 passed**. The format regression then failed with **282/283**, and passed with **283/283** after the narrow size fix. Final Release Development suite: **284/284 passed** (all original 279 plus five new groups); rate-limit tests also verify no PDF/automatic retry after a failed third page, no false key advice and rejection of mixed errors. Tests use synthetic TTNs/keys/PDFs and the actual client → diagnostics → PDFium pipeline, not hand-built successful results. The geometry regression checks preserved millimetres/raster dimensions, both supported shapes, neighboring unsupported sizes/A4, and rejection on undersized stock or hard margins. Build has no errors; full compilation retains the pre-existing WFAC010 DPI-manifest warning.
+
+Production packaging uses the unchanged `scripts/Build-Production.ps1` on a clean release commit: both channel test suites, immutable Production-FDD output, copied single-EXE launch/restart with synthetic offline profiles and cross-channel isolation. Exact packaging/deployment results are in the local build log, package metadata/checksums and deployment record; real user profiles are not used for smoke tests.
+
+Only existing documents were read from NP. Raw responses/PDFs/extracted text stayed in memory, with no files or production-profile writes; the local diagnostic prints only fixed schema facts and verification results. No fiscal operations, shipment changes, session approval or physical printing occurred. The user explicitly requested installation with the app closed. Deployment must back up the existing profile/EXE and verify profile files unchanged; preparing this source is not itself proof of installation.
+
+---
+
 ## 1.0.9 — simplified label / NP settings (2026-09-30)
 
 Started at clean `e6a9234346cc62bcb3679a2f1d45026059671d74`, branch `codex/checkbox-marketplace-orders`. Only settings UX, its key-application helper, tests, version and explanations changed; no API/backend/matching contracts changed.
