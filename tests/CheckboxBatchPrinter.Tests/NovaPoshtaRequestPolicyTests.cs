@@ -14,11 +14,11 @@ internal static class NovaPoshtaRequestPolicyTests
     private const string Key = "synthetic_np_policy_key", OtherKey = "synthetic_np_other_key", Ttn = "20400000000001";
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
-        ("NP request policy spaces JSON and PDF after completion without delaying another key", Spacing),
+        ("NP JSON and PDF requests proceed immediately after the previous response completes", BackToBackRequests),
         ("NP HTTP200 and429 cooldowns preserve Retry-After and never retry or disclose credentials", Cooldowns),
         ("NP queued callers observe throttle before sending while unrelated key remains usable", QueuedThrottle),
         ("NP shared client rejects duplicate lookup and cancellation releases the scan guard", DuplicateScan),
-        ("NP cancellation during pacing sends nothing and leaves request gate reusable", CancelPacing),
+        ("NP active and queued request cancellation preserve serialization and release the request gate", CancelRequests),
         ("NP policy does not change RD or Seller HTTP429 retry behavior", OtherCarrierRetries)
     ];
 
@@ -27,12 +27,11 @@ internal static class NovaPoshtaRequestPolicyTests
         private long _ticks = (initial ?? new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero)).Ticks;
         public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref _ticks), TimeSpan.Zero);
         public void Advance(TimeSpan amount) => Interlocked.Add(ref _ticks, amount.Ticks);
-        public Task Delay(TimeSpan amount, CancellationToken ct) { ct.ThrowIfCancellationRequested(); Advance(amount); return Task.CompletedTask; }
     }
     internal static ShippingLabelHttp FastTransport(HttpClient client)
     {
         var clock = new Clock();
-        return new(client, novaPoshtaPolicy: new(clock, clock.Delay));
+        return new(client, novaPoshtaPolicy: new(clock));
     }
     private sealed class Handler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> respond) : HttpMessageHandler
     {
@@ -67,7 +66,7 @@ internal static class NovaPoshtaRequestPolicyTests
         }
     }
 
-    private static async Task Spacing()
+    private static async Task BackToBackRequests()
     {
         var clock = new Clock(); var started = clock.GetUtcNow(); var sends = new List<TimeSpan>();
         var handler = new Handler((request, _) =>
@@ -76,13 +75,14 @@ internal static class NovaPoshtaRequestPolicyTests
             return Task.FromResult(request.Method == HttpMethod.Post ? Empty() : new HttpResponseMessage(HttpStatusCode.OK)
             { Content = new ByteArrayContent("%PDF-synthetic"u8.ToArray()) { Headers = { ContentType = new("application/pdf") } } });
         });
-        using var http = new HttpClient(handler); var transport = new ShippingLabelHttp(http, novaPoshtaPolicy: new(clock, clock.Delay));
-        await Read(transport); await Read(transport);
+        using var http = new HttpClient(handler); var transport = new ShippingLabelHttp(http, novaPoshtaPolicy: new(clock));
+        await Read(transport).WaitAsync(TimeSpan.FromSeconds(4));
+        await Read(transport).WaitAsync(TimeSpan.FromSeconds(4));
         await transport.SendAsync(() => new(HttpMethod.Get, "https://my.novaposhta.ua/orders/printMarking100x100/orders%5B%5D/" + Ttn +
-            "/type/pdf/zebra/zebra/apiKey/" + Key), "application/pdf", default);
-        await Read(transport, OtherKey);
-        Check(sends.SequenceEqual(new[] { 0, 5, 10, 13 }.Select(seconds => TimeSpan.FromSeconds(seconds))),
-            "NP requests overlap, ignore completed-response spacing, or globally block an unrelated key.");
+            "/type/pdf/zebra/zebra/apiKey/" + Key), "application/pdf", default).WaitAsync(TimeSpan.FromSeconds(4));
+        await Read(transport, OtherKey).WaitAsync(TimeSpan.FromSeconds(4));
+        Check(sends.SequenceEqual(new[] { 0, 3, 6, 9 }.Select(seconds => TimeSpan.FromSeconds(seconds))),
+            "NP JSON or PDF requests added a delay beyond the preceding response's duration.");
     }
 
     private static async Task Cooldowns()
@@ -106,7 +106,7 @@ internal static class NovaPoshtaRequestPolicyTests
                 return Task.FromResult(response);
             });
             using var http = new HttpClient(handler);
-            var transport = new ShippingLabelHttp(http, (_, _) => throw new Exception("NP limit entered an automatic retry."), new(clock, clock.Delay));
+            var transport = new ShippingLabelHttp(http, (_, _) => throw new Exception("NP limit entered an automatic retry."), new(clock));
             var expected = header == "huge" ? DateTimeOffset.MaxValue : start.AddSeconds(header == "delta" ? 90 : header == "date" ? 120 : 60);
             var first = await Failure(Read(transport));
             Check(first.Kind == LabelFailureKind.Temporary && first.RetryAtUtc == expected && handler.Calls == 1 &&
@@ -130,26 +130,33 @@ internal static class NovaPoshtaRequestPolicyTests
 
     private static async Task QueuedThrottle()
     {
-        var clock = new Clock(); var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var handler = new Handler(async (request, ct) =>
+        foreach (var http429 in new[] { false, true })
         {
-            using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
-            if (body.RootElement.GetProperty("apiKey").GetString() == OtherKey) return Empty();
-            entered.TrySetResult(); await release.Task.WaitAsync(ct); return Limit(false);
-        });
-        using var http = new HttpClient(handler); var transport = new ShippingLabelHttp(http, novaPoshtaPolicy: new(clock, clock.Delay));
-        var first = Read(transport); await entered.Task;
-        var second = Read(transport);
-        using (var cancel = new CancellationTokenSource())
-        {
-            var cancelled = Read(transport, ct: cancel.Token); cancel.Cancel();
-            try { await cancelled; throw new Exception("Queued cancellation was ignored."); } catch (OperationCanceledException) { }
+            var clock = new Clock(); var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var handler = new Handler(async (request, ct) =>
+            {
+                using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+                if (body.RootElement.GetProperty("apiKey").GetString() == OtherKey) return Empty();
+                entered.TrySetResult(); await release.Task.WaitAsync(ct); return Limit(http429);
+            });
+            using var http = new HttpClient(handler); var transport = new ShippingLabelHttp(http, novaPoshtaPolicy: new(clock));
+            var first = Read(transport); await entered.Task;
+            var second = Read(transport);
+            using (var cancel = new CancellationTokenSource())
+            {
+                var cancelled = Read(transport, ct: cancel.Token); cancel.Cancel();
+                try { await cancelled; throw new Exception("Queued cancellation was ignored."); } catch (OperationCanceledException) { }
+            }
+            await Read(transport, OtherKey).WaitAsync(TimeSpan.FromSeconds(4));
+            Check(handler.Calls == 2, "Waiting request escaped serialization or unrelated key was blocked.");
+            release.TrySetResult(); var failures = await Task.WhenAll(Failure(first), Failure(second));
+            Check(handler.Calls == 2 && failures.All(e => e.RetryAtUtc == clock.GetUtcNow().AddSeconds(60)),
+                "Queued caller sent before the preceding response recorded its cooldown.");
+            await Read(transport, OtherKey).WaitAsync(TimeSpan.FromSeconds(4));
+            Check(handler.Calls == 3 && transport.GetNovaPoshtaRetryDelay(OtherKey) == TimeSpan.Zero &&
+                transport.GetNovaPoshtaRetryDelay(Key) == TimeSpan.FromSeconds(60), "A server cooldown leaked to another key.");
         }
-        await Read(transport, OtherKey); Check(handler.Calls == 2, "Waiting request escaped serialization or unrelated key was blocked.");
-        release.TrySetResult(); var failures = await Task.WhenAll(Failure(first), Failure(second));
-        Check(handler.Calls == 2 && failures.All(e => e.RetryAtUtc == clock.GetUtcNow().AddSeconds(60)),
-            "Queued caller sent before the preceding response recorded its cooldown.");
     }
 
     private static async Task DuplicateScan()
@@ -170,19 +177,39 @@ internal static class NovaPoshtaRequestPolicyTests
         Check(result.Complete && !result.Found && handler.Calls == 2, "Cancelled scan retained its in-flight guard.");
     }
 
-    private static async Task CancelPacing()
+    private static async Task CancelRequests()
     {
-        var clock = new Clock(); var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var handler = new Handler((_, _) => Task.FromResult(Empty()));
+        var clock = new Clock(); var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var keyCalls = 0;
+        var handler = new Handler(async (request, ct) =>
+        {
+            using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+            if (body.RootElement.GetProperty("apiKey").GetString() == OtherKey) return Empty();
+            if (Interlocked.Increment(ref keyCalls) == 1)
+            {
+                entered.TrySetResult();
+                await Task.Delay(Timeout.Infinite, ct);
+            }
+            return Empty();
+        });
         using var http = new HttpClient(handler);
-        var transport = new ShippingLabelHttp(http, novaPoshtaPolicy: new(clock, async (_, ct) =>
-        { waiting.TrySetResult(); await Task.Delay(Timeout.Infinite, ct); }));
-        await Read(transport);
-        using var cancel = new CancellationTokenSource(); var second = Read(transport, ct: cancel.Token); await waiting.Task;
-        Check(transport.GetNovaPoshtaRetryDelay(Key) == TimeSpan.Zero, "Cooldown query blocked behind normal pacing.");
-        cancel.Cancel(); try { await second; throw new Exception("Pacing cancellation was ignored."); } catch (OperationCanceledException) { }
-        Check(handler.Calls == 1, "Cancellation during pacing sent a request.");
-        clock.Advance(TimeSpan.FromSeconds(2)); await Read(transport); Check(handler.Calls == 2, "Cancelled pacing leaked its request gate.");
+        var transport = new ShippingLabelHttp(http, novaPoshtaPolicy: new(clock));
+        using var activeCancel = new CancellationTokenSource();
+        var first = Read(transport, ct: activeCancel.Token); await entered.Task;
+        using var queuedCancel = new CancellationTokenSource();
+        var cancelled = Read(transport, ct: queuedCancel.Token);
+        Check(!cancelled.IsCompleted && handler.Calls == 1 && transport.GetNovaPoshtaRetryDelay(Key) == TimeSpan.Zero,
+            "A queued request bypassed an active request or fabricated a rate-limit cooldown.");
+        queuedCancel.Cancel();
+        try { await cancelled; throw new Exception("Queued cancellation was ignored."); } catch (OperationCanceledException) { }
+        var next = Read(transport);
+        await Read(transport, OtherKey).WaitAsync(TimeSpan.FromSeconds(4));
+        Check(!next.IsCompleted && handler.Calls == 2, "Queued cancellation released the active request's gate or blocked an unrelated key.");
+        activeCancel.Cancel();
+        try { await first; throw new Exception("Active request cancellation was ignored."); } catch (OperationCanceledException) { }
+        await next.WaitAsync(TimeSpan.FromSeconds(4));
+        Check(handler.Calls == 3 && keyCalls == 2 && transport.GetNovaPoshtaRetryDelay(Key) == TimeSpan.Zero,
+            "Cancellation sent the cancelled waiter, delayed the next request, or retained the active request's gate.");
     }
 
     private static async Task OtherCarrierRetries()
@@ -197,7 +224,7 @@ internal static class NovaPoshtaRequestPolicyTests
             });
             using var http = new HttpClient(handler);
             var transport = new ShippingLabelHttp(http, (wait, _) => { waits.Add(wait); return Task.CompletedTask; },
-                new(new Clock(), (_, _) => throw new Exception("Other carrier entered NP pacing.")));
+                new(new Clock()));
             await transport.SendAsync(() => new(seller ? HttpMethod.Post : HttpMethod.Get,
                 seller ? "https://api-seller.rozetka.com.ua/sites" : "https://rz-delivery.rozetka.ua/api/track/synthetic"), "application/json", default);
             Check(handler.Calls == 2 && waits.SequenceEqual(new[] { TimeSpan.FromSeconds(7) }), "Existing RD/Seller retry behavior changed.");

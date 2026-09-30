@@ -55,6 +55,10 @@ public sealed class NovaPoshtaReadOnlyClient(ShippingLabelHttp http)
     public TimeSpan GetRetryDelay(NovaPoshtaConnection connection) => http.GetNovaPoshtaRetryDelay(connection.ApiKey);
     public async Task<NovaPoshtaLookup> LookupAsync(NovaPoshtaConnection connection, ShipmentReference shipment,
         NovaPoshtaSearchPeriod period, CancellationToken ct = default)
+        => (await ReadLookupAsync(connection, shipment, period, ct)).Resolve(shipment);
+
+    internal async Task<LookupSnapshot> ReadLookupAsync(NovaPoshtaConnection connection, ShipmentReference shipment,
+        NovaPoshtaSearchPeriod period, CancellationToken ct)
     {
         Validate(connection, shipment); period.Validate();
         ct.ThrowIfCancellationRequested();
@@ -65,10 +69,11 @@ public sealed class NovaPoshtaReadOnlyClient(ShippingLabelHttp http)
         try { return await LookupCoreAsync(connection, shipment, period, ct); }
         finally { lock (_scanLock) _activeScans.Remove(key); }
     }
-    private async Task<NovaPoshtaLookup> LookupCoreAsync(NovaPoshtaConnection connection, ShipmentReference shipment,
+    private async Task<LookupSnapshot> LookupCoreAsync(NovaPoshtaConnection connection, ShipmentReference shipment,
         NovaPoshtaSearchPeriod period, CancellationToken ct)
     {
-        var seenPages = new HashSet<string>(); var matches = new Dictionary<string, (string Ref, int? Places)>();
+        var seenPages = new HashSet<string>();
+        var documents = new Dictionary<string, List<LookupEntry>>(StringComparer.Ordinal);
         for (var page = 1; page <= NovaPoshtaReadOnlyContract.MaximumPages; page++)
         {
             var body = JsonSerializer.Serialize(new { apiKey = connection.ApiKey, modelName = "InternetDocument", calledMethod = "getDocumentList",
@@ -89,7 +94,7 @@ public sealed class NovaPoshtaReadOnlyClient(ShippingLabelHttp http)
                     throw new ShippingLabelException(LabelFailureKind.AccessDenied, "NP відхилила читання. Перевірте ключ і права саме вибраного акаунта; тіло помилки приховано.");
                 }
                 if (data.GetArrayLength() > 1000) throw InvalidResponse();
-                if (data.GetArrayLength() == 0) return Result(true, page);
+                if (data.GetArrayLength() == 0) return new(documents, true, page);
                 var identities = new List<string>();
                 foreach (var item in data.EnumerateArray())
                 {
@@ -107,29 +112,45 @@ public sealed class NovaPoshtaReadOnlyClient(ShippingLabelHttp http)
                         places = n;
                     }
                     identities.Add(ttn + ":" + reference);
-                    if (ttn != shipment.TrackingNumber) continue;
-                    if (IsDeleted(item)) throw new ShippingLabelException(LabelFailureKind.MissingDocument, "Вибрана ТТН позначена видаленою в цьому акаунті.");
-                    if (shipment.ShipmentId.Length > 0 && shipment.ShipmentId != reference)
-                        throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "NP повернула інший document Ref для вибраної ТТН.");
-                    if (matches.Count > 0 && (!matches.TryGetValue(reference, out var previous) || previous.Places != places)) throw InvalidResponse();
-                    matches[reference] = (reference, places);
+                    if (!documents.TryGetValue(ttn, out var entries)) documents[ttn] = entries = [];
+                    entries.Add(new(reference, places, ReadDeletionFlag(item)));
+                    if (ttn == shipment.TrackingNumber) LookupSnapshot.ValidateEntries(shipment, entries);
                 }
                 // The SDK has no verified page-size/total contract. Only an empty page proves termination.
                 var pageIdentity = string.Join("|", identities.Order(StringComparer.Ordinal));
-                if (!seenPages.Add(pageIdentity)) return Result(false, page);
+                if (!seenPages.Add(pageIdentity)) return new(documents, false, page);
             }
             catch (JsonException) { throw InvalidResponse(); }
         }
-        return Result(false, NovaPoshtaReadOnlyContract.MaximumPages);
+        return new(documents, false, NovaPoshtaReadOnlyContract.MaximumPages);
+    }
 
-        NovaPoshtaLookup Result(bool complete, int pagesRead)
+    internal sealed record LookupEntry(string Reference, int? Places, bool? Deleted);
+    // Packet-local metadata only: no addresses, buyer details, response bodies or PDF text.
+    internal sealed class LookupSnapshot(Dictionary<string, List<LookupEntry>> documents, bool complete, int pagesRead)
+    {
+        public NovaPoshtaLookup Resolve(ShipmentReference shipment)
         {
-            var match = matches.Values.SingleOrDefault();
-            return new(shipment.TrackingNumber, match.Ref ?? "", match.Places, complete, pagesRead,
+            documents.TryGetValue(shipment.TrackingNumber, out var entries);
+            if (entries is not null) ValidateEntries(shipment, entries);
+            var match = entries?.FirstOrDefault();
+            return new(shipment.TrackingNumber, match?.Reference ?? "", match?.Places, complete, pagesRead,
                 !complete ? "Вибірка неповна: досягнуто ліміт або сервер повторив сторінку. Доступ до PDF не підтверджено; друк цієї накладної недоступний."
-                : matches.Count == 0 ? "Не знайдено у перевіреній вибірці цього акаунта. Це не означає, що ТТН не існує або ключ неправильний."
-                : string.IsNullOrEmpty(match.Ref) ? "Номер знайдено, але document Ref не надано; його значення не підставляється. Маршрут SDK використовує публічний номер."
-                : "Точний номер ТТН знайдено у перевіреній вибірці вибраного акаунта.", matches.Count == 1);
+                : match is null ? "Не знайдено у перевіреній вибірці цього акаунта. Це не означає, що ТТН не існує або ключ неправильний."
+                : string.IsNullOrEmpty(match.Reference) ? "Номер знайдено, але document Ref не надано; його значення не підставляється. Маршрут SDK використовує публічний номер."
+                : "Точний номер ТТН знайдено у перевіреній вибірці вибраного акаунта.", match is not null);
+        }
+        internal static void ValidateEntries(ShipmentReference shipment, List<LookupEntry> entries)
+        {
+            foreach (var entry in entries)
+            {
+                if (entry.Deleted is null) throw new ShippingLabelException(LabelFailureKind.InvalidDocument,
+                    "Нова пошта повернула невідомий формат ознаки видалення накладної (DeletionMark). Перевірку зупинено; друк не запускався.");
+                if (entry.Deleted.Value) throw new ShippingLabelException(LabelFailureKind.MissingDocument, "Вибрана ТТН позначена видаленою в цьому акаунті.");
+                if (shipment.ShipmentId.Length > 0 && shipment.ShipmentId != entry.Reference)
+                    throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "NP повернула інший document Ref для вибраної ТТН.");
+                if (entry.Reference != entries[0].Reference || entry.Places != entries[0].Places) throw InvalidResponse();
+            }
         }
     }
     public async Task<ShippingLabelDocument> ReadMarkingAsync(NovaPoshtaConnection connection, ShipmentReference shipment,
@@ -152,7 +173,7 @@ public sealed class NovaPoshtaReadOnlyClient(ShippingLabelHttp http)
         if (shipment.Carrier != ShippingCarrier.NovaPoshta || !Regex.IsMatch(shipment.TrackingNumber, @"\A[0-9]{14}\z"))
             throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "Оберіть існуючу ТТН Нової пошти з 14 цифр із замовлення Prom.");
     }
-    private static bool IsDeleted(JsonElement item)
+    private static bool? ReadDeletionFlag(JsonElement item)
     {
         // The live getDocumentList response uses string "0"/"1"; retain boolean compatibility.
         // Do not coerce arbitrary non-empty strings or default an unknown value to active.
@@ -163,8 +184,7 @@ public sealed class NovaPoshtaReadOnlyClient(ShippingLabelHttp http)
             JsonValueKind.True => true,
             JsonValueKind.String when flag.GetString() == "0" => false,
             JsonValueKind.String when flag.GetString() == "1" => true,
-            _ => throw new ShippingLabelException(LabelFailureKind.InvalidDocument,
-                "Нова пошта повернула невідомий формат ознаки видалення накладної (DeletionMark). Перевірку зупинено; друк не запускався.")
+            _ => null
         };
     }
     private static ShippingLabelException InvalidResponse() => new(LabelFailureKind.InvalidDocument, "Нова пошта повернула неочікуваний формат даних накладної. Перевірку зупинено; друк не запускався.");
@@ -229,8 +249,11 @@ public sealed class NovaPoshtaVerifiedSession
 }
 
 public sealed class NovaPoshtaDirectLabelSource(IShippingSettingsStore settings, NovaPoshtaReadOnlyClient client,
-    ILabelPdfInspector inspector, NovaPoshtaVerifiedSession session) : IShippingLabelSource
+    ILabelPdfInspector inspector, NovaPoshtaVerifiedSession session) : IShippingLabelBatchSource
 {
+    private Dictionary<(string Account, string Key, NovaPoshtaSearchPeriod Period), NovaPoshtaReadOnlyClient.LookupSnapshot>? _batchLookups;
+    public IShippingLabelSource CreateBatchSource() => new NovaPoshtaDirectLabelSource(settings, client, inspector, session) { _batchLookups = [] };
+
     public async Task<ShippingLabelDocument> GetAsync(ShipmentReference shipment, CancellationToken cancellationToken = default)
     {
         var config = await settings.LoadAsync(cancellationToken);
@@ -240,15 +263,18 @@ public sealed class NovaPoshtaDirectLabelSource(IShippingSettingsStore settings,
         if (connection.ApiKey.Length == 0) throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Очікує локального введення ключа Нової пошти.");
         if (!session.TryGet(connection, shipment.TrackingNumber, out var lookup))
         {
-            // Explicit label preparation verifies this selected shipment in its bound account.
-            // Evidence stays operation-local; only the diagnostic acceptance action updates the session.
             var today = DateOnly.FromDateTime(DateRangeBuilder.TodayKyiv);
-            var verified = await new NovaPoshtaDiagnostics(client, inspector).CheckAsync(connection, shipment,
-                new(today.AddDays(-6), today), cancellationToken);
-            if (!verified.CanUseInBatch) throw new ShippingLabelException(
-                verified.Lookup.Complete && !verified.Lookup.Found ? LabelFailureKind.MissingDocument : LabelFailureKind.InvalidDocument,
-                "Накладна не пройшла перевірку для пакета. " + verified.Message);
-            return verified.Document!;
+            var period = new NovaPoshtaSearchPeriod(today.AddDays(-6), today);
+            var cacheKey = (connection.Id, NovaPoshtaRequestPolicy.KeyFingerprint(connection.ApiKey), period);
+            if (_batchLookups is null || !_batchLookups.TryGetValue(cacheKey, out var snapshot))
+            {
+                snapshot = await client.ReadLookupAsync(connection, shipment, period, cancellationToken);
+                if (_batchLookups is not null) _batchLookups[cacheKey] = snapshot;
+            }
+            lookup = snapshot.Resolve(shipment);
+            if (!lookup.Complete || !lookup.Found) throw new ShippingLabelException(
+                lookup.Complete && !lookup.Found ? LabelFailureKind.MissingDocument : LabelFailureKind.InvalidDocument,
+                "Накладна не пройшла перевірку для пакета. " + lookup.Message);
         }
         if (shipment.ShipmentId.Length > 0 && shipment.ShipmentId != lookup.DocumentRef) throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "ТТН/Ref змінилися після діагностики.");
         var document = await client.ReadMarkingAsync(connection, shipment, lookup, cancellationToken);
@@ -259,8 +285,10 @@ public sealed class NovaPoshtaDirectLabelSource(IShippingSettingsStore settings,
 }
 
 public sealed class ConfiguredShippingLabelSource(IShippingSettingsStore settings, IShippingLabelSource direct,
-    IShippingLabelSource existing) : IShippingLabelSource
+    IShippingLabelSource existing) : IShippingLabelBatchSource
 {
+    public IShippingLabelSource CreateBatchSource() => new ConfiguredShippingLabelSource(settings,
+        direct is IShippingLabelBatchSource scoped ? scoped.CreateBatchSource() : direct, existing);
     public async Task<ShippingLabelDocument> GetAsync(ShipmentReference shipment, CancellationToken cancellationToken = default)
     {
         var config = await settings.LoadAsync(cancellationToken);

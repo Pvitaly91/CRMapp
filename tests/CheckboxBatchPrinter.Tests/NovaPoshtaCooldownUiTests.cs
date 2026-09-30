@@ -24,7 +24,7 @@ internal static class NovaPoshtaCooldownUiTests
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
         ("STA NP cooldown disables repeat clicks, survives reopening and expires without an automatic request", () => MarketplaceViewModelTests.StaAsync(CooldownSurvivesReopening)),
-        ("STA NP cancellation interrupts the wait between pages without sending the next request", () => MarketplaceViewModelTests.StaAsync(CancelPacing))
+        ("STA NP cancellation interrupts an active page request and restores manual checking", () => MarketplaceViewModelTests.StaAsync(CancelPageRequest))
     ];
 
     private sealed class Clock : TimeProvider
@@ -110,7 +110,7 @@ internal static class NovaPoshtaCooldownUiTests
         foreach (var useHttp429 in new[] { false, true })
         {
             var clock = new Clock();
-            var policy = new NovaPoshtaRequestPolicy(clock, (_, _) => throw new Exception("Unexpected automatic pacing/retry during cooldown."));
+            var policy = new NovaPoshtaRequestPolicy(clock);
             var handler = new Handler((call, _) =>
             {
                 if (call > 1) return Task.FromResult(Json(new { success = true, data = Array.Empty<object>(), errors = Array.Empty<string>() }));
@@ -182,23 +182,27 @@ internal static class NovaPoshtaCooldownUiTests
         }
     }
 
-    private static async Task CancelPacing()
+    private static async Task CancelPageRequest()
     {
-        var enteredWait = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var cancelledWait = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var enteredRequest = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelledRequest = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var clock = new Clock();
-        var policy = new NovaPoshtaRequestPolicy(clock, async (duration, ct) =>
+        var policy = new NovaPoshtaRequestPolicy(clock);
+        var handler = new Handler(async (call, ct) =>
         {
-            Check(duration > TimeSpan.Zero, "Pagination did not reserve a positive pacing wait.");
-            enteredWait.TrySetResult();
-            try { await Task.Delay(Timeout.Infinite, ct); }
-            catch (OperationCanceledException) { cancelledWait.TrySetResult(); throw; }
+            if (call == 1) return Json(new
+            {
+                success = true, data = new[] { new { IntDocNumber = "20400000000002", Ref = "10000000-0000-0000-0000-000000000003", SeatsAmount = "1", DeletionMark = "0" } },
+                errors = Array.Empty<string>()
+            });
+            if (call == 2)
+            {
+                enteredRequest.TrySetResult();
+                try { await Task.Delay(Timeout.Infinite, ct); }
+                catch (OperationCanceledException) { cancelledRequest.TrySetResult(); throw; }
+            }
+            return Json(new { success = true, data = Array.Empty<object>(), errors = Array.Empty<string>() });
         });
-        var handler = new Handler((_, _) => Task.FromResult(Json(new
-        {
-            success = true, data = new[] { new { IntDocNumber = "20400000000002", Ref = "10000000-0000-0000-0000-000000000003", SeatsAmount = "1", DeletionMark = "0" } },
-            errors = Array.Empty<string>()
-        })));
         using var client = new HttpClient(handler);
         var documents = new NoDocuments();
         var diagnostics = new NovaPoshtaDiagnostics(new(new ShippingLabelHttp(client, novaPoshtaPolicy: policy)), documents);
@@ -208,19 +212,24 @@ internal static class NovaPoshtaCooldownUiTests
         {
             var check = Field<Button>(window, "_check");
             check.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            await enteredWait.Task.WaitAsync(TimeSpan.FromSeconds(4));
+            await enteredRequest.Task.WaitAsync(TimeSpan.FromSeconds(4));
             var cancel = Field<Button>(window, "_cancel");
-            Check(handler.Calls == 1 && !check.IsEnabled && cancel.IsEnabled && cancel.Visibility == Visibility.Visible,
-                "Waiting between pages did not leave cancellation available while blocking repeat checks.");
+            Check(handler.Calls == 2 && !check.IsEnabled && cancel.IsEnabled && cancel.Visibility == Visibility.Visible,
+                "An active page request did not leave cancellation available while blocking repeat checks.");
             check.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             cancel.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            await cancelledWait.Task.WaitAsync(TimeSpan.FromSeconds(4));
-            await Until(() => Field<StackPanel>(window, "_form").IsEnabled, "Cancellation did not restore the form after the pacing wait.");
-            Check(handler.Calls == 1 && check.IsEnabled && !cancel.IsEnabled && cancel.Visibility == Visibility.Collapsed &&
+            await cancelledRequest.Task.WaitAsync(TimeSpan.FromSeconds(4));
+            await Until(() => Field<StackPanel>(window, "_form").IsEnabled, "Cancellation did not restore the form after the page request.");
+            Check(handler.Calls == 2 && check.IsEnabled && !cancel.IsEnabled && cancel.Visibility == Visibility.Collapsed &&
                 Field<TextBlock>(window, "_status").Text.Contains("скасовано", StringComparison.Ordinal) && diagnostics.GetRetryDelay(Connection) == TimeSpan.Zero,
-                "Cancelling pacing sent another request, lost cancellation status, or fabricated a rate-limit cooldown.");
+                "Cancelling pagination sent another request, lost cancellation status, or fabricated a rate-limit cooldown.");
             Check(documents.Inspections == 0 && documents.Renders == 0 && stores.Saves == 0,
                 "Cancelled pagination reached PDF work or saved settings.");
+            check.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await Until(() => handler.Calls == 3 && Field<StackPanel>(window, "_form").IsEnabled,
+                "Cancelled pagination retained the request or scan guard and blocked a new manual check.");
+            Check(documents.Inspections == 0 && documents.Renders == 0 && stores.Saves == 0,
+                "An empty manual retry reached PDF work or saved settings.");
         }
         finally { window.Close(); }
     }

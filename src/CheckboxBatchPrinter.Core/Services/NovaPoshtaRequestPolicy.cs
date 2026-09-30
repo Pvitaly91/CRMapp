@@ -4,12 +4,10 @@ using CheckboxBatchPrinter.Core.Models;
 
 namespace CheckboxBatchPrinter.Core.Services;
 
-// Session-local application pacing, not a statement of Nova Poshta's server quota.
+// Session-local per-key serialization and server rate-limit cooldowns.
 // One instance is owned by the shared shipping transport; no keys or cooldowns are persisted.
-public sealed class NovaPoshtaRequestPolicy(TimeProvider? clock = null,
-    Func<TimeSpan, CancellationToken, Task>? delay = null)
+public sealed class NovaPoshtaRequestPolicy(TimeProvider? clock = null)
 {
-    public static readonly TimeSpan MinimumGap = TimeSpan.FromSeconds(2);
     public static readonly TimeSpan DefaultCooldown = TimeSpan.FromSeconds(60);
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly object _sync = new();
@@ -18,7 +16,7 @@ public sealed class NovaPoshtaRequestPolicy(TimeProvider? clock = null,
     internal sealed class RequestState
     {
         public readonly SemaphoreSlim Gate = new(1, 1);
-        public DateTimeOffset NextRequestUtc, RetryAtUtc;
+        public DateTimeOffset RetryAtUtc;
     }
 
     internal static string KeyFingerprint(string apiKey) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(apiKey)));
@@ -46,19 +44,12 @@ public sealed class NovaPoshtaRequestPolicy(TimeProvider? clock = null,
         await state.Gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            while (true)
+            ct.ThrowIfCancellationRequested();
+            lock (_sync)
             {
-                ct.ThrowIfCancellationRequested();
-                TimeSpan wait;
-                lock (_sync)
-                {
-                    var now = UtcNow;
-                    if (state.RetryAtUtc > now) throw RateLimited(state.RetryAtUtc);
-                    wait = state.NextRequestUtc - now;
-                }
-                if (wait <= TimeSpan.Zero) return new RequestLease(this, state);
-                await (delay is not null ? delay(wait, ct) : Task.Delay(wait, _clock, ct)).ConfigureAwait(false);
+                if (state.RetryAtUtc > UtcNow) throw RateLimited(state.RetryAtUtc);
             }
+            return new RequestLease(this, state);
         }
         catch { state.Gate.Release(); throw; }
     }
@@ -94,8 +85,6 @@ public sealed class NovaPoshtaRequestPolicy(TimeProvider? clock = null,
             {
                 if (_disposed) return;
                 _disposed = true;
-                var next = AddClamped(_owner.UtcNow, MinimumGap);
-                if (next > _state.NextRequestUtc) _state.NextRequestUtc = next;
             }
             _state.Gate.Release();
         }

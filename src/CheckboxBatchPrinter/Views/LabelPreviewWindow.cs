@@ -21,7 +21,7 @@ public sealed class LabelPreviewWindow : Window
         header.Children.Add(new TextBlock { Text = "Одна етикетка — одна сторінка. Один Windows job. Фізичний вихід не гарантується статусом черги.", Margin = new Thickness(0, 6, 0, 8) });
         if (batch.Pages.Any(p => p.Source == "NovaPoshta.Direct.SDKCandidate"))
             header.Children.Add(new TextBlock { Text = "Нова пошта: номер кожної ТТН, PDF та повноту місць перевірено. Перегляньте всі етикетки й підтвердьте друк усього пакета.",
-                ToolTip = "Пряме читання NP за відкритим SDK. Для ТТН без перевірки в поточному сеансі підготовка читає останні 7 днів; для раніше перевірених — знову перевіряє актуальний PDF.",
+                ToolTip = "Список НП за останні 7 днів читається один раз на акаунт у пакеті. Для кожної ТТН завантажується її PDF.",
                 TextWrapping = TextWrapping.Wrap, Foreground = Brushes.DarkSlateBlue, Margin = new Thickness(0,0,0,8) });
         root.Children.Add(header);
         var footer = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };

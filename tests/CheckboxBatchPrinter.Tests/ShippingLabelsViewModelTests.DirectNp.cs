@@ -62,7 +62,8 @@ internal static partial class MarketplaceViewModelTests
             rows[1].Update(rows[1].Model with { Shipments = [new("nova_poshta", BatchTtnTwo)] }, [], []);
             var store = new ShippingLabelsTests.Stores();
             store.Config = store.Config with { NovaPoshtaConnections = [BatchConnection], NovaPoshtaStoreBindings = [new(rows[0].Key.ConnectionId, BatchConnection.Id)] };
-            using var http = new HttpClient(new BatchNpHandler());
+            var handler = new BatchNpHandler();
+            using var http = new HttpClient(handler);
             var client = new NovaPoshtaReadOnlyClient(NovaPoshtaRequestPolicyTests.FastTransport(http));
             var inspector = new WindowsLabelPdfInspector();
             var session = new NovaPoshtaVerifiedSession();
@@ -72,6 +73,7 @@ internal static partial class MarketplaceViewModelTests
                 session.Accept(BatchConnection, await new NovaPoshtaDiagnostics(client, inspector).CheckAsync(BatchConnection,
                     ShippingCarrierNames.ForOrder(rows[0].Model).Single(), new(today.AddDays(-6), today)));
             }
+            handler.JsonCalls = handler.PdfCalls = 0;
             var source = new ConfiguredShippingLabelSource(store, new NovaPoshtaDirectLabelSource(store, client, inspector, session),
                 new ShippingLabelsTests.Source());
             var history = new ShippingLabelsTests.History();
@@ -83,6 +85,8 @@ internal static partial class MarketplaceViewModelTests
             await labels.RunAsync(null, true);
             True(dialogs.Errors.Count == 0, string.Join(" | ", dialogs.Errors));
             Equal(1, dialogs.Previews);
+            Equal(2, handler.JsonCalls);
+            Equal(2, handler.PdfCalls);
             Equal(confirm ? 1 : 0, printer.Calls);
             Equal(confirm ? 1 : 0, history.Attempts.Count);
             if (confirm)

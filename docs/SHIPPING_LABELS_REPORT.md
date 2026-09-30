@@ -1,5 +1,17 @@
 # Shipping labels — implementation and acceptance
 
+## 1.0.14 — immediate NP requests and one lookup per packet/account (2026-10-01)
+
+The user requested removal of the fixed two-second delay and repeated label preparation checks. Starting from `82464da6a338099e884ebc524abd3ece6836e2e9`, the transport now sends the next request as soon as the preceding response completes. Per-key serialization and pauses after actual HTTP 429 / supported HTTP 200 rate-limit responses remain, including server Retry-After and the existing fallback. Cancellation and other carriers' retry behavior are preserved.
+
+Each explicit label preparation owns a fresh lookup snapshot. The first unverified TTN loads its account's recent seven-day list once; subsequent TTNs from that account reuse the completed list. Snapshots are separated by account ID, key fingerprint and period, contain only shipment metadata, and are discarded after preparation. Every selected TTN still resolves its own deletion/Ref/places metadata and receives its own current PDF. Receipt printing, history, credentials and printer settings are unchanged.
+
+For the synthetic two-label scenario with one nonempty page and an empty terminal page, preparation now needs four HTTP requests (two list pages and two PDFs), instead of six. There are no fixed inter-request sleeps. No live API speed measurement or physical print is claimed; remaining elapsed time depends on the server, network and PDF processing.
+
+Release Development verification: **308/308 tests passed**. All previous groups remain, with pacing-specific expectations updated to immediate requests and three new batch snapshot groups. Regression coverage includes one scan for two TTNs, fresh scans for later packets, missing/deleted/conflicting second records, key rotation/account rebinding, active/queued cancellation and preserved rate-limit deadlines. The final build has only the pre-existing WFAC010 warning. Production packaging uses the existing clean-commit workflow and records its checks separately in package metadata/build logs.
+
+---
+
 ## 1.0.13 — verify every selected NP label during packet preparation (2026-10-01)
 
 Started at clean `2b11038a222c9cb4f5e0084a2202f7d34487751b`. The two-label screenshot was caused by `NovaPoshtaDirectLabelSource.GetAsync` requiring individual manual session approval for every TTN. The settings diagnostic operates on the current order only, so approving one label still blocked a packet containing another existing label.

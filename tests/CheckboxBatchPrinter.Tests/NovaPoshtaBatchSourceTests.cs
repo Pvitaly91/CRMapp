@@ -31,6 +31,9 @@ internal static class NovaPoshtaBatchSourceTests
 
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
+        ("STA direct NP packet shares one account scan and discards metadata before the next packet", () => MarketplaceViewModelTests.StaAsync(OneScanPerPacket)),
+        ("STA direct NP shared scan still checks the second TTN deletion identity and Ref", () => MarketplaceViewModelTests.StaAsync(SharedLookupFailures)),
+        ("STA direct NP packet lookup is isolated after key rotation or account rebinding", () => MarketplaceViewModelTests.StaAsync(ScopedAccountChanges)),
         ("STA direct NP batch prepares two selected Prom TTNs when only the first was manually approved", () => MarketplaceViewModelTests.StaAsync(TwoLabels)),
         ("STA direct NP existing manual approval still rejects a changed fresh PDF before the second lookup", () => MarketplaceViewModelTests.StaAsync(ChangedApprovedPdf)),
         ("STA direct NP automatic preparation rejects wrong unknown multi-place and unsupported second labels", () => MarketplaceViewModelTests.StaAsync(InvalidSecond)),
@@ -41,7 +44,7 @@ internal static class NovaPoshtaBatchSourceTests
         ("STA direct NP fresh preparation retains exact shop binding and shipment Ref guards", () => MarketplaceViewModelTests.StaAsync(BindingAndRef))
     ];
 
-    private enum SecondResult { Valid, WrongNumber, UnknownNumber, MultiplePlaces, UnknownPlaces, UnsupportedSize, Missing, Incomplete, RateLimited }
+    private enum SecondResult { Valid, WrongNumber, UnknownNumber, MultiplePlaces, UnknownPlaces, UnsupportedSize, Missing, Incomplete, RateLimited, Deleted, UnknownDeletion, ConflictingRef }
     private sealed record Request(string Method, string Key, int Page = 0, string Ttn = "");
     private sealed class Handler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> response) : HttpMessageHandler
     {
@@ -78,7 +81,8 @@ internal static class NovaPoshtaBatchSourceTests
         public SecondResult Result;
         public bool WrongFirstPdf;
         public CancellationTokenSource? CancelOnSecondPage;
-        public NovaPoshtaConnection Selected => Store.Config.NovaPoshtaConnections.Single(c => c.Id == Connection.Id);
+        public NovaPoshtaConnection Selected => Store.Config.NovaPoshtaConnections.Single(c => c.Id ==
+            Store.Config.NovaPoshtaStoreBindings.Single(b => b.MarketplaceConnectionId == FirstOrder.Key.ConnectionId).NovaPoshtaConnectionId);
 
         public Fixture()
         {
@@ -120,9 +124,11 @@ internal static class NovaPoshtaBatchSourceTests
                 }
                 if (page == 2 && Result == SecondResult.RateLimited) return new((HttpStatusCode)429);
                 if (page == 2 && Result != SecondResult.Incomplete) return List();
+                if (Result == SecondResult.ConflictingRef) return List(Row(FirstTtn, FirstRef), Row(SecondTtn, SecondRef), Row(SecondTtn, FirstRef));
                 return Result == SecondResult.Missing ? List(Row(FirstTtn, FirstRef))
                     : List(Row(FirstTtn, FirstRef), Row(SecondTtn, SecondRef,
-                        Result == SecondResult.MultiplePlaces ? 2 : Result == SecondResult.UnknownPlaces ? null : 1));
+                        Result == SecondResult.MultiplePlaces ? 2 : Result == SecondResult.UnknownPlaces ? null : 1,
+                        Result == SecondResult.Deleted ? "1" : Result == SecondResult.UnknownDeletion ? "unexpected" : "0"));
             }
             Check(request.Method == HttpMethod.Get && uri.Host == "my.novaposhta.ua", "Unexpected NP request.");
             var path = uri.AbsolutePath;
@@ -141,8 +147,8 @@ internal static class NovaPoshtaBatchSourceTests
             return new(HttpStatusCode.OK) { Content = new ByteArrayContent(pdf) { Headers = { ContentType = new("application/pdf") } } };
         }
     }
-    private static object Row(string ttn, string reference, int? places = 1) =>
-        new { IntDocNumber = ttn, Ref = reference, SeatsAmount = places, DeletionMark = "0" };
+    private static object Row(string ttn, string reference, int? places = 1, string deletion = "0") =>
+        new { IntDocNumber = ttn, Ref = reference, SeatsAmount = places, DeletionMark = deletion };
     private static HttpResponseMessage List(params object[] rows) => new(HttpStatusCode.OK)
     { Content = new StringContent(JsonSerializer.Serialize(new { success = true, data = rows, errors = Array.Empty<string>() }), Encoding.UTF8, "application/json") };
     private static void NotApproved(NovaPoshtaVerifiedSession session, NovaPoshtaConnection connection, string ttn)
@@ -232,7 +238,7 @@ internal static class NovaPoshtaBatchSourceTests
         var rotated = Connection with { ApiKey = "synthetic_batch_rotated_key" };
         fixture.Store.Config = fixture.Store.Config with { NovaPoshtaConnections = [ForeignConnection, rotated] };
         var batch = await fixture.Prepare();
-        Check(batch.Pages.Count == 2 && fixture.Requests.Count == 6 && fixture.Requests[0].Method == "POST" &&
+        Check(batch.Pages.Count == 2 && fixture.Requests.Count == 4 && fixture.Requests[0].Method == "POST" &&
             fixture.Requests.All(r => r.Key == rotated.ApiKey), "Rotated key reused old session evidence or another account.");
         NotApproved(fixture.Session, rotated, FirstTtn); NotApproved(fixture.Session, rotated, SecondTtn);
         Check(fixture.Session.Require(Connection, FirstTtn).DocumentRef == FirstRef, "Key rotation rewrote the prior manual approval.");
@@ -248,5 +254,59 @@ internal static class NovaPoshtaBatchSourceTests
         Check(error.Kind == LabelFailureKind.InvalidDocument && fixture.Requests.Count == 1 && fixture.Requests.All(r => r.Method == "POST"),
             "Fresh verification dropped the shipment Ref guard or requested marking.");
         NotApproved(fixture.Session, Connection, SecondTtn);
+    }
+
+    private static async Task OneScanPerPacket()
+    {
+        using var fixture = new Fixture();
+        for (var packet = 0; packet < 2; packet++)
+        {
+            fixture.Requests.Clear();
+            var batch = await fixture.Prepare();
+            Check(batch.Pages.Count == 2 && fixture.Requests.Select(r => (r.Method, r.Page, r.Ttn)).SequenceEqual(
+                [("POST", 1, ""), ("POST", 2, ""), ("GET", 0, FirstTtn), ("GET", 0, SecondTtn)]),
+                "A packet rescanned one account for each TTN or reused a previous packet's evidence.");
+            Check(fixture.Store.Saves == 0, "Preparation persisted lookup metadata.");
+            NotApproved(fixture.Session, Connection, FirstTtn); NotApproved(fixture.Session, Connection, SecondTtn);
+        }
+    }
+
+    private static async Task SharedLookupFailures()
+    {
+        foreach (var result in new[] { SecondResult.Missing, SecondResult.Deleted, SecondResult.UnknownDeletion, SecondResult.ConflictingRef })
+        {
+            using var fixture = new Fixture { Result = result };
+            var error = await Failure(fixture.Prepare());
+            Check(error.Message.Contains(SecondTtn) && fixture.Requests.Count(r => r.Method == "POST") == 2 &&
+                fixture.Requests.Count(r => r.Method == "GET") == 1 && fixture.Requests.All(r => r.Method != "GET" || r.Ttn == FirstTtn),
+                "Shared metadata bypassed a second-document failure or repeated the account scan.");
+        }
+        using var refFixture = new Fixture();
+        var scoped = ((IShippingLabelBatchSource)refFixture.Source).CreateBatchSource();
+        await scoped.GetAsync(Shipment(FirstOrder));
+        var refError = await Failure(scoped.GetAsync(Shipment(SecondOrder) with { ShipmentId = FirstRef }));
+        Check(refError.Kind == LabelFailureKind.InvalidDocument && refFixture.Requests.Count == 3,
+            "A shared scan bypassed the selected second shipment's Ref.");
+    }
+
+    private static async Task ScopedAccountChanges()
+    {
+        foreach (var rotateKey in new[] { true, false })
+        {
+            using var fixture = new Fixture();
+            var scoped = ((IShippingLabelBatchSource)fixture.Source).CreateBatchSource();
+            await scoped.GetAsync(Shipment(FirstOrder));
+            var changed = rotateKey ? Connection with { ApiKey = "synthetic_rotated_during_packet" }
+                : Connection with { Id = "synthetic_rebound_during_packet" };
+            fixture.Store.Config = fixture.Store.Config with
+            {
+                NovaPoshtaConnections = [ForeignConnection, changed],
+                NovaPoshtaStoreBindings = [new(FirstOrder.Key.ConnectionId, changed.Id)]
+            };
+            var document = await scoped.GetAsync(Shipment(SecondOrder));
+            Check(document.ConnectionId == changed.Id && fixture.Requests.Count == 6 &&
+                fixture.Requests.Count(r => r.Method == "POST") == 4 && fixture.Requests.Skip(3).All(r => r.Key == changed.ApiKey),
+                "Packet metadata leaked across a key change or explicit account rebinding.");
+        }
     }
 }

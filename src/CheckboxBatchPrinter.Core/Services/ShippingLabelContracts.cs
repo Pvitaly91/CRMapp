@@ -4,6 +4,8 @@ namespace CheckboxBatchPrinter.Core.Services;
 
 public interface IShippingLabelSource
 { Task<ShippingLabelDocument> GetAsync(ShipmentReference shipment, CancellationToken cancellationToken = default); }
+public interface IShippingLabelBatchSource : IShippingLabelSource
+{ IShippingLabelSource CreateBatchSource(); }
 public interface IShippingLabelRenderer
 { Task<IReadOnlyList<ShippingLabelPage>> RenderAsync(ShippingLabelDocument document, double dpiX, double dpiY, CancellationToken cancellationToken = default); }
 public interface ILabelHistoryStore
