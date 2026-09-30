@@ -73,7 +73,7 @@ internal static class NovaPoshtaDirectTests
     {
         var handler = new Handler(async (request, _) => await Page(request) switch { 1 => List(Row(OtherTtn)), 2 => List(Row()), _ => List() });
         using var http = new HttpClient(handler);
-        var result = await new NovaPoshtaReadOnlyClient(new(http)).LookupAsync(Connection, Shipment(), Period);
+        var result = await new NovaPoshtaReadOnlyClient(NovaPoshtaRequestPolicyTests.FastTransport(http)).LookupAsync(Connection, Shipment(), Period);
         Check(result.Complete && result.PagesRead == 3 && result.DocumentRef == Ref && result.DocumentRef != Ttn && result.Places == 1 && handler.Calls == 3, "TTN/Ref or empty-page termination failed.");
     }
     private static async Task Missing()
@@ -82,7 +82,7 @@ internal static class NovaPoshtaDirectTests
         {
             var handler = new Handler(async (r, _) => await Page(r) == 1 ? List(Row(missingRef ? Ttn : OtherTtn, missingRef ? null : Ref)) : List());
             using var http = new HttpClient(handler);
-            var lookup = await new NovaPoshtaReadOnlyClient(new(http)).LookupAsync(Connection, Shipment(), Period);
+            var lookup = await new NovaPoshtaReadOnlyClient(NovaPoshtaRequestPolicyTests.FastTransport(http)).LookupAsync(Connection, Shipment(), Period);
             Check(lookup.Complete && lookup.DocumentRef == "" && lookup.Found == missingRef && (missingRef ? lookup.Message.Contains("Ref") : lookup.Message.Contains("Не знайдено у перевіреній вибірці")), "Absent sample became invalid key or invented Ref.");
         }
     }
@@ -94,7 +94,7 @@ internal static class NovaPoshtaDirectTests
         {
             var handler = new Handler(async (r, _) => { var page = await Page(r); return List(Row(repeated || page == 1 ? Ttn : "204" + page.ToString("00000000000"))); });
             using var http = new HttpClient(handler);
-            var result = await new NovaPoshtaDiagnostics(new(new(http)), new NoInspector()).CheckAsync(Connection, Shipment(), Period);
+            var result = await new NovaPoshtaDiagnostics(new(NovaPoshtaRequestPolicyTests.FastTransport(http)), new NoInspector()).CheckAsync(Connection, Shipment(), Period);
             Check(!result.Lookup.Complete && result.Document is null && handler.Calls == (repeated ? 2 : 10), "Incomplete sample claimed success or fetched PDF.");
         }
     }
@@ -105,7 +105,7 @@ internal static class NovaPoshtaDirectTests
             new { success = false, data = Array.Empty<object>(), errors = new[] { Connection.ApiKey + " buyer data" } } })
         {
             var handler = new Handler((_, _) => Task.FromResult(Json(value))); using var http = new HttpClient(handler);
-            try { await new NovaPoshtaReadOnlyClient(new(http)).LookupAsync(Connection, Shipment(), Period); throw new Exception("Malformed response accepted."); }
+            try { await new NovaPoshtaReadOnlyClient(NovaPoshtaRequestPolicyTests.FastTransport(http)).LookupAsync(Connection, Shipment(), Period); throw new Exception("Malformed response accepted."); }
             catch (ShippingLabelException ex) { Check(!ex.ToString().Contains(Connection.ApiKey) && !ex.ToString().Contains("buyer data") && handler.Calls == 1, "Secret/error body leaked or retried."); }
         }
     }
@@ -137,7 +137,7 @@ internal static class NovaPoshtaDirectTests
                 return Pdf(SyntheticShippingPdf.Create(pageTexts: [Ttn]));
             });
             using var http = new HttpClient(handler);
-            var result = await new NovaPoshtaDiagnostics(new(new(http)), new WindowsLabelPdfInspector()).CheckAsync(Connection, Shipment(), Period);
+            var result = await new NovaPoshtaDiagnostics(new(NovaPoshtaRequestPolicyTests.FastTransport(http)), new WindowsLabelPdfInspector()).CheckAsync(Connection, Shipment(), Period);
             Check(result.Lookup.Complete && result.Lookup.Found && result.Lookup.PagesRead == 3 && result.Lookup.DocumentRef == Ref &&
                 result.Lookup.Places == 1 && result.CanUseInBatch && pdfRequests == 1 && handler.Calls == 4,
                 "An active live-shaped record failed lookup, pagination, or PDF identity verification.");
@@ -156,7 +156,7 @@ internal static class NovaPoshtaDirectTests
             using var http = new HttpClient(handler);
             try
             {
-                await new NovaPoshtaDiagnostics(new(new(http)), new NoInspector()).CheckAsync(Connection, Shipment(), Period);
+                await new NovaPoshtaDiagnostics(new(NovaPoshtaRequestPolicyTests.FastTransport(http)), new NoInspector()).CheckAsync(Connection, Shipment(), Period);
                 throw new Exception("Deleted document accepted.");
             }
             catch (ShippingLabelException ex)
@@ -181,7 +181,7 @@ internal static class NovaPoshtaDirectTests
             using var http = new HttpClient(handler);
             try
             {
-                await new NovaPoshtaDiagnostics(new(new(http)), new NoInspector()).CheckAsync(Connection, Shipment(), Period);
+                await new NovaPoshtaDiagnostics(new(NovaPoshtaRequestPolicyTests.FastTransport(http)), new NoInspector()).CheckAsync(Connection, Shipment(), Period);
                 throw new Exception("Unknown deletion state accepted.");
             }
             catch (ShippingLabelException ex)
@@ -214,7 +214,7 @@ internal static class NovaPoshtaDirectTests
             using var http = new HttpClient(handler);
             try
             {
-                await new NovaPoshtaDiagnostics(new(new(http)), new NoInspector()).CheckAsync(Connection, Shipment(), Period);
+                await new NovaPoshtaDiagnostics(new(NovaPoshtaRequestPolicyTests.FastTransport(http)), new NoInspector()).CheckAsync(Connection, Shipment(), Period);
                 throw new Exception("A rate-limited account scan was treated as complete.");
             }
             catch (ShippingLabelException ex)
@@ -234,7 +234,7 @@ internal static class NovaPoshtaDirectTests
     {
         using var cancel = new CancellationTokenSource();
         var handler = new Handler((_, ct) => { cancel.Cancel(); ct.ThrowIfCancellationRequested(); return Task.FromResult(List()); }); using var http = new HttpClient(handler);
-        try { await new NovaPoshtaReadOnlyClient(new(http)).LookupAsync(Connection, Shipment(), Period, cancel.Token); throw new Exception("Cancellation ignored."); }
+        try { await new NovaPoshtaReadOnlyClient(NovaPoshtaRequestPolicyTests.FastTransport(http)).LookupAsync(Connection, Shipment(), Period, cancel.Token); throw new Exception("Cancellation ignored."); }
         catch (OperationCanceledException) { Check(handler.Calls == 1, "Cancelled lookup continued."); }
     }
     private static string Body(string method = "getDocumentList", string extra = "") =>
@@ -268,7 +268,7 @@ internal static class NovaPoshtaDirectTests
                 });
             });
             using var http = new HttpClient(handler);
-            try { await new NovaPoshtaReadOnlyClient(new(http)).ReadMarkingAsync(Connection, Shipment(), new(Ttn,Ref,1,true,2,"")); throw new Exception("Unsafe PDF accepted."); }
+            try { await new NovaPoshtaReadOnlyClient(NovaPoshtaRequestPolicyTests.FastTransport(http)).ReadMarkingAsync(Connection, Shipment(), new(Ttn,Ref,1,true,2,"")); throw new Exception("Unsafe PDF accepted."); }
             catch (ShippingLabelException ex) { Check(!ex.ToString().Contains(Connection.ApiKey) && handler.Calls == 1, "Secret URL/body exposed or redirect followed."); }
         }
     }
@@ -302,7 +302,7 @@ internal static class NovaPoshtaDirectTests
                 ? await Page(request) == 1 ? List(FlagRow("0")) : List()
                 : Pdf(SyntheticShippingPdf.Create(width, height, pageTexts: [Ttn])));
             using var http = new HttpClient(handler);
-            var result = await new NovaPoshtaDiagnostics(new(new(http)), new WindowsLabelPdfInspector()).CheckAsync(Connection, Shipment(), Period);
+            var result = await new NovaPoshtaDiagnostics(new(NovaPoshtaRequestPolicyTests.FastTransport(http)), new WindowsLabelPdfInspector()).CheckAsync(Connection, Shipment(), Period);
             var inspected = result.Inspection!.Pages.Single();
             Check(result.Identity == LabelIdentityCheck.Verified && result.AllPlacesVerified && handler.Calls == 3,
                 "Synthetic marking did not complete account lookup and real PDF identity inspection.");
@@ -362,7 +362,7 @@ internal static class NovaPoshtaDirectTests
         var handler = new Handler(async (r,_) => r.Method == HttpMethod.Post ? await Page(r) == 1 ? List(Row(Ttn,null)) : List()
             : Pdf(SyntheticShippingPdf.Create(pageTexts:[Ttn])));
         using var http = new HttpClient(handler);
-        var result = await new NovaPoshtaDiagnostics(new(new(http)),new WindowsLabelPdfInspector()).CheckAsync(Connection,Shipment(),Period);
+        var result = await new NovaPoshtaDiagnostics(new(NovaPoshtaRequestPolicyTests.FastTransport(http)),new WindowsLabelPdfInspector()).CheckAsync(Connection,Shipment(),Period);
         Check(result.Lookup.Found && result.Lookup.DocumentRef == "" && result.Document!.DocumentId == "ttn:"+Ttn && result.CanUseInBatch,
             "Public TTN substituted as Ref, or unnecessary Ref requirement blocked the NUMBER route.");
     }
@@ -421,7 +421,7 @@ internal static class NovaPoshtaDirectTests
             return request.RequestUri.AbsolutePath.EndsWith("/label") ? Json(new { statusCode = 0, data = new { label = Convert.ToBase64String(SyntheticShippingPdf.Create()) } })
                 : Json(new { statusCode = 0, data = new { id = "00012345", places = 1 } });
         });
-        using var http = new HttpClient(handler); var transport = new ShippingLabelHttp(http); var client = new NovaPoshtaReadOnlyClient(transport);
+        using var http = new HttpClient(handler); var transport = NovaPoshtaRequestPolicyTests.FastTransport(http); var client = new NovaPoshtaReadOnlyClient(transport);
         var inspector = new WindowsLabelPdfInspector(); var session = new NovaPoshtaVerifiedSession(); var diagnostics = new NovaPoshtaDiagnostics(client,inspector);
         foreach (var number in new[] { Ttn,OtherTtn }) session.Accept(Connection, await diagnostics.CheckAsync(Connection,Shipment(number),Period));
         var source = new ConfiguredShippingLabelSource(stores,new NovaPoshtaDirectLabelSource(stores,client,inspector,session),new OfficialShippingLabelSource(transport,stores,stores,stores));
@@ -474,7 +474,7 @@ internal static class NovaPoshtaDirectTests
         var promId = Shipment().Order.ConnectionId;
         stores.Market.Connections.Add(new() { Id = promId,Name = "Synthetic Prom",Enabled = true,Marketplace = MarketplaceKind.Prom });
         var handler = new Handler((_,_)=>throw new Exception("Settings automatically called API.")); using var http = new HttpClient(handler);
-        var window = new NovaPoshtaConnectionWindow(stores,stores.Config,stores.Market,new(new(new(http)),new NoInspector()),new(),new WindowsShippingLabelRenderer(),Order("selected",ShippingCarrier.NovaPoshta,Ttn));
+        var window = new NovaPoshtaConnectionWindow(stores,stores.Config,stores.Market,new(new(NovaPoshtaRequestPolicyTests.FastTransport(http)),new NoInspector()),new(),new WindowsShippingLabelRenderer(),Order("selected",ShippingCarrier.NovaPoshta,Ttn));
         IEnumerable<DependencyObject> Nodes(DependencyObject parent)
         { yield return parent; foreach (var child in LogicalTreeHelper.GetChildren(parent).OfType<DependencyObject>()) foreach(var node in Nodes(child)) yield return node; }
         var add = Nodes(window).OfType<Button>().Single(b=>Equals(b.Content,"Додати NP-підключення")); add.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -503,7 +503,7 @@ internal static class NovaPoshtaDirectTests
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var handler = new Handler(async (r,ct)=>{await Page(r); entered.TrySetResult(); await Task.Delay(Timeout.Infinite,ct); return List();});
         using var http = new HttpClient(handler);
-        var window = new NovaPoshtaConnectionWindow(stores,stores.Config,stores.Market,new(new(new(http)),new NoInspector()),new(),new WindowsShippingLabelRenderer(),Order("selected",ShippingCarrier.NovaPoshta,Ttn));
+        var window = new NovaPoshtaConnectionWindow(stores,stores.Config,stores.Market,new(new(NovaPoshtaRequestPolicyTests.FastTransport(http)),new NoInspector()),new(),new WindowsShippingLabelRenderer(),Order("selected",ShippingCarrier.NovaPoshta,Ttn));
         T Field<T>(string name) => (T)typeof(NovaPoshtaConnectionWindow).GetField(name,BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(window)!;
         Field<DatePicker>("_from").SelectedDate = Period.From.ToDateTime(TimeOnly.MinValue); Field<DatePicker>("_to").SelectedDate = Period.To.ToDateTime(TimeOnly.MinValue);
         var buttons = Field<StackPanel>("_form").Children.OfType<StackPanel>().Single().Children.OfType<Button>().ToArray();

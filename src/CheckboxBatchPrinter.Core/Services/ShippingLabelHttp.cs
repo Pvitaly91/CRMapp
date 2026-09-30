@@ -9,9 +9,12 @@ using CheckboxBatchPrinter.Core.Models;
 namespace CheckboxBatchPrinter.Core.Services;
 
 // Dedicated transport: no credential-bearing URL is logged or exposed through exceptions.
-public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, CancellationToken, Task>? delay = null)
+public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, CancellationToken, Task>? delay = null,
+    NovaPoshtaRequestPolicy? novaPoshtaPolicy = null)
 {
+    private readonly NovaPoshtaRequestPolicy _novaPoshtaPolicy = novaPoshtaPolicy ?? new();
     public const int MaximumBytes = 20 * 1024 * 1024;
+    public TimeSpan GetNovaPoshtaRetryDelay(string apiKey) => _novaPoshtaPolicy.GetRetryDelay(apiKey);
     public static void Validate(HttpRequestMessage request)
     {
         var uri = request.RequestUri;
@@ -37,6 +40,8 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
         {
             using var request = factory();
             Validate(request);
+            var novaPoshtaKey = NovaPoshtaKey(request);
+            using var novaPoshtaRequest = novaPoshtaKey is null ? null : await _novaPoshtaPolicy.EnterAsync(novaPoshtaKey, cancellationToken).ConfigureAwait(false);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(45));
             try
@@ -48,6 +53,8 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
                     throw new ShippingLabelException(LabelFailureKind.AccessDenied, "Немає доступу до етикетки. Перевірте локальне підключення та права на саме цю накладну.");
                 if (response.StatusCode == HttpStatusCode.NotFound)
                     throw new ShippingLabelException(LabelFailureKind.MissingDocument, "Документ накладної не знайдено в цьому підключенні.");
+                if ((int)response.StatusCode == 429 && novaPoshtaRequest is not null)
+                    throw novaPoshtaRequest.Limit(RetryDelay(response, _novaPoshtaPolicy.UtcNow));
                 if ((int)response.StatusCode >= 500 || (int)response.StatusCode == 429)
                 {
                     if (attempt >= 2) throw new ShippingLabelException(LabelFailureKind.Temporary, "API доставки тимчасово недоступне.");
@@ -59,7 +66,8 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
                     continue;
                 }
                 if (!response.IsSuccessStatusCode) throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "API відхилило читання накладної.");
-                if (response.Content.Headers.ContentType?.MediaType != expectedType)
+                var actualType = response.Content.Headers.ContentType?.MediaType;
+                if (actualType != expectedType && !(novaPoshtaRequest is not null && actualType == "application/json"))
                     throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "API повернуло не очікуваний PDF/JSON. Документ не друкуватиметься.");
                 if (response.Content.Headers.ContentLength > MaximumBytes) throw TooLarge();
                 using var buffer = new MemoryStream();
@@ -71,7 +79,12 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
                     if (buffer.Length + count > MaximumBytes) throw TooLarge();
                     await buffer.WriteAsync(chunk.AsMemory(0, count), timeout.Token).ConfigureAwait(false);
                 }
-                return buffer.ToArray();
+                var bytes = buffer.ToArray();
+                if (novaPoshtaRequest is not null && actualType == "application/json" && IsNovaPoshtaRateLimit(bytes))
+                    throw novaPoshtaRequest.Limit(RetryDelay(response, _novaPoshtaPolicy.UtcNow));
+                if (actualType != expectedType)
+                    throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "API повернуло не очікуваний PDF/JSON. Документ не друкуватиметься.");
+                return bytes;
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             { throw new ShippingLabelException(LabelFailureKind.Temporary, "Перевищено час читання етикетки."); }
@@ -80,6 +93,29 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
             catch (IOException)
             { throw new ShippingLabelException(LabelFailureKind.Temporary, "Не вдалося повністю прочитати відповідь доставки."); }
         }
+    }
+    private static string? NovaPoshtaKey(HttpRequestMessage request)
+    {
+        // Called only after the exact host/path/body allowlist has validated the request.
+        if (request.RequestUri!.Host == "my.novaposhta.ua") return request.RequestUri.AbsolutePath.Split('/')[^1];
+        if (request.RequestUri.Host != "api.novaposhta.ua") return null;
+        using var body = JsonDocument.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+        return body.RootElement.GetProperty("apiKey").GetString()!;
+    }
+    private static TimeSpan? RetryDelay(HttpResponseMessage response, DateTimeOffset now) => response.Headers.RetryAfter?.Delta ??
+        (response.Headers.RetryAfter?.Date is { } retryAt ? retryAt - now : null);
+    private static bool IsNovaPoshtaRateLimit(byte[] bytes)
+    {
+        try
+        {
+            using var json = JsonDocument.Parse(bytes); var root = json.RootElement;
+            return root.ValueKind == JsonValueKind.Object && root.TryGetProperty("success", out var success) &&
+                success.ValueKind is JsonValueKind.True or JsonValueKind.False &&
+                root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array &&
+                root.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Array && errors.GetArrayLength() > 0 &&
+                errors.EnumerateArray().All(e => e.ValueKind == JsonValueKind.String && e.GetString() is "Too many requests" or "To many requests");
+        }
+        catch (JsonException) { return false; }
     }
     private static ShippingLabelException TooLarge() => new(LabelFailureKind.InvalidDocument, "Етикетка перевищує обмеження 20 MiB.");
     public static void ValidatePdf(byte[] bytes)

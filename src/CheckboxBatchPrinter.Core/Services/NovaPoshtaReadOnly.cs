@@ -50,10 +50,24 @@ public static class NovaPoshtaReadOnlyContract
 
 public sealed class NovaPoshtaReadOnlyClient(ShippingLabelHttp http)
 {
+    private readonly object _scanLock = new();
+    private readonly HashSet<string> _activeScans = new(StringComparer.Ordinal);
+    public TimeSpan GetRetryDelay(NovaPoshtaConnection connection) => http.GetNovaPoshtaRetryDelay(connection.ApiKey);
     public async Task<NovaPoshtaLookup> LookupAsync(NovaPoshtaConnection connection, ShipmentReference shipment,
         NovaPoshtaSearchPeriod period, CancellationToken ct = default)
     {
         Validate(connection, shipment); period.Validate();
+        ct.ThrowIfCancellationRequested();
+        var key = NovaPoshtaRequestPolicy.KeyFingerprint(connection.ApiKey);
+        lock (_scanLock)
+            if (!_activeScans.Add(key)) throw new ShippingLabelException(LabelFailureKind.Temporary,
+                "Перевірка цього підключення Нової пошти вже триває. Дочекайтеся її завершення; повторний пошук не запускався.");
+        try { return await LookupCoreAsync(connection, shipment, period, ct); }
+        finally { lock (_scanLock) _activeScans.Remove(key); }
+    }
+    private async Task<NovaPoshtaLookup> LookupCoreAsync(NovaPoshtaConnection connection, ShipmentReference shipment,
+        NovaPoshtaSearchPeriod period, CancellationToken ct)
+    {
         var seenPages = new HashSet<string>(); var matches = new Dictionary<string, (string Ref, int? Places)>();
         for (var page = 1; page <= NovaPoshtaReadOnlyContract.MaximumPages; page++)
         {
@@ -72,12 +86,6 @@ public sealed class NovaPoshtaReadOnlyClient(ShippingLabelHttp http)
                     throw InvalidResponse();
                 if (success.ValueKind == JsonValueKind.False || errors.GetArrayLength() != 0)
                 {
-                    // NP can report throttling in a HTTP 200 JSON envelope. Do not blame the key,
-                    // retry automatically, or treat a failed empty page as completed pagination.
-                    if (errors.GetArrayLength() > 0 && errors.EnumerateArray().All(e =>
-                        e.ValueKind == JsonValueKind.String && e.GetString() is "Too many requests" or "To many requests"))
-                        throw new ShippingLabelException(LabelFailureKind.Temporary,
-                            "Нова пошта тимчасово обмежила частоту запитів. Зачекайте й повторіть перевірку пізніше. Це не означає, що ключ неправильний.");
                     throw new ShippingLabelException(LabelFailureKind.AccessDenied, "NP відхилила читання. Перевірте ключ і права саме вибраного акаунта; тіло помилки приховано.");
                 }
                 if (data.GetArrayLength() > 1000) throw InvalidResponse();
@@ -164,6 +172,7 @@ public sealed class NovaPoshtaReadOnlyClient(ShippingLabelHttp http)
 
 public sealed class NovaPoshtaDiagnostics(NovaPoshtaReadOnlyClient client, ILabelPdfInspector inspector)
 {
+    public TimeSpan GetRetryDelay(NovaPoshtaConnection connection) => client.GetRetryDelay(connection);
     public async Task<NovaPoshtaDiagnosticResult> CheckAsync(NovaPoshtaConnection connection, ShipmentReference shipment,
         NovaPoshtaSearchPeriod period, CancellationToken ct = default)
     {

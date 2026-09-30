@@ -4,7 +4,7 @@ public enum ShippingCarrier { Unknown, NovaPoshta, RozetkaDelivery }
 public enum LabelSubmissionState { NotSubmitted, SubmissionUnknown, Submitted }
 public enum LabelFailureKind { MissingDocument, AccessDenied, ConnectionRequired, Temporary, UnsupportedFormat, InvalidDocument }
 public sealed class ShippingLabelException(LabelFailureKind kind, string message) : Exception(message)
-{ public LabelFailureKind Kind { get; } = kind; }
+{ public LabelFailureKind Kind { get; } = kind; public DateTimeOffset? RetryAtUtc { get; init; } }
 
 // None of these identities is an order/receipt ID inferred by basket matching.
 public sealed record ShipmentReference(OrderKey Order, string OrderNumber, ShippingCarrier Carrier,
