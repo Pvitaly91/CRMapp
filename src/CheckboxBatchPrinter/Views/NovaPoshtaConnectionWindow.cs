@@ -16,10 +16,11 @@ public sealed class NovaPoshtaConnectionWindow : Window
     private readonly Dictionary<string, string> _bindings;
     private readonly ComboBox _accountsBox = new(), _stores = new(), _boundAccount = new(), _shipments = new();
     private readonly TextBox _name = new(); private readonly PasswordBox _key = new();
-    private readonly DatePicker _from = new() { SelectedDate = DateTime.Today }, _to = new() { SelectedDate = DateTime.Today };
+    private readonly DatePicker _from = new() { SelectedDate = DateTime.Today.AddDays(-6) }, _to = new() { SelectedDate = DateTime.Today };
+    private readonly Expander _advanced = new() { Header = "Розширені налаштування NP", IsExpanded = false, Margin = new Thickness(0,10,0,8) };
     private readonly TextBlock _status = new() { Text = "Очікує локального введення ключа", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,0,0,8) };
     private readonly StackPanel _form = new();
-    private readonly Button _cancel = new() { Content = "Скасувати перевірку", IsEnabled = false };
+    private readonly Button _cancel = new() { Content = "Скасувати перевірку", IsEnabled = false, Visibility = Visibility.Collapsed };
     private CancellationTokenSource? _cancellation;
     private string? _editingId, _storeId;
     private bool _updating;
@@ -28,17 +29,19 @@ public sealed class NovaPoshtaConnectionWindow : Window
     {
         _store = store; _diagnostics = diagnostics; _session = session; _renderer = renderer; _order = order;
         _accounts = original.NovaPoshtaConnections.ToList(); _bindings = original.NovaPoshtaStoreBindings.ToDictionary(b => b.MarketplaceConnectionId, b => b.NovaPoshtaConnectionId);
-        Title = "Нова пошта — пряме підключення"; Width = 780; Height = 760; MinWidth = 650; MinHeight = 500;
+        Title = "Нова пошта — перевірка накладної"; Width = 680; Height = 470; MinWidth = 600; MinHeight = 400;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         var root = new StackPanel { Margin = new Thickness(16) }; root.Children.Add(_form);
-        Add(_form, "Експериментальне read-only підключення за відкритим SDK. Не створює ТТН/реєстри. Офіційний контракт ще не підтверджено.", new TextBlock());
+        _form.Children.Add(new TextBlock { Text = "Перевірка вже створеної накладної. Друк не запускається.", TextWrapping = TextWrapping.Wrap,
+            ToolTip = "Read-only підключення за відкритим SDK. Не створює ТТН/реєстри. Офіційний контракт ще не підтверджено. Перевіряються доступ, PDF, номер накладної та повнота місць." });
+        var advanced = new StackPanel { Margin = new Thickness(8) }; _advanced.Content = advanced;
         ConfigureAccounts(_accountsBox); ConfigureAccounts(_boundAccount);
-        Add(_form, "NP-підключення для редагування", _accountsBox);
+        Add(advanced, "NP-підключення для редагування", _accountsBox);
         var add = new Button { Content = "Додати NP-підключення", HorizontalAlignment = HorizontalAlignment.Left };
         add.Click += (_, _) => { CommitAccount(); var account = new NovaPoshtaConnection(Guid.NewGuid().ToString("N"), $"NP — підключення {_accounts.Count + 1}", ""); _accounts.Add(account); ReloadAccounts(account.Id); };
-        _form.Children.Add(add);
-        Add(_form, "Назва підключення", _name);
-        Add(_form, "API-ключ (порожнє поле зберігає попередній; значення не показується)", _key);
+        advanced.Children.Add(add);
+        Add(advanced, "Назва підключення", _name);
+        Add(advanced, "API-ключ (порожнє поле зберігає попередній; значення не показується)", _key);
         _accountsBox.SelectionChanged += (_, _) =>
         {
             if (_updating) return;
@@ -46,27 +49,41 @@ public sealed class NovaPoshtaConnectionWindow : Window
         };
         _stores.DisplayMemberPath = nameof(MarketplaceConnection.Name); _stores.SelectedValuePath = nameof(MarketplaceConnection.Id);
         _stores.ItemsSource = marketplaces.Connections.Where(c => c.Enabled && c.Marketplace == MarketplaceKind.Prom).ToArray();
-        Add(_form, "Магазин Prom", _stores); Add(_form, "Явне NP-підключення цього магазину (без автоматичного перебору акаунтів)", _boundAccount);
+        if (_stores.Items.Count > 1) Add(_form, "Магазин Prom", _stores);
+        else
+        {
+            _stores.Visibility = Visibility.Collapsed;
+            _form.Children.Add(new TextBlock { Text = (_stores.ItemsSource as MarketplaceConnection[])?.SingleOrDefault()?.Name ?? "Немає увімкненого магазину Prom.", Margin = new Thickness(0,10,0,3) });
+        }
+        Add(advanced, "NP-підключення магазину", _boundAccount);
         _stores.SelectionChanged += (_, _) =>
         {
             CommitBinding(); _storeId = _stores.SelectedValue as string;
             _boundAccount.SelectedValue = _storeId is not null && _bindings.TryGetValue(_storeId, out var id) ? id : "";
+            if (_boundAccount.SelectedValue is string boundId && boundId.Length > 0) _accountsBox.SelectedValue = boundId;
         };
         ReloadAccounts(_accounts.FirstOrDefault()?.Id);
         _stores.SelectedValue = order?.Key.ConnectionId;
         if (_stores.SelectedItem is null && _stores.Items.Count > 0) _stores.SelectedIndex = 0;
-        Add(_form, "Конкретна існуюча накладна вибраного замовлення Prom", _shipments);
+        Add(_form, "Накладна вибраного замовлення", _shipments);
         if (order?.Key.Marketplace == MarketplaceKind.Prom)
             foreach (var shipment in ShippingCarrierNames.ForOrder(order).Where(s => s.Carrier == ShippingCarrier.NovaPoshta))
                 _shipments.Items.Add(new ComboBoxItem { Content = $"Замовлення №{order.Number} · ТТН {shipment.TrackingNumber}", Tag = shipment });
         if (_shipments.Items.Count > 0) _shipments.SelectedIndex = 0;
-        else _status.Text = "Виберіть рядок замовлення Prom із наявною ТТН у таблиці, потім відкрийте ці налаштування. Ключ можна зберегти зараз; перевірка очікує вибору накладної.";
-        Add(_form, "Період створення ТТН, від (не дата замовлення; максимум 7 днів)", _from); Add(_form, "До", _to);
+        else _status.Text = "Спочатку виберіть замовлення Prom із ТТН у таблиці.";
+        if (_shipments.Items.Count > 0) _status.Text = NovaPoshtaKeySettings.HasSavedKey(original, _storeId)
+            ? "Ключ збережено. Натисніть «Перевірити наявну накладну»." : "Спочатку збережіть API-ключ у налаштуваннях наклейок.";
+        var periodText = new TextBlock { Margin = new Thickness(0,8,0,0), FontSize = 11,
+            ToolTip = "Період створення ТТН (не замовлення), до 7 днів. Змінюється в розширених налаштуваннях. Автоматичний перебір інших періодів або акаунтів не виконується." };
+        void ShowPeriod() => periodText.Text = $"Період перевірки ТТН: {_from.SelectedDate:dd.MM.yyyy} — {_to.SelectedDate:dd.MM.yyyy}.";
+        _from.SelectedDateChanged += (_, _) => ShowPeriod(); _to.SelectedDateChanged += (_, _) => ShowPeriod(); ShowPeriod(); _form.Children.Add(periodText);
+        Add(advanced, "Період створення ТТН, від (максимум 7 днів)", _from); Add(advanced, "До", _to);
+        _form.Children.Add(_advanced);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0,12,0,12) };
         var save = new Button { Content = "Зберегти NP-підключення", Padding = new Thickness(8), Margin = new Thickness(0,0,8,0) };
         save.Click += async (_, _) => { try { _form.IsEnabled = false; await SaveAsync(); ReloadAccounts(_editingId); _status.Text = "NP-підключення захищено збережено. Це не перевірка API або доступу до PDF."; } catch (Exception) { _status.Text = "Не вдалося зберегти NP. Перевірте назву, формат ключа й вибір підключення; секрет приховано."; } finally { _form.IsEnabled = true; } };
         var check = new Button { Content = "Перевірити наявну накладну", Padding = new Thickness(8) }; check.Click += Check;
-        buttons.Children.Add(save); buttons.Children.Add(check); _form.Children.Add(buttons);
+        advanced.Children.Add(save); buttons.Children.Add(check); _form.Children.Add(buttons);
         root.Children.Add(_status); _cancel.Click += (_, _) => _cancellation?.Cancel(); root.Children.Add(_cancel);
         root.Children.Add(new Button { Content = "Закрити", IsCancel = true, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0,12,0,0), Padding = new Thickness(10,6,10,6) });
         Closed += (_, _) => _cancellation?.Cancel();
@@ -81,7 +98,8 @@ public sealed class NovaPoshtaConnectionWindow : Window
         var index = _accounts.FindIndex(c => c.Id == _editingId);
         if (index < 0) return;
         var old = _accounts[index];
-        _accounts[index] = old with { Name = _name.Text.Trim(), ApiKey = _key.Password.Length > 0 ? _key.Password.Trim() : old.ApiKey };
+        var key = _key.Password.Trim();
+        _accounts[index] = old with { Name = _name.Text.Trim(), ApiKey = key.Length > 0 ? key : old.ApiKey };
         _key.Clear();
     }
     private void ShowAccount(string? id)
@@ -124,7 +142,7 @@ public sealed class NovaPoshtaConnectionWindow : Window
             if (connection.ApiKey.Length == 0) { _status.Text = "Очікує локального введення ключа"; return; }
             if (_from.SelectedDate is not DateTime from || _to.SelectedDate is not DateTime to) throw new InvalidOperationException("Явно виберіть період перевірки ТТН.");
             var period = new NovaPoshtaSearchPeriod(DateOnly.FromDateTime(from), DateOnly.FromDateTime(to)); period.Validate();
-            _cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(5)); _form.IsEnabled = false; _cancel.IsEnabled = true;
+            _cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(5)); _form.IsEnabled = false; _cancel.IsEnabled = true; _cancel.Visibility = Visibility.Visible;
             await SaveAsync(_cancellation.Token);
             _status.Text = "Читаю лише вибраний період NP-акаунта; потім перевіряю PDF. Друк не запускається…";
             var result = await _diagnostics.CheckAsync(connection, shipment, period, _cancellation.Token);
@@ -139,6 +157,6 @@ public sealed class NovaPoshtaConnectionWindow : Window
         }
         catch (OperationCanceledException) { _status.Text = "Перевірку скасовано або вичерпано її час. Друк не виконувався."; }
         catch (Exception ex) { _status.Text = ex is ShippingLabelException or InvalidOperationException ? ex.Message : "Перевірка NP не завершена; технічні деталі приховано для захисту ключа."; }
-        finally { _cancellation?.Dispose(); _cancellation = null; _form.IsEnabled = true; _cancel.IsEnabled = false; }
+        finally { _cancellation?.Dispose(); _cancellation = null; _form.IsEnabled = true; _cancel.IsEnabled = false; _cancel.Visibility = Visibility.Collapsed; }
     }
 }

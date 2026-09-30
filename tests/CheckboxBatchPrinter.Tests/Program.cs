@@ -90,6 +90,7 @@ internal static class Program
         Tests.AddRange(OrderHeaderPrintTests.All);
         Tests.AddRange(ShippingLabelsTests.All);
         Tests.AddRange(NovaPoshtaDirectTests.All);
+        Tests.AddRange(SimpleShippingSettingsTests.All);
         Tests.AddRange(MarketplaceViewModelTests.ShippingScenarios);
         Tests.AddRange(MarketplaceViewModelTests.All);
         var failed = 0;

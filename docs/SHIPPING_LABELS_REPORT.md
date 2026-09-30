@@ -1,5 +1,22 @@
 # Shipping labels — implementation and acceptance
 
+## 1.0.9 — simplified label / NP settings (2026-09-30)
+
+Started at clean `e6a9234346cc62bcb3679a2f1d45026059671d74`, branch `codex/checkbox-marketplace-orders`. Only settings UX, its key-application helper, tests, version and explanations changed; no API/backend/matching contracts changed.
+
+- Primary label settings: printer, actual driver format, copies, and **one masked NP API-key field for the selected enabled Prom shop**. A single shop needs no account/binding selector. Multiple shops require an explicit selection (or the selected order's shop); typed drafts never migrate between shops. Saving creates the explicit account/binding internally, not an HTTP connection test or permission to print a PDF.
+- Scale, offsets, orientation, RD token, Seller routing, account management and technical notes remain available under a collapsed **Розширені налаштування**. Existing values are not reset. Stored secrets are never populated into password boxes. Trim-empty input preserves the previous key/token. Key-only save reads latest settings, preserving newer printer, Seller and RD settings; it also works without a label printer.
+- Existing private NP account rotates in place; changing a shared account for one shop creates a separate account/binding for that shop only. Unbound legacy accounts are not guessed, reused or deleted. Account limits still apply. Existing settings schema/DPAPI protection and stable history paths are unchanged; no receipt/label history migration is needed.
+- The NP diagnostic window primarily shows the selected shop/TTN, a clearly displayed bounded period and a manual check button. Account/name/key/binding/date controls are collapsed. Its default TTN-creation window is the last **7 days**, not a new automatic scan; the user can change it explicitly within the existing 1–7-day bound. Saving settings makes no API request. The concrete PDF identity/completeness checks, session approval, rotation invalidation and all-or-nothing packet guard are unchanged.
+
+Verification: **279/279 Release Development tests passed** (all previous 267 plus 12 new groups). New tests exercise pure key transitions, private/shared/unbound store identities, invalid keys/overflow, encrypted restart with unchanged history, actual Windows/STA simplified layout, shop-switch drafts, cancellation, latest-settings preservation and no-printer save. Existing manual NP request/reentry/cancellation and PDF/backend tests remain. Synthetic settings views were rasterized and visually inspected. Build has the existing WFAC010 DPI-manifest warning, no errors. Normal save tests use unshown windows; end-user modal interaction with real credentials remains to be accepted locally.
+
+Published a self-contained win-x64 single-file Development preview into `artifacts/development/1.0.9-simple-np-settings`. Copying only that EXE into a fresh directory and launching/restarting it with the guarded synthetic offline profile passed (`Test-ProductionPackage.ps1`, .NET 8.0.31). Its revision metadata carries the `-dirty-simple-np-settings` suffix because that preview was built before the release commit. It is not the Production release payload.
+
+No real NP/RD/Checkbox requests, fiscal operations or physical print were performed. During development the installed Production 1.0.8 EXE/profile were not replaced or migrated (EXE SHA256 `2A5B2EB6BEEBDF2862FB4E7A0CF3903351A0334FC23676C48FAE8926CF8EAD72`). The user's subsequent explicit production-update request uses the standard clean-commit `scripts/Build-Production.ps1` workflow: both channel test suites, copied-EXE restart/isolation checks and separate immutable Production-FDD output. Deployment creates a private profile backup and old-EXE backup, atomically replaces only the EXE with the app closed, then verifies every existing profile file unchanged. Package `build-info.json`, `SHA256SUMS.txt` and the local deployment record identify the actual release/result; this paragraph alone does not confirm installation. Real NP account access, genuine PDFs and paper output remain unverified. The following sections are historical.
+
+---
+
 ## Current follow-up: direct NP diagnostics implemented, real acceptance awaiting key
 
 2026-09-27. Started at clean HEAD `2bb07400558934cbd55ffe46c66739dde71659f8`, branch `codex/checkbox-marketplace-orders`; GitHub branch matched. No newer/user work reverted. Production is not a deployment/data source.
