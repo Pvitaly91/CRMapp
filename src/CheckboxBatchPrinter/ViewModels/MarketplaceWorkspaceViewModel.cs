@@ -762,21 +762,18 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
                 foreach (var (id, match) in CalculateMatches(interactive, MatchScope, _coverageComplete,
                              orders, decisions, _legacyCoverageVerified)) matches[id] = match;
             }
-            else if (_backgroundFrom is { } activeFrom && _backgroundTo is { } activeTo)
-            {
-                // If recent dates are visible, keep their interactive scope but evaluate
-                // only the overlapping days, not the entire historical selection.
-                var visibleRecent = _rows.Where(r => IsInRange(r, _from, _to) && IsInRange(r, activeFrom, activeTo)).ToArray();
-                foreach (var (id, match) in CalculateMatches(visibleRecent, MatchScope, _coverageComplete,
-                             orders, decisions, _legacyCoverageVerified, useCache: false)) matches[id] = match;
-            }
             if (_backgroundFrom is { } backgroundFrom && _backgroundTo is { } backgroundTo)
             {
                 // Same-day matching makes these disjoint date groups independent. Never
-                // re-run a graph over the entire retained archive on every timer tick.
+                // let incomplete interactive coverage override a verified recent graph.
                 var recent = _rows.Where(r => IsInRange(r, backgroundFrom, backgroundTo)).ToArray();
-                foreach (var (id, match) in CalculateMatches(recent, ScopeFor(backgroundFrom, backgroundTo),
-                             HasCoverage(backgroundFrom, backgroundTo), orders, decisions, false))
+                var scope = ScopeFor(backgroundFrom, backgroundTo);
+                var freshCoverage = HasCoverage(backgroundFrom, backgroundTo) &&
+                    (!CoordinatorManaged || ReceiptCoverageFresh) &&
+                    _config.Connections.Where(c => c.Enabled).All(c => _snapshot.States.Any(s =>
+                        s.ConnectionId == c.Id && s.Complete && s.Range == scope.OrderRange));
+                foreach (var (id, match) in CalculateMatches(recent, scope,
+                             freshCoverage, orders, decisions, false, restoreBackgroundCache: true))
                     if (!matches.ContainsKey(id)) matches[id] = match;
             }
         }
@@ -806,17 +803,16 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     private IReadOnlyDictionary<string, ReceiptOrderMatch> CalculateMatches(
         IReadOnlyList<ReceiptRowViewModel> rows, AmountMatchScope matchScope, bool complete,
         IReadOnlyList<MarketplaceOrder> orders, IReadOnlyList<ReceiptOrderDecision> decisions, bool legacyCoverage,
-        bool useCache = true)
+        bool restoreBackgroundCache = false)
     {
         if (rows.Count == 0) return new Dictionary<string, ReceiptOrderMatch>();
         var receipts = rows.Select(row => row.Model).ToArray();
         var ids = rows.Select(row => row.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var details = _receiptDetails.Where(p => ids.Contains(p.Key)).ToDictionary(p => p.Key, p => p.Value);
         var loading = _loadingDetails.Where(ids.Contains).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (!useCache)
-            return new ReceiptOrderMatchingService().MatchAll(receipts, _account, orders, decisions,
-                complete, details, matchScope, loading);
-        if (_allowCachedRestore && !complete &&
+        var allowRestore = _allowCachedRestore || restoreBackgroundCache &&
+            _matcher.HasVerifiedSnapshot(_automaticCache, _account, matchScope, EnabledConnectionIds);
+        if (allowRestore && !complete &&
             _matcher.TryRestore(_automaticCache, receipts, _account, orders, decisions, out var restored,
                 details, matchScope, loading, EnabledConnectionIds, legacyCoverage))
         {
@@ -826,7 +822,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         }
         var calculated = _matcher.MatchAll(_automaticCache, receipts, _account, orders, decisions,
             complete, details, matchScope, loading, EnabledConnectionIds).Matches;
-        if (!_allowCachedRestore || complete) return calculated;
+        if (!allowRestore || complete) return calculated;
         var known = _matcher.RestoreKnownSuggestions(_automaticCache, receipts, _account, orders,
             decisions, details, matchScope, loading, EnabledConnectionIds);
         if (known.Count == 0) return calculated;
