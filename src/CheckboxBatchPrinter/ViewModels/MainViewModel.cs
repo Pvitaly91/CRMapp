@@ -444,7 +444,8 @@ public sealed class MainViewModel : ObservableObject
         var selected = tab.View.Cast<ReceiptRowViewModel>().Where(tab.IsMarked).ToArray();
         if (selected.Length == 0) return;
         var hiddenCount = HiddenSelectedCount;
-        var items = selected.Select((row, index) => new PrintBatchItem(index + 1, row.Id, row.Serial, row.Marketplace, row.OrderNumber)).ToArray();
+        var items = selected.Select((row, index) => new PrintBatchItem(index + 1, row.Id, row.Serial,
+            row.Marketplace, row.OrderNumber, ReceiptPrintHeader.TrackingFor(row.OrderMatch?.Order))).ToArray();
 
         IsBusy = true;
         IsPrinting = true;
@@ -486,7 +487,7 @@ public sealed class MainViewModel : ObservableObject
                     row.PrintStatus = PrintItemStatus.Downloading;
                     var png = await _imageService.GetPngAsync(row.Id, (int)Math.Round(settings.EffectivePaperWidthMm), cancellationToken);
                     row.PrintStatus = PrintItemStatus.Printing;
-                    await _printService.PrintReceiptAsync(new PrintReceiptDocument(png, row.Id, items[0].OrderNumber), settings, cancellationToken);
+                    await _printService.PrintReceiptAsync(new PrintReceiptDocument(png, row.Id, items[0].OrderNumber, items[0].TrackingText), settings, cancellationToken);
                     row.PrintStatus = PrintItemStatus.Done;
                     tab.SetMarked(row, false);
                     _logger.Info("receipt.print", row.Id, printStatus: "done");
@@ -511,7 +512,7 @@ public sealed class MainViewModel : ObservableObject
                     {
                         row.PrintStatus = PrintItemStatus.Downloading;
                         var png = await _imageService.GetPngAsync(row.Id, (int)Math.Round(settings.EffectivePaperWidthMm));
-                        loaded.Add((new PrintReceiptDocument(png, row.Id, items[i].OrderNumber), row));
+                        loaded.Add((new PrintReceiptDocument(png, row.Id, items[i].OrderNumber, items[i].TrackingText), row));
                     }
                     catch (Exception exception)
                     {

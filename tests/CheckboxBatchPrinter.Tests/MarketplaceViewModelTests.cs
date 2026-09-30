@@ -39,6 +39,8 @@ internal static partial class MarketplaceViewModelTests
         ("STA marketplace sync inside confirmation cannot change immutable batch", () => StaAsync(ConfirmationSyncAsync)),
         ("STA unlinked receipts print and confirmation count matches backend", () => StaAsync(UnlinkedPrintAsync)),
         ("STA single linked receipts and mixed batches print frozen order numbers from confirmation", () => StaAsync(PrintedOrderNumbersAsync)),
+        ("STA single receipt prints frozen NP or Rozetka TTN from its linked order", () => StaAsync(PrintedTrackingSingleAsync)),
+        ("STA mixed receipt batch freezes each order's TTNs without unknown carrier or unlinked headers", () => StaAsync(PrintedTrackingBatchAsync)),
         ("STA failed PNG preparation never submits a smaller confirmed batch", () => StaAsync(ImageFailureAsync)),
         ("STA cancelled confirmation never submits or changes print history", () => StaAsync(CancelPrintAsync)),
         ("STA marketplace sync preserves selection, confirmed print batch and existing print history", () => StaAsync(ConcurrentPrintAsync)),

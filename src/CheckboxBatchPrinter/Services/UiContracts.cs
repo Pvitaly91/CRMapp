@@ -4,7 +4,7 @@ using CheckboxBatchPrinter.ViewModels;
 namespace CheckboxBatchPrinter.Services;
 
 // Order metadata belongs to the confirmed batch, not live rows during printing.
-public sealed record PrintReceiptDocument(byte[] Png, string ReceiptId, string OrderNumber = "");
+public sealed record PrintReceiptDocument(byte[] Png, string ReceiptId, string OrderNumber = "", string TrackingText = "");
 
 public interface IPrintService
 {

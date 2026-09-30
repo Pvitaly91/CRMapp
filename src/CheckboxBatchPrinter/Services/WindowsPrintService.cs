@@ -33,7 +33,7 @@ public sealed class WindowsPrintService : IPrintService
             using var server = new LocalPrintServer();
             using var queue = FindQueue(server, settings.PrinterName);
             var source = DecodeGrayscale(receipt.Png);
-            var page = BuildPage(source, settings, out var pageWidth, out var pageHeight, receipt.OrderNumber);
+            var page = BuildPage(source, settings, out var pageWidth, out var pageHeight, receipt.OrderNumber, receipt.TrackingText);
             var ticket = BuildTicket(queue, pageWidth, pageHeight);
             var dialog = new PrintDialog { PrintQueue = queue, PrintTicket = ticket };
             dialog.PrintVisual(page, $"Checkbox чек {receipt.ReceiptId}");
@@ -109,13 +109,13 @@ public sealed class WindowsPrintService : IPrintService
     }
 
     internal static FixedPage BuildPage(BitmapSource source, AppSettings settings, out double pageWidth, out double pageHeight,
-        string orderNumber = "")
+        string orderNumber = "", string trackingText = "")
     {
         var geometry = PrintGeometry.Calculate(source.PixelWidth, source.PixelHeight, settings.PrintableWidthMm, settings.EffectivePaperWidthMm);
         // Size the print ticket to the printable head width. The physical roll
         // can be wider, but centering on that width shifts or clips the image.
         pageWidth = geometry.WidthDip;
-        var header = CreateOrderHeader(pageWidth, orderNumber);
+        var header = CreateOrderHeader(pageWidth, orderNumber, trackingText);
         var headerHeight = OrderHeaderHeight(header);
         pageHeight = geometry.HeightDip + geometry.MarginDip * 2 + headerHeight;
         var image = new Image
@@ -158,7 +158,7 @@ public sealed class WindowsPrintService : IPrintService
 
         pageWidth = geometries.Max(item => item.WidthDip);
         var headerWidth = pageWidth;
-        var headers = receipts.Select(item => CreateOrderHeader(headerWidth, item.OrderNumber)).ToArray();
+        var headers = receipts.Select(item => CreateOrderHeader(headerWidth, item.OrderNumber, item.TrackingText)).ToArray();
         var outerMargin = MillimetersToDip(0.6);
         var separatorPadding = MillimetersToDip(0.8);
         var separatorThickness = MillimetersToDip(0.3);
@@ -213,12 +213,13 @@ public sealed class WindowsPrintService : IPrintService
         return page;
     }
 
-    private static TextBlock? CreateOrderHeader(double width, string orderNumber)
+    private static TextBlock? CreateOrderHeader(double width, string orderNumber, string trackingText)
     {
-        if (string.IsNullOrWhiteSpace(orderNumber)) return null;
+        var text = ReceiptPrintHeader.Text(orderNumber, trackingText);
+        if (text.Length == 0) return null;
         var header = new TextBlock
         {
-            Text = $"Замовлення №{orderNumber.Trim()}",
+            Text = text,
             Width = width,
             FontFamily = new FontFamily("Segoe UI"),
             FontSize = 10,

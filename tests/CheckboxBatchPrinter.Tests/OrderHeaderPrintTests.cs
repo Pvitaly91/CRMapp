@@ -14,7 +14,9 @@ internal static class OrderHeaderPrintTests
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
         ("STA printed order number fits above single receipt without cropping at96/203/300dpi", () => Sta(Single)),
-        ("STA mixed batch prints each linked number above its own unchanged image without blank headers", () => Sta(Batch))
+        ("STA mixed batch prints each linked number above its own unchanged image without blank headers", () => Sta(Batch)),
+        ("STA NP Rozetka and multiple TTNs fit full single-receipt header at96/203/300dpi", () => Sta(SingleTracking)),
+        ("STA mixed batch keeps each TTN above its own receipt and omits absent tracking", () => Sta(BatchTracking))
     ];
 
     private static Task Sta(Action test)
@@ -100,6 +102,78 @@ internal static class OrderHeaderPrintTests
     {
         var raster = new RenderTargetBitmap((int)Math.Ceiling(page.Width * dpi / 96), (int)Math.Ceiling(page.Height * dpi / 96), dpi, dpi, PixelFormats.Pbgra32);
         raster.Render(page); return raster;
+    }
+
+    private static void SingleTracking()
+    {
+        var source = Source();
+        foreach (var printableWidth in new[] { 32d, 48d })
+        foreach (var tracking in new[] { "НП: 20400000000000", "Rozetka Delivery: 100000000000000001",
+            "НП: 20400000000000; НП: 20400000000001; Rozetka Delivery: 100000000000000001" })
+        {
+            var settings = new AppSettings { PaperWidth = PaperWidth.Mm50, PrintableWidthMm = printableWidth };
+            var page = WindowsPrintService.BuildPage(source, settings, out var width, out var height,
+                "430000001", tracking);
+            var image = page.Children.OfType<Image>().Single();
+            var header = page.Children.OfType<TextBlock>().Single();
+            Check(header.Text == "Замовлення №430000001 · ТТН " + tracking, "TTN changed or truncated.");
+            Check(header.FontSize == 10 && header.TextWrapping == TextWrapping.Wrap, "Small wrapping header changed.");
+            Check(header.ActualWidth <= width && FixedPage.GetTop(header) + header.ActualHeight < FixedPage.GetTop(image),
+                "TTN header cropped or overlaps receipt.");
+            Check(FixedPage.GetTop(image) + image.Height <= height && ReferenceEquals(source, image.Source), "Receipt source or edges changed.");
+            foreach (var dpi in new[] { 96d, 203d, 300d })
+            {
+                var raster = Raster(page, dpi);
+                VerifyInk(raster, dpi, [image], [header]);
+                VerifyLastHeaderLine(raster, dpi, header);
+                if (printableWidth == 48 && tracking == "НП: 20400000000000" && dpi == 203)
+                    SaveSample(raster, "printed-order-ttn-single.png");
+            }
+            var unlinked = WindowsPrintService.BuildPage(source, settings, out _, out _, "", tracking);
+            Check(!unlinked.Children.OfType<TextBlock>().Any(), "Unlinked receipt printed a TTN header.");
+        }
+    }
+
+    private static void BatchTracking()
+    {
+        var png = Png(Source()); var original = png.ToArray();
+        var docs = new[] { new PrintReceiptDocument(png, "np", "430000001", "НП: 20400000000000"),
+            new PrintReceiptDocument(png, "rz", "430000002", "Rozetka Delivery: 100000000000000001"),
+            new PrintReceiptDocument(png, "no-ttn", "430000003"), new PrintReceiptDocument(png, "unlinked") };
+        var page = WindowsPrintService.BuildBatchPage(docs,
+            new() { PaperWidth = PaperWidth.Mm50, PrintableWidthMm = 48 }, out _, out var height);
+        var images = page.Children.OfType<Image>().ToArray(); var headers = page.Children.OfType<TextBlock>().ToArray();
+        Check(images.Length == 4 && headers.Length == 3 && page.Children.OfType<Border>().Count() == 3,
+            "Batch image/header/separator count changed.");
+        var expected = new[] { "Замовлення №430000001 · ТТН НП: 20400000000000",
+            "Замовлення №430000002 · ТТН Rozetka Delivery: 100000000000000001", "Замовлення №430000003" };
+        Check(headers.Select(h => h.Text).SequenceEqual(expected), "Batch TTN attached to another receipt.");
+        for (var i = 0; i < headers.Length; i++)
+        {
+            Check(FixedPage.GetTop(headers[i]) + headers[i].ActualHeight < FixedPage.GetTop(images[i]), "TTN overlaps its receipt.");
+            if (i > 0) Check(FixedPage.GetTop(headers[i]) > FixedPage.GetTop(images[i-1]) + images[i-1].Height,
+                "TTN moved above a preceding receipt.");
+        }
+        Check(FixedPage.GetTop(images[^1]) + images[^1].Height <= height && png.SequenceEqual(original), "Batch PNG changed or bottom cropped.");
+        foreach (var dpi in new[] { 96d, 203d, 300d })
+        {
+            var raster = Raster(page, dpi); VerifyInk(raster, dpi, images, headers);
+            foreach (var header in headers) VerifyLastHeaderLine(raster, dpi, header);
+            if (dpi == 203) SaveSample(raster, "printed-order-ttn-batch.png");
+        }
+    }
+
+    private static void VerifyLastHeaderLine(BitmapSource raster, double dpi, TextBlock header)
+    {
+        var scale = dpi / 96; var stride = raster.PixelWidth * 4; var pixels = new byte[stride * raster.PixelHeight];
+        raster.CopyPixels(pixels, stride, 0);
+        var ink = 0;
+        // Verify the last wrapped line contains actual glyphs, not only a correctly sized file.
+        var bottom = FixedPage.GetTop(header) + header.ActualHeight;
+        for (var y = (int)((bottom - Math.Min(10, header.ActualHeight * 0.7)) * scale); y < Math.Ceiling(bottom * scale); y++)
+        for (var x = 0; x < raster.PixelWidth; x++)
+            if (y >= 0 && y < raster.PixelHeight && pixels[y * stride + x * 4] < 140 && pixels[y * stride + x * 4 + 3] > 200) ink++;
+        Check(ink > 10, $"Last TTN/order line not rasterized at {dpi}dpi.");
     }
 
     private static void VerifyInk(BitmapSource raster, double dpi, Image[] images, TextBlock[] headers)
