@@ -47,3 +47,4 @@ $refused = $false
 try { Copy-ProfileOnce -Source $source -Destination ($destination + '-invalid') -BackupParent $root -Confirm:$false } catch { $refused = $true }
 Assert ($refused -and -not (Test-Path -LiteralPath ($destination + '-invalid'))) 'Invalid DPAPI accepted'
 Write-Host "PASS migration: confirmation/WhatIf, protected backup, unchanged source, encrypted copy, printer/history, existing destination and invalid DPAPI refusal. Synthetic fixtures: $root"
+& (Join-Path $PSScriptRoot 'Test-ProductionUpdate.ps1')

@@ -22,7 +22,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build-Production.p
 
 Тести: скрипти Runtime/міграції на штучних даних; усі консольні тести для Development і Production; single-file EXE копіюється окремо в TEMP поза репозиторієм й двічі запускається через apphost з іншої CWD. `--verify-package` — явна offline-діагностика пакування: лише TEMP із маркером, синтетичні налаштування, створення/растеризація WPF-вікон, без production bootstrap, реальних секретів, HTTP-клієнтів або принтера. Звичайний запуск не приймає довільний data-root. Діагностичні дані/рендери не входять до ZIP.
 
-Повний комплект: `app/CheckboxBatchPrinter.exe`, `Ensure-DesktopRuntime.ps1`, `RuntimeSupport.psm1`, `Copy-DevelopmentProfile.ps1`, `ProfileMigration.psm1`, `README.md`, `build-info.json`, `SHA256SUMS.txt`. Жодних секретів/кешів/бекапів/тестових binaries/SDK/runtime DLL. Скрипт перевіряє однофайловий publish, а не видаляє залежності після нього.
+Повний комплект: `app/CheckboxBatchPrinter.exe`, `Ensure-DesktopRuntime.ps1`, `RuntimeSupport.psm1`, `Copy-DevelopmentProfile.ps1`, `ProfileMigration.psm1`, `Update-Production.ps1`, `README.md`, `build-info.json`, `SHA256SUMS.txt`. Жодних секретів/кешів/бекапів/тестових binaries/SDK/runtime DLL. Скрипт перевіряє однофайловий publish, а не видаляє залежності після нього. `Test-Packaging.ps1` також перевіряє updater на синтетичних EXE/профілях: `-WhatIf`, відкритий процес, неправильні контрольні суми/канал, пониження версії, вибір останнього Production, запуск із розпакованого пакета, захищений backup, приховані файли й незмінність історії.
 
 ## Runtime та обмеження перевірки
 

@@ -43,7 +43,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Post-publish development build failed.' }
     if ((Get-FileHash -LiteralPath $files[0].FullName -Algorithm SHA256).Hash -ne $publishedHash) { throw 'Development build changed production EXE.' }
     Write-Host 'PASS ordinary development Release build did not change production EXE SHA-256.'
-    foreach ($file in @('Ensure-DesktopRuntime.ps1','RuntimeSupport.psm1','Copy-DevelopmentProfile.ps1','ProfileMigration.psm1')) {
+    foreach ($file in @('Ensure-DesktopRuntime.ps1','RuntimeSupport.psm1','Copy-DevelopmentProfile.ps1','ProfileMigration.psm1','Update-Production.ps1')) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $release
     }
     Copy-Item -LiteralPath (Join-Path $repo 'docs\PRODUCTION_README.md') -Destination (Join-Path $release 'README.md')

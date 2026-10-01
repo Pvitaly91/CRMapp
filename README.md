@@ -153,6 +153,10 @@ dotnet publish src/CheckboxBatchPrinter/CheckboxBatchPrinter.csproj -c Release -
 
 PDFium вбудовано в збірку; сторонній переглядач не потрібен. PDF із персональними даними не записується на диск. Окрема DPAPI-історія наклейок зберігається 365 днів у ShippingLabels профілю відповідного каналу й не змінює історію чеків. [Контракти API](docs/SHIPPING_LABELS_API_CONTRACT.md), [перевірки й обмеження](docs/SHIPPING_LABELS_REPORT.md).
 
+## Оновлення production
+
+Для оновлення встановленої production-програми закрийте її через меню трея → «Вийти» та запустіть `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Update-Production.ps1`. Скрипт встановить останній готовий production-пакет із `artifacts\production`, створить резервну копію EXE/профілю й збереже історію. `-Build` спочатку збере й перевірить поточний закомічений код; `-WhatIf` перевірить оновлення без запису. [Подробиці](docs/PRODUCTION_README.md#оновлення).
+
 ## Фізична перевірка
 
 Для end-to-end перевірки потрібні реальні облікові дані Checkbox та встановлений Windows-драйвер принтера. У «Налаштування → Діагностика» доступні перевірка API і тестовий друк. Жоден automated test не виконує фіскальних операцій.
