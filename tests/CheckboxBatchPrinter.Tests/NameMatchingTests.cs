@@ -9,8 +9,8 @@ internal static class NameMatchingTests
     [
         ("names: equal price and unit count resolve distinct product kinds in MatchAll", Run(DistinctKinds)),
         ("names: USB socket versus LED lighting separates full equal-total baskets, not individual prices", Run(SocketAndLighting)),
-        ("names: reordered plain names match without erasing numerical roles or accessory relations", Run(ReorderedNames)),
-        ("names: translation abbreviation composite and unknown contenders block arbitrary choice", Run(UnknownContenders)),
+        ("names: full name order numerical roles and accessory relations stay distinct", Run(ReorderedNames)),
+        ("names: exact full names distinguish translation abbreviation composite and arbitrary text", Run(UnknownContenders)),
         ("names: missing baskets duplicate names manual and fiscal priority remain guarded", Run(Guardrails)),
         ("names: old quantity-only memo is invalidated while cached details remain", Run(CacheVersion))
     ];
@@ -79,9 +79,16 @@ internal static class NameMatchingTests
                 for (var i = 0; i < 2; i++)
                 {
                     var match = matches[receipts[i].Id];
-                    Equal(ReceiptLinkState.Suggested, match.State); Equal(orders[i].Key, match.Order!.Key);
-                    Equal(translated ? ProductComparison.Insufficient : ProductComparison.Match, match.Products);
-                    True(match.Explanation.Contains("Тип товару в назві") && match.Explanation.Contains("освітлення"));
+                    if (translated)
+                    {
+                        Equal(ProductComparison.Contradiction, match.Products); True(match.Order is null);
+                    }
+                    else
+                    {
+                        Equal(ReceiptLinkState.Suggested, match.State); Equal(orders[i].Key, match.Order!.Key);
+                        Equal(ProductComparison.Match, match.Products);
+                    }
+                    True(match.Explanation.Contains("Повні назви"));
                 }
             }
         }
@@ -104,16 +111,16 @@ internal static class NameMatchingTests
             { [r310.Id] = new(r310.Id, [new(light, "", 1, 310, 310)]) { ItemListComplete = true } };
         var unmatched = matcher.MatchAll([r310], "name-account", differentTotals, [], true, lineDetails)[r310.Id];
         True(unmatched.Order is null && unmatched.State != ReceiptLinkState.Suggested);
-        Equal(ProductComparison.Insufficient, Match(socket, socketRu).Products);
-        Equal(ProductComparison.Insufficient, Match("USB розетка", "Автомобильная зарядка USB").Products);
+        Equal(ProductComparison.Contradiction, Match(socket, socketRu).Products);
+        Equal(ProductComparison.Contradiction, Match("USB розетка", "Автомобильная зарядка USB").Products);
     }
 
     private static void ReorderedNames()
     {
         foreach (var (a, b) in new[] { ("Червоний кабель USB", "Кабель USB червоний"), ("  КАБЕЛЬ\u00a0USB", "usb кабель") })
         {
-            Equal(ProductComparison.Match, Match(a, b).Products);
-            Equal(AutomaticLinkBasis.AmountAndProducts, Match(a, b).Basis);
+            Equal(ProductComparison.Contradiction, Match(a, b).Products);
+            True(Match(a, b).Order is null);
         }
         foreach (var (a, b) in new[]
         {
@@ -143,8 +150,10 @@ internal static class NameMatchingTests
             var orders = new[] { Order(1, candidate), Order(2, receiptName) };
             var match = matcher.MatchAll([r], "name-account", orders, [], true,
                 new Dictionary<string, ReceiptDetails> { [r.Id] = Detail(r, receiptName) })[r.Id];
-            Equal(ReceiptLinkState.Candidates, match.State);
-            True(match.Order is null && match.Ambiguous && match.CompetingOrderCount == 2);
+            Equal(ReceiptLinkState.Suggested, match.State);
+            Equal(orders[1].Key, match.Order!.Key);
+            Equal(AutomaticLinkBasis.AmountAndProducts, match.Basis);
+            True(!match.Ambiguous && match.CompetingOrderCount == 1 && match.Explanation.Contains("Повні назви"));
         }
     }
 
@@ -163,10 +172,10 @@ internal static class NameMatchingTests
         Equal(ReceiptLinkState.Exact, matcher.MatchAll([r], "name-account", [cable, sensor with { ReceiptIds = [r.Id] }], [], true, details)[r.Id].State);
         decision.ConfirmedOrder = null; decision.SuppressAutomatic = true;
         True(matcher.MatchAll([r], "name-account", [cable, sensor], [decision], true, details)[r.Id].Order is null);
-        // Known category nouns at the start may have bounded modifiers, but substrings are not nouns.
+        // Complete full names, including arbitrary words outside any category dictionary, discriminate.
         Equal(ProductComparison.Contradiction, Match("Быстрая авто зарядка USB", "Датчик руху").Products);
         Equal(ProductComparison.Contradiction, Match("Разъем XT30", "Вимикач").Products);
-        Equal(ProductComparison.Insufficient, Match("Кабельний тест", "Датчик").Products);
+        Equal(ProductComparison.Contradiction, Match("Кабельний тест", "Датчик").Products);
     }
 
     private static void CacheVersion()

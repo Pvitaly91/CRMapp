@@ -71,7 +71,7 @@ internal static partial class MarketplaceViewModelTests
         ("STA selected order and receipt require explicit confirmation and survive F5 restart", () => StaAsync(SelectedOrderManualAsync)),
         ("STA unique complete basket suggests a link without writing manual decisions", () => StaAsync(BasketSuggestedUiAsync)),
         ("STA amount matcher workspace tables display unique missing and contradictory products", () => StaAsync(AmountBasisUiAsync)),
-        ("STA translated cable A/B matcher workspace tables stay ambiguous through filters refresh and permutations", () => StaAsync(TranslatedCableUiAsync)),
+        ("STA different full translated cable names remain unlinked through tables filters refresh and permutations", () => StaAsync(TranslatedCableUiAsync)),
         ("STA equal sums distinguish products, while buyers and filters do not resolve identical orders", () => StaAsync(AmountGroupsUiAsync)),
         ("STA amount suggestions withdraw on new competitors and incomplete API, manual links survive restart", () => StaAsync(AmountRecomputeUiAsync)),
         ("STA item loading rechecks amount suggestion without changing print selection", () => StaAsync(AmountLoadingUiAsync)),
@@ -80,8 +80,10 @@ internal static partial class MarketplaceViewModelTests
         ("STA cached automatic links restore after restart without detail requests", () => StaAsync(CachedAutomaticRestartAsync)),
         ("STA cached links survive a new unrelated receipt and pending refresh", () => StaAsync(CachedAutomaticPartialRestartAsync)),
         ("STA201 count links flow through workspace tables cache and hidden competitor refresh", () => StaAsync(QuantityAutomaticUiAsync)),
-        ("STA name links flow through workspace tables cache and unknown hidden competitor refresh", () => StaAsync(NameAutomaticUiAsync)),
+        ("STA arbitrary full-name links flow through both tables cache and identical hidden competitor refresh", () => StaAsync(NameAutomaticUiAsync)),
         ("STA terminal-kit Prom order links while unrelated unconnected-marketplace switch receipt remains available", () => StaAsync(ContactUnconnectedMarketplaceUiAsync)),
+        ("STA payment links flow through both tables restart cache and hidden competitor refresh", () => StaAsync(PaymentAutomaticUiAsync)),
+        ("STA distinct product names take priority over payment in both tables and restart cache", () => StaAsync(NameBeforePaymentUiAsync)),
         ("STA Prom Ukrainian API names replace cached Russian names through refresh tables and restart", () => StaAsync(PromUkrainianNamesUiAsync)),
         ("STA automatic refresh loads details only for new receipts", () => StaAsync(CachedAutomaticNewReceiptAsync)),
         ("STA cached probable links yield to a new hidden competitor", () => StaAsync(CachedAutomaticCompetitorAsync)),
@@ -1362,14 +1364,15 @@ internal static partial class MarketplaceViewModelTests
         {
             var receipt = main.Receipts.Single();
             Equal(ReceiptLinkState.Candidates, receipt.OrderMatch!.State);
-            True(receipt.OrderMatch.Ambiguous && receipt.OrderMatch.Order is null);
-            Equal(2, receipt.OrderMatch.CompetingOrderCount); Equal(2, receipt.OrderMatch.Candidates.Count);
-            True(receipt.LinkStatus.Contains("Неоднозначно"));
+            True(!receipt.OrderMatch.Ambiguous && receipt.OrderMatch.Order is null);
+            Equal(ProductComparison.Contradiction, receipt.OrderMatch.Products);
+            Equal(0, receipt.OrderMatch.CompetingOrderCount); Equal(2, receipt.OrderMatch.Candidates.Count);
+            Equal("Сума збігається, товари суперечать", receipt.LinkStatus);
             True(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().All(row =>
-                !row.HasSuggestedLink && !row.HasConfirmedLink && row.LinkedReceipts.Count == 0 && row.LinkStatus.Contains("Неоднозначно")));
+                !row.HasSuggestedLink && !row.HasConfirmedLink && row.LinkedReceipts.Count == 0));
         }
         CheckTables();
-        workspace.OrderSearch = "B"; // Hidden A must still compete with B.
+        workspace.OrderSearch = "B"; // Hiding A must not manufacture a name match for B.
         Equal(1, workspace.Orders.Cast<object>().Count());
         await workspace.AutoMatchAsync(); CheckTables();
         workspace.OrderSearch = "";
@@ -1610,7 +1613,7 @@ internal static partial class MarketplaceViewModelTests
         var pending = OpenOrdersAsync(main, workspace);
         await fixture.Source.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         True(workspace.FiscalSummary.Contains("перевірка замовлень ще неповна"));
-        True(!workspace.FiscalSummary.Contains("Ймовірних за сумою й товарами: 0"));
+        True(!workspace.FiscalSummary.Contains("Ймовірних автозв’язків: 0"));
         fixture.Source.Gate.SetResult(true); await pending;
         foreach (var row in main.Receipts)
         {
@@ -2235,7 +2238,7 @@ internal static partial class MarketplaceViewModelTests
             True(ReferenceEquals(main.PreviewCommand, openReceipt.Command) && ReferenceEquals(amountRow, openReceipt.CommandParameter));
             await DrainDispatcherAsync();
             RenderSyntheticContent(mainWindow, "amount-links.png");
-            _xamlCheckpoint = "translated cable ambiguity in actual compiled tables";
+            _xamlCheckpoint = "different full translated cable names in actual compiled tables";
             var translatedOrder = Order() with
             {
                 Number = "A", Total = 290m, Buyer = null, ItemListComplete = true,
@@ -2249,18 +2252,19 @@ internal static partial class MarketplaceViewModelTests
             LayoutContent(mainWindow); await DrainDispatcherAsync();
             var cableRow = main.Receipts.Single();
             Equal(ReceiptLinkState.Candidates, cableRow.OrderMatch!.State);
-            Equal(2, cableRow.OrderMatch.CompetingOrderCount); True(cableRow.OrderMatch.Order is null);
+            Equal(0, cableRow.OrderMatch.CompetingOrderCount); True(cableRow.OrderMatch.Order is null);
+            Equal(ProductComparison.Contradiction, cableRow.OrderMatch.Products);
             var receiptLinkColumn = ordersGrid.Columns.Single(c => c.Header?.ToString() == "Зв’язок");
             ordersGrid.ScrollIntoView(cableRow, receiptLinkColumn); ordersGrid.UpdateLayout();
             var receiptLinkText = ((TextBlock)receiptLinkColumn.GetCellContent(cableRow)).Text;
-            Equal(cableRow.LinkStatus, receiptLinkText); True(receiptLinkText.Contains("Неоднозначно"));
+            Equal(cableRow.LinkStatus, receiptLinkText); Equal("Сума збігається, товари суперечать", receiptLinkText);
             var orderLinkColumn = marketplaceOrdersGrid.Columns.Single(c => c.Header?.ToString() == "Зв’язок із чеками");
             foreach (var cableOrder in workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Where(o => o.Key == translatedOrder.Key || o.Key == shortOrder.Key))
             {
                 True(!cableOrder.HasSuggestedLink && !cableOrder.HasConfirmedLink);
                 marketplaceOrdersGrid.ScrollIntoView(cableOrder, orderLinkColumn); marketplaceOrdersGrid.UpdateLayout();
                 var orderLinkText = ((TextBlock)orderLinkColumn.GetCellContent(cableOrder)).Text;
-                Equal(cableOrder.LinkStatus, orderLinkText); True(orderLinkText.Contains("Неоднозначно"));
+                Equal(cableOrder.LinkStatus, orderLinkText);
             }
             Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
             True(bindingFailures.Messages.Count == 0, "Compiled XAML binding errors: " + string.Join("\n", bindingFailures.Messages));

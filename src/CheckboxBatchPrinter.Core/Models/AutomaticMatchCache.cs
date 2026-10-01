@@ -25,6 +25,7 @@ public sealed record CachedReceiptMatch(ReceiptLinkState State, OrderKey? Order,
     IReadOnlyList<string> CompetingReceiptIds, int CompetingOrderCount, IReadOnlyList<OrderKey> GroupOrders, string Scope)
 {
     public string ReceiptFingerprint { get; init; } = "";
+    public PaymentComparison Payments { get; init; } = PaymentComparison.Insufficient;
     public string OrderFingerprint { get; init; } = "";
 }
 

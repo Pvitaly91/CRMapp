@@ -8,7 +8,7 @@ namespace CheckboxBatchPrinter.Core.Services;
 /// <summary>Memoizes complete graphs; individual saved pairs are shown only after validating the current local graph.</summary>
 public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider = null)
 {
-    public const string AlgorithmVersion = "same-kyiv-day-product-names-v4";
+    public const string AlgorithmVersion = "same-kyiv-day-full-names-payment-v7";
     public const int MaximumDetails = 5000;
     public const int MaximumSnapshots = 8;
     private const int MaximumMatchesPerSnapshot = 5000;
@@ -195,6 +195,7 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
     private static string OrderFingerprint(MarketplaceOrder order) => Hash(JsonSerializer.Serialize(new
     {
         order.Key, order.Total, order.Currency, order.CreatedAt, order.Items,
+        order.PaymentMethod, order.DeliveryMethod, ShippingCarriers = order.Shipments.Select(s => s.Carrier).Order(StringComparer.Ordinal).ToArray(),
         order.ItemsComplete, order.ItemListComplete, order.AmountComparisonIssue,
         order.Discount, order.DeliveryCost, order.ReceiptIds, order.FiscalReceiptNumbers,
         order.FiscalReceiptUrls, order.FiscalReferences,
@@ -204,12 +205,12 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
     private static CachedReceiptMatch Pack(ReceiptOrderMatch match, ReceiptRecord receipt) => new(match.State, match.Order?.Key, match.Explanation,
         match.Candidates.Select(o => o.Key).ToArray(), match.Basis, match.Products, match.Ambiguous,
         match.CompetingReceiptIds.ToArray(), match.CompetingOrderCount, match.GroupOrders.Select(o => o.Key).ToArray(), match.Scope)
-    { ReceiptFingerprint = ReceiptFingerprint(receipt), OrderFingerprint = match.Order is null ? "" : OrderFingerprint(match.Order) };
+    { Payments = match.Payments, ReceiptFingerprint = ReceiptFingerprint(receipt), OrderFingerprint = match.Order is null ? "" : OrderFingerprint(match.Order) };
 
     private static ReceiptOrderMatch Unpack(CachedReceiptMatch cached, IReadOnlyDictionary<OrderKey, MarketplaceOrder> orders, string scope) =>
         new(cached.State, cached.Order is null ? null : orders[cached.Order], cached.Explanation, cached.Candidates.Select(k => orders[k]).ToArray())
         {
-            Basis = cached.Basis, Products = cached.Products, Ambiguous = cached.Ambiguous,
+            Basis = cached.Basis, Products = cached.Products, Payments = cached.Payments, Ambiguous = cached.Ambiguous,
             CompetingReceiptIds = cached.CompetingReceiptIds, CompetingOrderCount = cached.CompetingOrderCount,
             GroupOrders = cached.GroupOrders.Select(k => orders[k]).ToArray(), Scope = scope.Length > 0 ? scope : cached.Scope
         };

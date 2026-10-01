@@ -16,6 +16,7 @@ internal static partial class PromOrdersTests
         ("Prom pages overlap safely, deduplicate and use UTC dates", PaginationAsync),
         ("Prom exclusive cursor and short pages are fully scanned", ExclusiveCursorAsync),
         ("Prom normalizes documented detail fields without guessing currency or receipts", DetailAsync),
+        ("Prom payment names and delivery carriers reach probable matcher without additional API requests", PaymentMatchingAsync),
         ("Prom prefers Ukrainian API product names in both list and detail for arbitrary goods", UkrainianNamesAsync),
         ("Prom missing empty or malformed Ukrainian names retain the original without guessing translations", UkrainianFallbackAsync),
         ("Prom Ukrainian API names match Checkbox baskets and invalidate old Russian-name graph cache", UkrainianMatchingCacheAsync),

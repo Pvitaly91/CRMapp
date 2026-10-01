@@ -13,7 +13,7 @@ internal static class ContactNameMatchingTests
     [
         ("contacts: one Prom order resolves matching receipt despite an unconnected marketplace receipt at equal price and quantity", Run(OneOrderTwoReceipts)),
         ("contacts: homogeneous terminal sets and switch contact descriptions identify different main products", Run(ContactVariants)),
-        ("contacts: mixed kits accessory descriptions missing data and identical receipts stay ambiguous", Run(UncertainNames)),
+        ("contacts: complete mixed kit names separate while missing data and identical receipts stay ambiguous", Run(UncertainNames)),
         ("contacts: old name graph expires while cached details recompute the correct pair", Run(CacheVersion))
     ];
     private static Func<Task> Run(Action test) => () => { test(); return Task.CompletedTask; };
@@ -52,8 +52,7 @@ internal static class ContactNameMatchingTests
             Check(!correct.Ambiguous && correct.CompetingReceiptIds.SequenceEqual([receipts[0].Id]), "Unrelated receipt still competes.");
             Equal(ProductComparison.Contradiction, unrelated.Products);
             Check(unrelated.Order is null && unrelated.State != ReceiptLinkState.Suggested, "Unrelated marketplace receipt acquired the Prom order.");
-            Check(unrelated.Explanation.Contains("Тип товару в назві") && unrelated.Explanation.Contains("клеми") &&
-                unrelated.Explanation.Contains("вимикач"), "Exclusion lacks a concrete product-type reason.");
+            Check(unrelated.Explanation.Contains("Повні назви"), "Exclusion lacks a concrete full-name reason.");
         }
         // Identical extra basket lines must not hide the differing main product.
         var extra = new OrderItem("Кабель USB", "", 1, 15, 15);
@@ -85,7 +84,7 @@ internal static class ContactNameMatchingTests
             Equal(ProductComparison.Contradiction, Compare(toggle, contacts));
         }
         Equal(ProductComparison.Match, Compare(Contacts, Contacts));
-        Equal(ProductComparison.Insufficient, Compare("Клеми кільцеві", "Клеммы кольцевые"));
+        Equal(ProductComparison.Contradiction, Compare("Клеми кільцеві", "Клеммы кольцевые"));
         Equal(ProductComparison.Contradiction, Compare("Клеми кільцеві 12 В", "Клеми кільцеві 24 В"));
     }
     private static void UncertainNames()
@@ -101,7 +100,13 @@ internal static class ContactNameMatchingTests
             var details = new Dictionary<string, ReceiptDetails>
             { [receipts[0].Id] = Detail(receipts[0], Contacts), [receipts[1].Id] = Detail(receipts[1], uncertain) };
             var match = new ReceiptOrderMatchingService().MatchAll(receipts, Account, [order], [], true, details)[receipts[0].Id];
-            Check(match.Order is null && match.Ambiguous, $"Uncertain or identical contender incorrectly excluded: {uncertain}");
+            if (uncertain == Contacts)
+                Check(match.Order is null && match.Ambiguous, "Identical receipt was incorrectly excluded.");
+            else
+            {
+                Equal(order.Key, match.Order!.Key);
+                Equal(AutomaticLinkBasis.AmountAndProducts, match.Basis);
+            }
         }
         var partial = new Dictionary<string, ReceiptDetails>
         { [receipts[0].Id] = Detail(receipts[0], Contacts), [receipts[1].Id] = Detail(receipts[1], Switch) with { ItemListComplete = false } };

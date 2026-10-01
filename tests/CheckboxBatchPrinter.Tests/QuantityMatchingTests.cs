@@ -25,9 +25,10 @@ internal static class QuantityMatchingTests
     };
     private static OrderItem[] Single => [new("Кабель живлення", "", 1, 201, 201)];
     private static OrderItem[] Double => [new("Кабель живлення", "", 1, 100, 100), new("Адаптер живлення", "", 1, 101, 101)];
+    // Isolate the secondary count-only rule: unavailable names are not mismatched names.
     private static ReceiptDetails Details(ReceiptRecord r, bool two) => new(r.Id, two
-        ? [new("Кабель питания", "", 1, 100, 100), new("Адаптер питания", "", 1, 101, 101)]
-        : [new("Кабель питания", "", 1, 201, 201)]) { ItemListComplete = true };
+        ? [new("", "", 1, 100, 100), new("", "", 1, 101, 101)]
+        : [new("", "", 1, 201, 201)]) { ItemListComplete = true };
     private static void Equal<T>(T expected, T actual)
     { if (!EqualityComparer<T>.Default.Equals(expected, actual)) throw new Exception($"Expected {expected}; got {actual}."); }
     private static void True(bool value) { if (!value) throw new Exception("Quantity scenario assertion failed."); }
@@ -50,7 +51,7 @@ internal static class QuantityMatchingTests
                 Equal(orders[i].Key, match.Order!.Key);
                 True(!match.Ambiguous && match.CompetingOrderCount == 1);
                 Equal(AutomaticLinkBasis.AmountAndQuantity, match.Basis);
-                Equal(ProductComparison.Insufficient, match.Products); // Count does not prove translated names identical.
+                Equal(ProductComparison.Insufficient, match.Products); // Count does not invent unavailable names.
                 True(match.Explanation.Contains("Кількість товарних одиниць") && match.Explanation.Contains("Виключено"));
                 Equal("Автозв’язок: сума й кількість товарів", match.StatusLabel);
             }
@@ -98,7 +99,7 @@ internal static class QuantityMatchingTests
             True(result.Ambiguous && result.Order is null && result.CompetingOrderCount == 2);
         }
         foreach (var detail in new[] { null, Details(r, false) with { ItemListComplete = false },
-            Details(r, false) with { Items = [new("Кабель питания", "", null, null)] } })
+            Details(r, false) with { Items = [new("", "", null, null)] } })
             True(Match(r, [one, two], detail).Order is null);
         Equal(ReceiptLinkState.Incomplete, Match(r, [one, two], Details(r, false), complete: false).State);
         True(Match(r, [one, two], Details(r, false), loading: new HashSet<string> { r.Id }).Order is null);

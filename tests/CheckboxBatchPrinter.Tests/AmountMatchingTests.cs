@@ -9,11 +9,11 @@ internal static class AmountMatchingTests
     private static readonly ReceiptOrderMatchingService Matcher = new();
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
-        ("product regression: translated cable remains a competitor in complete A/B/receipt graph", Run(TranslatedCandidateRegression)),
-        ("product evidence: translations abbreviated and mixed-script names stay uncertain; plain word order matches", Run(UnknownNames)),
-        ("product evidence: aligned voltage model size color connector and quantity differences explain exclusions", Run(EstablishedDifferences)),
-        ("product evidence: reordered numbers, unaligned characteristics and foreign articles cannot prove difference", Run(UnalignedCharacteristics)),
-        ("product evidence: unknown lines remain possible counterparts in multi-item baskets", Run(UnknownBasketLines)),
+        ("product regression: complete translated A/B/receipt names do not match by assumptions", Run(TranslatedCandidateRegression)),
+        ("product evidence: translations abbreviations mixed-script and word order remain distinct full names", Run(UnknownNames)),
+        ("product evidence: full voltage model size color connector names and quantity differences explain exclusions", Run(EstablishedDifferences)),
+        ("product evidence: full names preserve reordered numbers characteristics and ignore foreign articles", Run(UnalignedCharacteristics)),
+        ("product evidence: complete different basket names exclude but missing names remain counterparts", Run(UnknownBasketLines)),
         ("amount graph: unique amount without details, prices or SKU and with complete basket", Run(Unique)),
         ("amount graph: 355 and 1400 match within Kyiv day, historical totals do not compete", Run(SameDayAmounts)),
         ("amount graph: Kyiv calendar dates handle UTC midnight and retain unknown-date competitors", Run(SameDayBoundaries)),
@@ -24,7 +24,7 @@ internal static class AmountMatchingTests
         ("amount graph: late competitor withdraws suggestion, confirmed evidence reserves history", Run(Reservations)),
         ("amount graph: decimal cents, foreign currency, dates and adjusted documents", Run(Boundaries)),
         ("amount graph: loading and incomplete pagination are distinct, repeatable states", Run(Loading)),
-        ("amount graph: name models and quantities contradict, abbreviations and translations are unknown", Run(Names)),
+        ("amount graph: full names models quantities abbreviations and translations compare literally", Run(Names)),
         ("amount graph: receipt parser unknown total is not zero and special payments are guarded", Run(ReceiptSemantics)),
         ("amount graph: separately charged delivery only passes with known product-total evidence", Run(Delivery)),
         ("amount graph: large identical-price component stays wholly ambiguous", Run(LargeGroup))
@@ -83,8 +83,9 @@ internal static class AmountMatchingTests
         var result = Matcher.MatchAll([receipt], "test-account", [a, b], [], coverageComplete: true, details)[receipt.Id];
         Console.WriteLine($"  A/B regression: state={result.State}; assigned={result.Order?.Number ?? "none"}; competing orders={result.CompetingOrderCount}");
         Eq(ReceiptLinkState.Candidates, result.State);
-        Yes(result.Order is null && result.Ambiguous);
-        Eq(2, result.CompetingOrderCount);
+        Yes(result.Order is null && !result.Ambiguous);
+        Eq(ProductComparison.Contradiction, result.Products);
+        Eq(0, result.CompetingOrderCount);
         Eq(2, result.Candidates.Count);
         var reversed = Matcher.MatchAll([receipt], "test-account", [b, a], [], true, details)[receipt.Id];
         Eq(result.State, reversed.State); Eq(result.Explanation, reversed.Explanation);
@@ -257,8 +258,8 @@ internal static class AmountMatchingTests
         var r = R(); var o = O() with { Items = I("Датчик 12/24 В") };
         Eq(ProductComparison.Contradiction, M([r], [o], D((r, "Датчик 12/48 В")))[r.Id].Products);
         Eq(ProductComparison.Contradiction, M([r], [O() with { Items = I(quantity: 2) }], D((r, "Товар X")))[r.Id].Products);
-        Eq(ProductComparison.Insufficient, M([r], [o], D((r, "Датчик")))[r.Id].Products);
-        Eq(AutomaticLinkBasis.UniqueAmount, M([r], [O() with { Items = I("Кабель") }], D((r, "Cable")))[r.Id].Basis);
+        Eq(ProductComparison.Contradiction, M([r], [o], D((r, "Датчик")))[r.Id].Products);
+        Eq(ProductComparison.Contradiction, M([r], [O() with { Items = I("Кабель") }], D((r, "Cable")))[r.Id].Products);
         var split = O() with { Items = [new("Товар X", "one", 0.5m, 10m), new("товар  X", "two", 0.5m, 500m)] };
         Eq(ProductComparison.Match, M([r], [split], D((r, "Товар X")))[r.Id].Products);
     }
@@ -280,18 +281,18 @@ internal static class AmountMatchingTests
             ("Кабель живлення", "Кабель питания"),
             ("Кабель живлення USB", "Каб. USB"),
             ("Кабель USB Type-C", "Кабель USВ Type-C"), // Last character in USВ is Cyrillic.
-            ("Товар X", "Товар Y"), // Different text alone is no longer a proof.
+            ("Товар X", "Товар Y"), // Complete literal full-name policy also covers unknown categories.
             ("Кабель", "Cable")
         })
         {
             var result = Products(order, receipt);
-            Eq(ReceiptLinkState.Suggested, result.State); Eq(AutomaticLinkBasis.UniqueAmount, result.Basis);
-            Eq(ProductComparison.Insufficient, result.Products);
-            Yes(!result.Explanation.Contains("Виключено"));
+            Eq(ReceiptLinkState.Candidates, result.State);
+            Eq(ProductComparison.Contradiction, result.Products);
+            Yes(result.Order is null && result.Explanation.Contains("Повні назви"));
         }
         Eq(ProductComparison.Match, Products("Кабель живлення", "  КАБЕЛЬ\u00a0живлення ").Products);
         var reordered = Products("Червоний кабель USB", "Кабель USB червоний");
-        Eq(ProductComparison.Match, reordered.Products); Eq(AutomaticLinkBasis.AmountAndProducts, reordered.Basis);
+        Eq(ProductComparison.Contradiction, reordered.Products); Yes(reordered.Order is null);
     }
 
     private static void EstablishedDifferences()
@@ -309,7 +310,7 @@ internal static class AmountMatchingTests
         {
             var result = Products(order, receipt);
             Eq(ReceiptLinkState.Candidates, result.State); Eq(ProductComparison.Contradiction, result.Products);
-            Yes(result.Explanation.Contains("Виключено замовлення") && result.Explanation.Contains(reason));
+            Yes(result.Explanation.Contains("Виключено замовлення") && result.Explanation.Contains("Повні назви"));
             Eq(0, result.CompetingOrderCount); Yes(result.Order is null);
             var reversed = Products(receipt, order);
             Eq(result.State, reversed.State); Eq(result.Products, reversed.Products);
@@ -337,20 +338,19 @@ internal static class AmountMatchingTests
         })
         {
             var result = Products(order, receipt);
-            Eq(ProductComparison.Insufficient, result.Products); Eq(AutomaticLinkBasis.UniqueAmount, result.Basis);
+            Eq(ProductComparison.Contradiction, result.Products); Yes(result.Order is null);
         }
-        // The old red-cable/black-sensor case now has an explicit KIND difference,
-        // but the unaligned colors must still never be its exclusion reason.
+        // Full-name comparison is explicit; it must not invent an aligned color/type interpretation.
         var differentKinds = Products("Червоний кабель", "Чорний датчик");
         Eq(ProductComparison.Contradiction, differentKinds.Products);
-        Yes(differentKinds.Explanation.Contains("Тип товару в назві") && !differentKinds.Explanation.Contains("Колір:"));
+        Yes(differentKinds.Explanation.Contains("Повні назви") && !differentKinds.Explanation.Contains("Колір:"));
         // Unrelated identifier namespaces are neither identity nor contradiction evidence.
         var r = R(); var skuOrder = O(name: "Кабель") with { Items = [new("Кабель", "A", 1, 290, 290)] };
         var details = new Dictionary<string, ReceiptDetails> { [r.Id] = new(r.Id, [new("Кабель", "B", 1, 290, 290)]) };
         Eq(ProductComparison.Match, M([r], [skuOrder], details)[r.Id].Products);
         skuOrder = skuOrder with { Items = [new("Кабель живлення", "SAME", 1, 290, 290)] };
         details[r.Id] = new(r.Id, [new("Кабель питания", "SAME", 1, 290, 290)]);
-        Eq(ProductComparison.Insufficient, M([r], [skuOrder], details)[r.Id].Products);
+        Eq(ProductComparison.Contradiction, M([r], [skuOrder], details)[r.Id].Products);
     }
 
     private static void UnknownBasketLines()
@@ -361,9 +361,11 @@ internal static class AmountMatchingTests
         {
             [r.Id] = new(r.Id, [new("Датчик модель Y", "", 1, 150, 150), new("Інший датчик", "", 1, 140, 140)])
         };
-        Eq(ProductComparison.Insufficient, M([r], [order], details)[r.Id].Products);
+        Eq(ProductComparison.Contradiction, M([r], [order], details)[r.Id].Products);
         order = order with { Items = [new("Кабель", "", 2, 145, 290)] };
         details[r.Id] = new(r.Id, [new("Кабель", "", 1, 150, 150), new("Кабель питания", "", 1, 140, 140)]);
+        Eq(ProductComparison.Contradiction, M([r], [order], details)[r.Id].Products);
+        details[r.Id] = details[r.Id] with { Items = [new("Кабель", "", 1, 150, 150), new("", "", 1, 140, 140)] };
         Eq(ProductComparison.Insufficient, M([r], [order], details)[r.Id].Products);
         var competitor = order with { Key = O(2).Key };
         NoAuto(M([r], [order, competitor], details).Values);

@@ -813,7 +813,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
             .Count(group => group.Select(o => o.Key.ConnectionId).Distinct().Skip(1).Any());
         FiscalSummary = !HasEnabledConnections ? "" : $"Завантажено замовлень: {orders.Count}. Точних зв’язків: {_rows.Count(r => r.OrderMatch?.State == ReceiptLinkState.Exact)}. " +
             (_showingCachedMatches ? $"Автоприв’язок із кешу: {_rows.Count(r => r.OrderMatch?.State == ReceiptLinkState.Suggested)}; очікують оновлення API. " :
-                appliedCoverageComplete ? $"Ймовірних за сумою й товарами: {_rows.Count(r => r.OrderMatch?.State == ReceiptLinkState.Suggested)}. " :
+                appliedCoverageComplete ? $"Ймовірних автозв’язків: {_rows.Count(r => r.OrderMatch?.State == ReceiptLinkState.Suggested)}. " :
                 "Ймовірні зв’язки: перевірка замовлень ще неповна. ") +
             (unmatchedKeys > 0 ? $"Замовлень із непідтвердженими фіскальними ключами: {unmatchedKeys}. Перевірте контекст каси/продавця, період і права касира; це не означає, що чека немає. " : "") +
             (unavailable > 0 ? $"Фіскальні дані потребують перевірки: {unavailable}. " : "") +

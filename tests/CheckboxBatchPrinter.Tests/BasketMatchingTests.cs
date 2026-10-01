@@ -170,14 +170,9 @@ internal static class BasketMatchingTests
         {
             var different = await ParsePromProductsAsync([Products[0] with { Name = changed }, Products[1]]);
             var result = Match([different], details: details);
-            if (changed.Contains("12/48V")) NotSuggested(result);
-            else
-            {
-                Equal(ReceiptLinkState.Suggested, result.State);
-                // Partial/punctuation-only differences do not prove either a match or a contradiction.
-                Equal(ProductComparison.Insufficient, result.Products);
-                Equal(AutomaticLinkBasis.UniqueAmount, result.Basis);
-            }
+            NotSuggested(result);
+            Equal(ProductComparison.Contradiction, result.Products);
+            True(result.Explanation.Contains("Повні назви"));
         }
     }
 
@@ -239,14 +234,13 @@ internal static class BasketMatchingTests
         for (var i = 0; i < variants.Length; i++)
         {
             var result = Match([Order() with { Items = variants[i] }]);
-            if (i is 0 or 1 or 4 or 5) NotSuggested(result);
+            if (i is 0 or 1 or 2 or 3 or 4 or 5) NotSuggested(result);
             else Equal(ReceiptLinkState.Suggested, result.State);
             if (i == 0)
             {
-                // Unknown text alone is still insufficient. This complete basket now has
-                // a concrete count difference: 1 unit versus the receipt's 3 units.
+                // A complete different name set now excludes independently of its count.
                 Equal(ProductComparison.Contradiction, result.Products);
-                True(result.Explanation.Contains("Кількість товарних одиниць"));
+                True(result.Explanation.Contains("Повні назви"));
             }
         }
         Equal(ReceiptLinkState.Suggested, Match(details: Details() with { ItemsComplete = false, ItemListComplete = false }).State);

@@ -146,10 +146,10 @@
                             <CheckBox x:Name="ExtraOrderColumns" Content="Покупець, статус у таблиці" VerticalAlignment="Center" Margin="12,0" />
                         </WrapPanel>
                         <WrapPanel>
-                        <CheckBox x:Name="AutomaticOrderLinks" Content="Автоматично зіставляти за сумою й товарами"
+                        <CheckBox x:Name="AutomaticOrderLinks" Content="Автоматично зіставляти за сумою, товарами й оплатою"
                                   IsChecked="{Binding Marketplace.AutoLinkEnabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                   Margin="3,6,9,3" VerticalAlignment="Center"
-                                  ToolTip="При відкритті цієї вкладки та після оновлення чеків тут: завантажити замовлення й порівняти товари, кількість, ціни, суму та час. Ймовірний зв’язок не є підтвердженням фіскального документа. Налаштування діє до закриття програми." />
+                                  ToolTip="Одна календарна дата (Київ) і загальна сума; далі повні назви та кількості всіх товарів. Ігнорується лише регістр, зайві пробіли й оформлення лапок/тире. Різні повні назви не збігаються; неповні дані не виключають кандидата. Оплата розрізняє лише однакові повні кошики: Пром-оплата — RozetkaPay, післяплата Новою поштою — NovaPay. Ймовірний зв’язок не є фіскальним підтвердженням." />
                         <Button x:Name="MarketplaceInfoButton" Content="ⓘ" Width="30" Padding="3" FontSize="16"
                                 AutomationProperties.Name="Стан оновлення та пояснення прив’язок"
                                 ToolTipService.InitialShowDelay="150" ToolTipService.ShowDuration="60000">

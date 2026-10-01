@@ -97,13 +97,15 @@ public sealed record MarketplaceSnapshot(IReadOnlyList<MarketplaceOrder> Orders,
 
 public enum ReceiptLinkState { NotChecked, Exact, Manual, Candidates, NotFound, Conflict, Incomplete, Suggested }
 public enum ProductComparison { Match, Contradiction, Insufficient, Loading }
-public enum AutomaticLinkBasis { None, UniqueAmount, AmountAndProducts, AmountAndQuantity }
+public enum AutomaticLinkBasis { None, UniqueAmount, AmountAndProducts, AmountAndQuantity, AmountAndPayment }
+public enum PaymentComparison { Insufficient, Match, Contradiction }
 public sealed record AmountMatchScope(int HistoryDays = 30, MarketplaceRange? OrderRange = null, string Description = "");
 public sealed record ReceiptOrderMatch(ReceiptLinkState State, MarketplaceOrder? Order, string Explanation,
     IReadOnlyList<MarketplaceOrder> Candidates)
 {
     public AutomaticLinkBasis Basis { get; init; }
     public ProductComparison Products { get; init; } = ProductComparison.Insufficient;
+    public PaymentComparison Payments { get; init; } = PaymentComparison.Insufficient;
     public bool Ambiguous { get; init; }
     public IReadOnlyList<string> CompetingReceiptIds { get; init; } = [];
     public int CompetingOrderCount { get; init; }
@@ -115,6 +117,7 @@ public sealed record ReceiptOrderMatch(ReceiptLinkState State, MarketplaceOrder?
         ReceiptLinkState.Exact => "Точний фіскальний зв’язок",
         ReceiptLinkState.Suggested => Basis switch
         {
+            AutomaticLinkBasis.AmountAndPayment => "Автозв’язок: сума й оплата",
             AutomaticLinkBasis.AmountAndProducts => "Автозв’язок: сума й товари",
             AutomaticLinkBasis.AmountAndQuantity => "Автозв’язок: сума й кількість товарів",
             _ => "Автозв’язок: унікальна сума"
@@ -122,6 +125,7 @@ public sealed record ReceiptOrderMatch(ReceiptLinkState State, MarketplaceOrder?
         ReceiptLinkState.Incomplete => "Перевірка неповна",
         ReceiptLinkState.Conflict => "Конфлікт фіскальних даних",
         ReceiptLinkState.Candidates when Ambiguous => "Неоднозначно: кілька замовлень / чеків",
+        ReceiptLinkState.Candidates when Payments == PaymentComparison.Contradiction => "Сума збігається, оплата відрізняється",
         ReceiptLinkState.Candidates when Products == ProductComparison.Contradiction => "Сума збігається, товари суперечать",
         ReceiptLinkState.Candidates => "Недостатньо даних",
         ReceiptLinkState.NotFound => "Не знайдено у діапазоні",

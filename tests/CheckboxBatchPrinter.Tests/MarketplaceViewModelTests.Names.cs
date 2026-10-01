@@ -51,7 +51,7 @@ internal static partial class MarketplaceViewModelTests
         fixture.Details.Values[ReceiptTwo] = new(ReceiptTwo, ukrainianOrders[1].Items) { ItemListComplete = true };
         var (main, workspace) = fixture.Create(automaticCache: cache);
         await main.RefreshAsync(); await OpenOrdersAsync(main, workspace);
-        True(main.Receipts.All(r => r.OrderMatch!.Ambiguous && r.OrderMatch.Order is null));
+        True(main.Receipts.All(r => r.OrderMatch!.Products == ProductComparison.Contradiction && r.OrderMatch.Order is null));
         main.Receipts[0].IsSelectedForOrders = true;
         fixture.Source.Orders = ukrainianOrders;
         await ExecuteAsync(workspace.AutoMatchCommand);
@@ -79,12 +79,14 @@ internal static partial class MarketplaceViewModelTests
     private static async Task NameAutomaticUiAsync()
     {
         var fixture = new Fixture(); var cache = new AutomaticCache();
-        var cable = Order() with { Total = 201, Items = [new("Червоний кабель USB", "", 1, 201, 201)], ItemListComplete = true };
+        // Unknown categories exercise full-name comparison all the way to both tables,
+        // rather than passing only because a category dictionary recognizes the goods.
+        var cable = Order() with { Total = 201, Items = [new("Подарункова листівка Весняний ранок", "", 1, 201, 201)], ItemListComplete = true };
         var sensor = cable with { Key = cable.Key with { OrderId = "42" }, Number = "ORDER-42",
-            Items = [new("Датчик руху PIR", "", 1, 201, 201)] };
+            Items = [new("Запасна кришка для контейнера", "", 1, 201, 201)] };
         fixture.Source.Orders = [cable, sensor];
         fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 20100), Receipt(ReceiptTwo, 2, 20100)];
-        fixture.Details.Values[ReceiptOne] = new(ReceiptOne, [new("Кабель USB червоний", "", 1, 201, 201)]) { ItemListComplete = true };
+        fixture.Details.Values[ReceiptOne] = new(ReceiptOne, [new("  ПОДАРУНКОВА\u00a0листівка Весняний ранок ", "", 1, 201, 201)]) { ItemListComplete = true };
         fixture.Details.Values[ReceiptTwo] = new(ReceiptTwo, sensor.Items) { ItemListComplete = true };
         var (main, workspace) = fixture.Create(automaticCache: cache);
         await main.RefreshAsync(); await OpenOrdersAsync(main, workspace);
@@ -102,10 +104,10 @@ internal static partial class MarketplaceViewModelTests
         True(restarted.Receipts.All(r => r.OrderMatch?.Basis == AutomaticLinkBasis.AmountAndProducts));
         Equal(2, fixture.Details.Calls);
 
-        // A differently spelled, potentially identical product stays a competitor even
-        // behind the table search. Cached probable pairs must not reserve its receipt.
+        // A fully identical name remains a competitor even behind the table search.
+        // Cached probable pairs must not reserve its receipt.
         fixture.Source.Orders = [sensor, cable, cable with { Key = cable.Key with { OrderId = "43" }, Number = "HIDDEN",
-            Items = [new("Кабель питания USB", "", 1, 201, 201)] }];
+            Items = [new("Подарункова листівка Весняний ранок", "", 1, 201, 201)] }];
         restored.OrderSearch = "ORDER";
         await ExecuteAsync(restored.AutoMatchCommand);
         var ambiguous = restarted.Receipts.Single(r => r.Id == ReceiptOne);

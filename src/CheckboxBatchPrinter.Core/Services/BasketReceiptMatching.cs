@@ -6,15 +6,18 @@ namespace CheckboxBatchPrinter.Core.Services;
 internal static class BasketReceiptMatching
 {
     private sealed record ProductCheck(ProductComparison State, string Reason = "");
-    private sealed record Edge(ReceiptRecord Receipt, MarketplaceOrder Order, ProductCheck Check, string Issue,
+    private sealed record Edge(ReceiptRecord Receipt, MarketplaceOrder Order, ProductCheck Check, PaymentReceiptMatching.Check Payment, string Issue,
         decimal? OrderQuantity, decimal? ReceiptQuantity)
     {
         public ProductComparison Products => Check.State;
         // Count is a secondary hypothesis only for complete, ordinary baskets. Missing or
         // adjusted documents remain competitors, not evidence in favor of another order.
         public bool QuantityDiffers => Issue.Length == 0 && OrderQuantity.HasValue && ReceiptQuantity.HasValue && OrderQuantity != ReceiptQuantity;
-        public bool Excluded => Products == ProductComparison.Contradiction || QuantityDiffers;
+        public bool PaymentTieBreak { get; set; }
+        public bool PaymentDiffers => PaymentTieBreak && Issue.Length == 0 && Payment.State == PaymentComparison.Contradiction;
+        public bool Excluded => Products == ProductComparison.Contradiction || QuantityDiffers || PaymentDiffers;
         public string ExclusionReason => Products == ProductComparison.Contradiction ? Check.Reason :
+            PaymentDiffers ? Payment.Reason :
             $"Кількість товарних одиниць у повних кошиках: {OrderQuantity} у замовленні, {ReceiptQuantity} у чеку.";
     }
 
@@ -39,12 +42,13 @@ internal static class BasketReceiptMatching
             details.TryGetValue(NormalizeId(receipt.Id), out var detail);
             var products = loading?.Contains(NormalizeId(receipt.Id)) == true ? new(ProductComparison.Loading) : CompareProducts(order, detail);
             var quantitiesLoading = products.State == ProductComparison.Loading;
-            edges.Add(new(receipt, order, products, AmountIssue(receipt, order, detail),
+            edges.Add(new(receipt, order, products, PaymentReceiptMatching.Compare(order, receipt), AmountIssue(receipt, order, detail),
                 quantitiesLoading ? null : CountUnits(order.Items, order.ItemListComplete ?? order.ItemsComplete),
                 quantitiesLoading || detail is null ? null : CountUnits(detail.Items, detail.ItemListComplete ?? detail.ItemsComplete)));
         }
-        // Missing details, special totals and rejected hypotheses stay competitors. Only a proven
-        // product/count contradiction removes an edge. No assigned suggestion is removed on a second pass.
+        // Finish the product graph first. Payment only splits an ambiguous component whose
+        // complete baskets already match; it cannot replace unknown or missing product evidence.
+        EnablePaymentTieBreaks(edges);
         var possible = edges.Where(e => !e.Excluded).ToArray();
         var byReceipt = possible.ToLookup(e => e.Receipt.Id);
         var byOrder = possible.ToLookup(e => e.Order.Key);
@@ -87,23 +91,33 @@ internal static class BasketReceiptMatching
                 receipt.TotalKnown && receipt.TotalSum > 0 && selected.Order.Total == receipt.TotalSum &&
                 receipt.DisplayDate.HasValue && selected.Order.CreatedAt.HasValue && !HasFiscalEvidence(selected.Order) &&
                 decision?.SuppressAutomatic != true && decision?.RejectedOrders.Contains(selected.Order.Key) != true;
-            var productState = selected?.Products ?? (options.Length == 0 ? ProductComparison.Contradiction : ProductComparison.Insufficient);
+            var productState = selected?.Products ?? (options.Length == 0 && raw.All(e => e.Products == ProductComparison.Contradiction || e.QuantityDiffers)
+                ? ProductComparison.Contradiction : ProductComparison.Insufficient);
+            var paymentState = selected?.Payment.State ?? (options.Length == 0 && raw.All(e => e.PaymentDiffers)
+                ? PaymentComparison.Contradiction : PaymentComparison.Insufficient);
+            var resolvedByPayment = selected?.PaymentTieBreak == true && selected.Payment.State == PaymentComparison.Match &&
+                edges.Any(e => e.PaymentDiffers && (e.Receipt.Id == receipt.Id || e.Order.Key == selected!.Order.Key));
             var resolvedByQuantity = selected is not null && selected.OrderQuantity.HasValue && selected.OrderQuantity == selected.ReceiptQuantity &&
                 edges.Any(e => e.QuantityDiffers && (e.Receipt.Id == receipt.Id || e.Order.Key == selected.Order.Key));
-            var basis = !canSuggest ? AutomaticLinkBasis.None : productState == ProductComparison.Match ? AutomaticLinkBasis.AmountAndProducts :
+            var basis = !canSuggest ? AutomaticLinkBasis.None : resolvedByPayment ? AutomaticLinkBasis.AmountAndPayment :
+                productState == ProductComparison.Match ? AutomaticLinkBasis.AmountAndProducts :
                 resolvedByQuantity ? AutomaticLinkBasis.AmountAndQuantity : AutomaticLinkBasis.UniqueAmount;
             var message = canSuggest
-                ? (productState == ProductComparison.Match ? "За сумою й товарами за один день. " :
+                ? (resolvedByPayment ? "За сумою й оплатою за один день: взаємно унікальна пара. " :
+                    productState == ProductComparison.Match ? "За сумою й товарами за один день. " :
                     resolvedByQuantity ? "За сумою та кількістю товарів за один день: взаємно унікальна пара. " : "За сумою за один день: взаємно унікальна пара. ") +
                     "Це ймовірний висновок за даними документів, не фіскальне підтвердження спільного UUID / fiscal_code. "
                 : ambiguous ? $"Неоднозначна група: замовлень — {componentOrders.Count}, чеків — {componentReceipts.Count}. Потрібен ручний вибір пари. "
-                : options.Length == 0 ? "Сума збігається, товари суперечать. Автопризначення заблоковано. "
+                : options.Length == 0 ? "Сума збігається, але товари, кількість або оплата суперечать. Автопризначення заблоковано. "
                 : "Недостатньо даних для автопризначення. " + string.Join(" ", options.Select(e => e.Issue).Where(s => s.Length > 0).Distinct());
             if (!coverageComplete) message = "Перевірка неповна: нові автозв’язки не призначаються. " + message;
             if (productState == ProductComparison.Loading) message += "Товарні дані ще завантажуються; зв’язок буде перевірено повторно. ";
-            else if (productState == ProductComparison.Insufficient) message += "Товари: недостатньо даних для перевірки повного кошика; невстановлена відповідність назв не є суперечністю. ";
+            else if (productState == ProductComparison.Insufficient) message += "Товари: недостатньо даних для порівняння повних назв і кількостей; відсутні або неповні товарні дані не виключають кандидата. ";
             if (selected?.OrderQuantity is { } units && selected.ReceiptQuantity == units)
                 message += $"Кількість товарних одиниць збігається: {units}. Це не доводить тотожність назв товарів. ";
+            if (selected?.Payment.State == PaymentComparison.Match) message += selected.Payment.Reason + " ";
+            else if (canSuggest && selected?.Payment.State == PaymentComparison.Contradiction && !selected.PaymentTieBreak)
+                message += "Різницю оплати не використано: це додатковий критерій лише для розрізнення однакових повних кошиків. ";
             foreach (var excluded in raw.Where(e => e.Excluded)
                          .OrderBy(e => e.Order.Key.Marketplace).ThenBy(e => e.Order.Key.ConnectionId, StringComparer.Ordinal)
                          .ThenBy(e => e.Order.Key.OrderId, StringComparer.Ordinal))
@@ -121,12 +135,36 @@ internal static class BasketReceiptMatching
                 canSuggest ? selected!.Order : null, message, candidates)
             {
                 Basis = basis,
-                Products = productState, Ambiguous = ambiguous, Scope = scopeText,
+                Products = productState, Payments = paymentState, Ambiguous = ambiguous, Scope = scopeText,
                 CompetingOrderCount = componentOrders.Count,
                 GroupOrders = freeOrders.Where(o => componentOrders.Contains(o.Key)).OrderBy(o => o.Key.Marketplace)
                     .ThenBy(o => o.Key.ConnectionId, StringComparer.Ordinal).ThenBy(o => o.Key.OrderId, StringComparer.Ordinal).ToArray(),
                 CompetingReceiptIds = componentReceipts.Order(StringComparer.Ordinal).ToArray()
             };
+        }
+    }
+
+    private static void EnablePaymentTieBreaks(IReadOnlyList<Edge> edges)
+    {
+        var productEdges = edges.Where(e => e.Products != ProductComparison.Contradiction && !e.QuantityDiffers).ToArray();
+        var byReceipt = productEdges.ToLookup(e => e.Receipt.Id);
+        var byOrder = productEdges.ToLookup(e => e.Order.Key);
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var first in productEdges)
+        {
+            if (!visited.Add(first.Receipt.Id)) continue;
+            var component = new List<Edge>(); var orders = new HashSet<OrderKey>();
+            var pending = new Queue<string>(); pending.Enqueue(first.Receipt.Id);
+            while (pending.TryDequeue(out var id))
+                foreach (var edge in byReceipt[id])
+                {
+                    component.Add(edge);
+                    if (orders.Add(edge.Order.Key))
+                        foreach (var neighbor in byOrder[edge.Order.Key])
+                            if (visited.Add(neighbor.Receipt.Id)) pending.Enqueue(neighbor.Receipt.Id);
+                }
+            if (component.Count > 1 && component.All(e => e.Products == ProductComparison.Match && e.Issue.Length == 0))
+                foreach (var edge in component) edge.PaymentTieBreak = true;
         }
     }
 
@@ -208,54 +246,27 @@ internal static class BasketReceiptMatching
             var left = Group(order.Items); var right = Group(details.Items);
             if (!left.Keys.ToHashSet().SetEquals(right.Keys))
             {
-                var reorderedLeft = Group(order.Items, ignoreWordOrder: true);
-                var reorderedRight = Group(details.Items, ignoreWordOrder: true);
-                if (reorderedLeft.Keys.ToHashSet().SetEquals(reorderedRight.Keys))
-                {
-                    var differentQuantity = reorderedLeft.FirstOrDefault(p => p.Value.HasValue && reorderedRight[p.Key].HasValue && p.Value != reorderedRight[p.Key]);
-                    if (differentQuantity.Key is not null)
-                        return new(ProductComparison.Contradiction, $"Кількість товару «{differentQuantity.Key}» при однакових словах назви: {differentQuantity.Value} у замовленні, {reorderedRight[differentQuantity.Key]} у чеку.");
-                    return new(reorderedLeft.Any(p => !p.Value.HasValue || !reorderedRight[p.Key].HasValue) ? ProductComparison.Insufficient : ProductComparison.Match);
-                }
+                // This integration transfers marketplace titles into Checkbox unchanged.
+                // Complete unequal title sets do not represent the same basket, irrespective
+                // of product category or language. Never infer synonyms or reorder words.
+                var onlyOrder = left.Keys.Except(right.Keys).Order(StringComparer.Ordinal);
+                var onlyReceipt = right.Keys.Except(left.Keys).Order(StringComparer.Ordinal);
+                return new(ProductComparison.Contradiction,
+                    $"Повні назви товарів не збігаються. Лише в замовленні: {NameList(onlyOrder)}. Лише в чеку: {NameList(onlyReceipt)}.");
             }
-            var sameNames = left.Keys.ToHashSet().SetEquals(right.Keys);
-            foreach (var p in left.OrderBy(p => p.Key, StringComparer.Ordinal))
-            {
-                // A differently named line could be another representation of the same product.
-                // Do not prove a total-quantity difference while such an alias is still possible.
-                if (right.TryGetValue(p.Key, out var quantity) && p.Value.HasValue && quantity.HasValue && p.Value != quantity &&
-                    left.Keys.Concat(right.Keys).Where(k => k != p.Key).All(k => ProductNameEvidence.Difference(p.Key, k) is not null))
-                    return new(ProductComparison.Contradiction, $"Кількість товару «{p.Key}»: {p.Value} у замовленні, {quantity} у чеку.");
-            }
-            if (sameNames)
-            {
-                // With the same literal identities on both sides there are no unmatched aliases.
-                var mismatch = left.OrderBy(p => p.Key, StringComparer.Ordinal)
-                    .FirstOrDefault(p => p.Value.HasValue && right[p.Key].HasValue && p.Value != right[p.Key]);
-                if (mismatch.Key is not null)
-                    return new(ProductComparison.Contradiction, $"Кількість товару «{mismatch.Key}»: {mismatch.Value} у замовленні, {right[mismatch.Key]} у чеку.");
-                return new(left.Any(p => !p.Value.HasValue || !right[p.Key].HasValue) ? ProductComparison.Insufficient : ProductComparison.Match);
-            }
-            var onlyLeft = left.Keys.Except(right.Keys).ToArray();
-            var onlyRight = right.Keys.Except(left.Keys).ToArray();
-            if (onlyLeft.Length == 0 || onlyRight.Length == 0) return new(ProductComparison.Insufficient);
-            // Exact common identities have already been accounted for. Exclusion of a remaining
-            // line requires incompatibility with EVERY remaining counterpart, not just one
-            // differently spelled line. No known identity/attribute alignment means insufficient data.
-            foreach (var (source, targets) in new[] { (onlyLeft, onlyRight), (onlyRight, onlyLeft) })
-            foreach (var name in source.Order(StringComparer.Ordinal))
-            {
-                var reasons = targets.Order(StringComparer.Ordinal).Select(other => ProductNameEvidence.Difference(name, other)).ToArray();
-                if (reasons.All(reason => reason is not null))
-                    return new(ProductComparison.Contradiction, string.Join(" ", reasons.Distinct()));
-            }
-            return new(ProductComparison.Insufficient);
+            var mismatch = left.OrderBy(p => p.Key, StringComparer.Ordinal)
+                .FirstOrDefault(p => p.Value.HasValue && right[p.Key].HasValue && p.Value != right[p.Key]);
+            if (mismatch.Key is not null)
+                return new(ProductComparison.Contradiction, $"Кількість товару «{mismatch.Key}»: {mismatch.Value} у замовленні, {right[mismatch.Key]} у чеку.");
+            return new(left.Any(p => !p.Value.HasValue || !right[p.Key].HasValue) ? ProductComparison.Insufficient : ProductComparison.Match);
         }
         catch (OverflowException) { return new(ProductComparison.Insufficient); }
     }
 
-    private static Dictionary<string, decimal?> Group(IReadOnlyList<OrderItem> items, bool ignoreWordOrder = false) =>
-        items.GroupBy(i => ignoreWordOrder ? ProductNameEvidence.WordOrderIdentity(i.Name) : ProductNameEvidence.Identity(i.Name))
+    private static string NameList(IEnumerable<string> names) => string.Join("; ", names.Select(n => $"«{n}»")) is { Length: > 0 } value ? value : "немає";
+
+    private static Dictionary<string, decimal?> Group(IReadOnlyList<OrderItem> items) =>
+        items.GroupBy(i => ProductNameIdentity.Normalize(i.Name))
         .ToDictionary(g => g.Key, g => g.All(i => i.Quantity is > 0m) ? (decimal?)g.Sum(i => i.Quantity!.Value) : null);
 
     private static bool HasFiscalEvidence(MarketplaceOrder o) => o.ReceiptIds.Count > 0 || o.FiscalReferences.Count > 0 ||

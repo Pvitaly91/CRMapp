@@ -95,7 +95,7 @@ internal static partial class PromOrdersTests
         var cache = new AutomaticMatchCache(); var matcher = new CachedReceiptOrderMatchingService();
         foreach (var r in receipts) matcher.RememberDetails(cache, "test-account", r, details[r.Id]);
         var old = matcher.MatchAll(cache, receipts, "test-account", oldOrders, [], true, details);
-        Assert(old.Matches.Values.All(m => m.Ambiguous && m.Order is null), "Russian/unknown names were incorrectly resolved.");
+        Assert(old.Matches.Values.All(m => m.Products == ProductComparison.Contradiction && m.Order is null), "Different full Russian/Ukrainian names were incorrectly resolved.");
         var result = matcher.MatchAll(cache, receipts, "test-account", ukrainianOrders, [], true, details);
         Assert(!result.CacheHit, "Old Russian-name graph survived updated Ukrainian API names.");
         for (var i = 0; i < receipts.Length; i++)
