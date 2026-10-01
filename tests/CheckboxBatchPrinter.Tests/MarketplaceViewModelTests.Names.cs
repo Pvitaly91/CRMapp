@@ -5,6 +5,39 @@ namespace CheckboxBatchPrinter.Tests;
 
 internal static partial class MarketplaceViewModelTests
 {
+    private static async Task ContactUnconnectedMarketplaceUiAsync()
+    {
+        const string contacts = "Клеми кільце та вилка без ізоляції, набір 320 шт, мідні наконечники для проводів";
+        const string toggle = "Вимикач маси АКБ 12/24V 500A універсальний, відсікач живлення акумулятора, сріблясті клеми";
+        var fixture = new Fixture(); var cache = new AutomaticCache();
+        var order = Order() with { Total = 270, Items = [new(contacts, "", 1, 270, 270)], ItemsComplete = true, ItemListComplete = true };
+        fixture.Source.Orders = [order];
+        fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 27000), Receipt(ReceiptTwo, 2, 27000)];
+        fixture.Details.Values[ReceiptOne] = new(ReceiptOne, order.Items) { ItemListComplete = true };
+        fixture.Details.Values[ReceiptTwo] = new(ReceiptTwo, [new(toggle, "", 1, 270, 270)]) { ItemListComplete = true };
+        var (main, workspace) = fixture.Create(automaticCache: cache);
+        await main.RefreshAsync(); main.Receipts[1].IsSelected = true; main.Receipts[0].IsSelectedForOrders = true;
+        await OpenOrdersAsync(main, workspace);
+        var matching = main.Receipts.Single(r => r.Id == ReceiptOne);
+        var unrelated = main.Receipts.Single(r => r.Id == ReceiptTwo);
+        Equal("Автозв’язок: сума й товари", matching.LinkStatus); Equal(order.Key, matching.OrderMatch!.Order!.Key);
+        True(unrelated.OrderMatch!.Order is null); Equal(ProductComparison.Contradiction, unrelated.OrderMatch.Products);
+        var displayedOrder = workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single();
+        Equal(matching, displayedOrder.LinkedReceipts.Single()); Equal(matching.LinkStatus, displayedOrder.LinkStatus);
+        True(displayedOrder.HasSuggestedLink && !displayedOrder.HasConfirmedLink);
+        Equal(2, main.AllReceiptsTab.View.Cast<ReceiptRowViewModel>().Count());
+        True(unrelated.IsSelected && matching.IsSelectedForOrders);
+        Equal(0, fixture.Rozetka.FetchCalls); Equal(2, fixture.Details.Calls);
+        fixture.Source.Fail = true; var fetches = fixture.Source.FetchCalls;
+        var (restarted, restored) = fixture.Create(automaticCache: cache);
+        await restarted.RefreshAsync(); restarted.SelectedTabIndex = 1; await restarted.PrepareOrdersAsync();
+        Equal(order.Key, restarted.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch!.Order!.Key);
+        True(restarted.Receipts.Single(r => r.Id == ReceiptTwo).OrderMatch!.Order is null);
+        True(restored.Orders.Cast<MarketplaceOrderRowViewModel>().Single().HasSuggestedLink);
+        Equal(fetches, fixture.Source.FetchCalls); Equal(2, fixture.Details.Calls);
+        Equal(0, fixture.Rozetka.FetchCalls); Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
+    }
+
     private static async Task PromUkrainianNamesUiAsync()
     {
         var fixture = new Fixture(); var cache = new AutomaticCache();

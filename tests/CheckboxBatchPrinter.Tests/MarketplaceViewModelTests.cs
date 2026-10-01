@@ -81,6 +81,7 @@ internal static partial class MarketplaceViewModelTests
         ("STA cached links survive a new unrelated receipt and pending refresh", () => StaAsync(CachedAutomaticPartialRestartAsync)),
         ("STA201 count links flow through workspace tables cache and hidden competitor refresh", () => StaAsync(QuantityAutomaticUiAsync)),
         ("STA name links flow through workspace tables cache and unknown hidden competitor refresh", () => StaAsync(NameAutomaticUiAsync)),
+        ("STA terminal-kit Prom order links while unrelated unconnected-marketplace switch receipt remains available", () => StaAsync(ContactUnconnectedMarketplaceUiAsync)),
         ("STA Prom Ukrainian API names replace cached Russian names through refresh tables and restart", () => StaAsync(PromUkrainianNamesUiAsync)),
         ("STA automatic refresh loads details only for new receipts", () => StaAsync(CachedAutomaticNewReceiptAsync)),
         ("STA cached probable links yield to a new hidden competitor", () => StaAsync(CachedAutomaticCompetitorAsync)),

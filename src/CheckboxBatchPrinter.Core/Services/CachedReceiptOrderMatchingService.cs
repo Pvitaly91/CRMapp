@@ -8,7 +8,7 @@ namespace CheckboxBatchPrinter.Core.Services;
 /// <summary>Memoizes complete graphs; individual saved pairs are shown only after validating the current local graph.</summary>
 public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider = null)
 {
-    public const string AlgorithmVersion = "same-kyiv-day-product-names-v3";
+    public const string AlgorithmVersion = "same-kyiv-day-product-names-v4";
     public const int MaximumDetails = 5000;
     public const int MaximumSnapshots = 8;
     private const int MaximumMatchesPerSnapshot = 5000;

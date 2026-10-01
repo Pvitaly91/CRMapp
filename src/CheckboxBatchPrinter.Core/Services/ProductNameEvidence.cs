@@ -10,6 +10,7 @@ internal static class ProductNameEvidence
     private sealed record AttributeRule(string Label, Regex Pattern, Func<Match, string> Value);
     private sealed record KindRule(string Label, Regex Pattern);
     private sealed record Description(string Anchor, Dictionary<string, string> Attributes);
+    private const string ContactKind = "клеми / наконечники проводів";
     private static Regex Pattern(string value) => new(value, RegexOptions.CultureInvariant);
     // A bounded vocabulary of explicit product nouns, not a translation or fuzzy-name
     // guess. Broad nouns such as adapter/module/device are intentionally not classified.
@@ -21,6 +22,7 @@ internal static class ProductNameEvidence
         // one broad family: those different nouns alone cannot exclude a pair.
         Kind("живлення / роз’єм / розетка", "ЗАРЯДНИЙ ПРИСТРІЙ|ЗАРЯДНОЕ УСТРОЙСТВО|ЗАРЯДКА|CHARGER|БЛОК ЖИВЛЕННЯ|БЛОК ПИТАНИЯ|POWER SUPPLY|РОЗ'ЄМ|РАЗЪ[ЕЁ]М|CONNECTOR|РОЗЕТКА|SOCKET|ГНІЗДО|ГНЕЗДО"),
         Kind("вимикач", "ВИМИКАЧ|ВЫКЛЮЧАТЕЛЬ|SWITCH"),
+        Kind(ContactKind, "КЛЕМА|КЛЕМИ|КЛЕМ|КЛЕМЫ|КЛЕММ(?:А|Ы)?|ELECTRICAL TERMINALS?|НАКОНЕЧНИК(?:И|ІВ|ОВ)?\\s+(?:ДЛЯ\\s+)?(?:ПРОВОД(?:ІВ|ОВ)|ДРОТ(?:ІВ|ОВ))"),
         Kind("резистор", "РЕЗИСТОР|RESISTOR"),
         Kind("освітлення", "ЛАМПА|ЛАМПОЧКА|LAMP|BULB|ПІДСВІТКА|ПІДСВІЧУВАННЯ|ПОДСВЕТКА|BACKLIGHT")
     ];
@@ -40,6 +42,14 @@ internal static class ProductNameEvidence
         "КОЛІР", "ЦВЕТ", "COLOR", "ТИП", "TYPE", "ЛІВИЙ", "ПРАВИЙ", "ЛЕВЫЙ", "LEFT", "RIGHT"
     };
     private static readonly Regex CompositeKind = Pattern(@"(?<![\p{L}\p{N}])(?:ТЕСТЕР|TESTER|КОМПЛЕКТ|НАБІР|НАБОР|SET|KIT|ЧОХОЛ|КОРПУС|CASE|HOLDER)(?![\p{L}\p{N}])");
+    private static readonly HashSet<string> ContactModifiers = new(StringComparer.Ordinal)
+    {
+        "МІДНІ", "МЕДНЫЕ", "COPPER", "ЛАТУННІ", "ЛАТУННЫЕ", "BRASS", "ЕЛЕКТРИЧНІ", "ЭЛЕКТРИЧЕСКИЕ", "ELECTRICAL",
+        "КОНТАКТНІ", "КОНТАКТНЫЕ", "СРІБЛЯСТІ", "СЕРЕБРИСТЫЕ", "SILVER", "ЧЕРВОНІ", "КРАСНЫЕ", "RED",
+        "ЧОРНІ", "ЧЕРНЫЕ", "BLACK", "БІЛІ", "БЕЛЫЕ", "WHITE"
+    };
+    private static readonly HashSet<string> CollectionWords = new(StringComparer.Ordinal) { "НАБІР", "НАБОР", "КОМПЛЕКТ", "SET", "KIT" };
+    private static readonly Regex ContactSetCount = Pattern(@"\A(?:НАБІР|НАБОР|КОМПЛЕКТ|SET|KIT)\s+[1-9]\d*\s*(?:ШТ(?:УК)?\.?|PCS\.?|PIECES)(?![\p{L}\p{N}])");
     private static readonly AttributeRule[] Rules =
     [
         // Only explicit model labels. A random number or an article from another system is not a model key.
@@ -94,14 +104,31 @@ internal static class ProductNameEvidence
     private static string? ProductKind(string name)
     {
         var normalized = Identity(name);
-        if (CompositeKind.IsMatch(normalized)) return null;
         var mentions = Kinds.SelectMany(kind => kind.Pattern.Matches(normalized).Select(match => (kind.Label, Match: match))).ToArray();
-        // Composite/accessory names mentioning several kinds are uncertain. No category
-        // is inferred from a word buried after an unknown product noun or preposition.
-        if (mentions.Select(m => m.Label).Distinct().Count() != 1) return null;
+        if (mentions.Length == 0) return null;
         var first = mentions.MinBy(m => m.Match.Index);
         var prefix = normalized[..first.Match.Index].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return prefix.Length <= 3 && prefix.All(HeadModifiers.Contains) ? first.Label : null;
+        var contactHead = first.Label == ContactKind && prefix.Length <= 3 &&
+            prefix.All(word => HeadModifiers.Contains(word) || ContactModifiers.Contains(word) || CollectionWords.Contains(word));
+        if (!contactHead && !(prefix.Length <= 3 && prefix.All(HeadModifiers.Contains))) return null;
+        // A quantified set of the same electrical contacts still has a known main product.
+        // Mixed kits, testers, cases and unrelated collection descriptions remain uncertain.
+        foreach (Match composite in CompositeKind.Matches(normalized))
+            if (!contactHead || !CollectionWords.Contains(composite.Value) ||
+                !(composite.Index < first.Match.Index || ContactSetCount.IsMatch(normalized[composite.Index..]))) return null;
+        var mainKinds = mentions.Where(m => !(m.Label == ContactKind && first.Label != ContactKind &&
+            IsContactDescription(normalized, first.Match, m.Match))).Select(m => m.Label).Distinct().ToArray();
+        return mainKinds.Length == 1 ? first.Label : null;
+    }
+
+    private static bool IsContactDescription(string name, Match mainProduct, Match contact)
+    {
+        // "Вимикач ..., сріблясті клеми" describes its contacts. A bare enumeration
+        // "Вимикач, клеми" or "вимикач та клеми" may be a kit and is not discarded.
+        var comma = name.LastIndexOf(',', contact.Index);
+        if (comma < mainProduct.Index + mainProduct.Length) return false;
+        var words = name[(comma + 1)..contact.Index].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return words.Length is > 0 and <= 3 && words.All(ContactModifiers.Contains);
     }
 
     private static Description Describe(string name)
