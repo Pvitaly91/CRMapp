@@ -56,17 +56,7 @@ public sealed class ShippingLabelsViewModel : ObservableObject
             var history = await _history.LoadAsync();
             if (IsBusy) return;
             foreach (var row in _workspace.AllOrderRows)
-            {
-                var shipments = ShippingCarrierNames.ForOrder(row.Model);
-                var attempts = history.Where(a => a.Pages.Any(p => shipments.Any(s => s.Carrier == p.Carrier && s.TrackingNumber == p.TrackingNumber))).ToArray();
-                var latest = attempts.MaxBy(a => a.TimeUtc);
-                row.LabelPrintStatus = latest?.State switch
-                {
-                    LabelSubmissionState.Submitted => $"Передано Windows, job {latest.WindowsJobId}",
-                    LabelSubmissionState.SubmissionUnknown => "Передавання невідоме; можливий дубль",
-                    _ => "Не передано"
-                };
-            }
+                row.ApplyLabelHistory(history);
         }
         catch (Exception) { Status = "Не вдалося прочитати історію наклейок; перед друком вона перевірятиметься знову."; }
     }
@@ -93,6 +83,7 @@ public sealed class ShippingLabelsViewModel : ObservableObject
             var geometry = _printer.Inspect(settings);
             var batch = await _preparation.PrepareAsync(orders, settings, geometry, _cancel.Token);
             var history = await _history.LoadAsync(_cancel.Token);
+            foreach (var row in rows) row.ApplyLabelHistory(history);
             var previous = history.Where(a => a.State != LabelSubmissionState.NotSubmitted && a.Pages.Any(old => batch.Pages.Any(p =>
                 old.Carrier == p.Shipment.Carrier && old.TrackingNumber == p.Shipment.TrackingNumber && old.PageNumber == p.PageNumber))).ToArray();
             foreach (var row in rows) row.LabelStatus = "Готова до перегляду";
@@ -108,7 +99,7 @@ public sealed class ShippingLabelsViewModel : ObservableObject
             var currentGeometry = _printer.Inspect(settings);
             if (currentGeometry != geometry) throw new InvalidOperationException("Параметри драйвера змінилися. Підготуйте пакет заново.");
             var result = await new LabelPrintCoordinator(_history, _printer).SubmitAsync(batch, _cancel.Token);
-            foreach (var row in rows) { row.LabelPrintStatus = result.State == LabelSubmissionState.Submitted ? $"Передано Windows, job {result.WindowsJobId}" : "Передавання невідоме"; row.IsSelectedForLabels = false; }
+            foreach (var row in rows) { row.ApplyLabelHistory(history.Append(result)); row.IsSelectedForLabels = false; }
             Status = "Пакет передано Windows. Це не підтвердження фізичного виходу наклейок.";
         }
         catch (OperationCanceledException) { Status = "Скасовано. Нового друку не запущено."; }

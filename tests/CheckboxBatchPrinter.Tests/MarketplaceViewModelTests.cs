@@ -2079,6 +2079,16 @@ internal static partial class MarketplaceViewModelTests
             True(ReferenceEquals(main.AllReceiptsTab.View, allGrid!.ItemsSource));
             True(ReferenceEquals(main.OrdersReceiptsTab.View, ordersGrid!.ItemsSource));
             True(ReferenceEquals(workspace.Orders, marketplaceOrdersGrid!.ItemsSource));
+            var labelRowModel = new MarketplaceOrderRowViewModel(Order() with { Shipments = [new("nova_poshta", "synthetic-printed-ttn")] });
+            var labelRow = new DataGridRow { DataContext = labelRowModel, Style = marketplaceOrdersGrid.RowStyle };
+            labelRowModel.ApplyLabelHistory([new("synthetic-print", "synthetic-job", "synthetic-printer", DateTimeOffset.UtcNow,
+                LabelSubmissionState.Submitted, [new(ShippingCarrier.NovaPoshta, "synthetic", "synthetic-printed-ttn", "doc", 1, "hash")], 42)]);
+            await DrainDispatcherAsync();
+            Equal(Color.FromRgb(0xC7, 0xF2, 0xD4), ((SolidColorBrush)labelRow.Background).Color);
+            Equal(Color.FromRgb(0x07, 0x5E, 0x3A), ((SolidColorBrush)labelRow.Foreground).Color);
+            labelRowModel.ApplyLabelHistory([]);
+            await DrainDispatcherAsync();
+            True(labelRow.Background is not SolidColorBrush background || background.Color != Color.FromRgb(0xC7, 0xF2, 0xD4));
             True(!ReferenceEquals(allGrid.ItemsSource, ordersGrid.ItemsSource));
             Equal(3, allGrid.Items.Count);
             var selectAll = (Button)mainWindow.FindName("SelectAllChecksButton");

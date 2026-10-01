@@ -21,6 +21,16 @@
                 <DataTrigger Binding="{Binding PrintStatus}" Value="Error"><Setter Property="ToolTip" Value="{Binding PrintError}" /></DataTrigger>
             </Style.Triggers>
         </Style>
+        <Style x:Key="OrderRowStyle" TargetType="DataGridRow">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding HasPrintedLabel}" Value="True">
+                    <Setter Property="Background" Value="#C7F2D4" />
+                    <Setter Property="Foreground" Value="#075E3A" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
+                    <Setter Property="ToolTip" Value="ТТН цього замовлення вже передано в чергу друку Windows." />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
         <Style x:Key="ReceiptGridStyle" TargetType="DataGrid">
             <Setter Property="AutoGenerateColumns" Value="False" />
             <Setter Property="CanUserAddRows" Value="False" />
@@ -238,7 +248,8 @@
                                       SelectedItem="{Binding Marketplace.SelectedOrder, Mode=TwoWay}"
                                       AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
                                       IsReadOnly="True" SelectionMode="Single" HeadersVisibility="Column"
-                                      GridLinesVisibility="Horizontal" BorderBrush="#D9DEE7" AlternatingRowBackground="#F5F8FC">
+                                      GridLinesVisibility="Horizontal" BorderBrush="#D9DEE7" AlternatingRowBackground="#F5F8FC"
+                                      RowStyle="{StaticResource OrderRowStyle}">
                                 <DataGrid.Columns>
                                     <DataGridTemplateColumn Header="Наклейка ✓" Width="85" CanUserSort="False">
                                         <DataGridTemplateColumn.CellTemplate><DataTemplate>

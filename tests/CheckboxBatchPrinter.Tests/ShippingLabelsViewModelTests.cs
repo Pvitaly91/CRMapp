@@ -11,7 +11,8 @@ internal static partial class MarketplaceViewModelTests
         ("STA labels without Checkbox freeze visible selection through preparation and confirmation", () => StaAsync(LabelSelectionAsync)),
         ("STA label cancellation and inaccessible document never submit partial packets", () => StaAsync(LabelBlockedAsync)),
         ("STA multi-shipment row previews the chosen document without selecting or printing receipts", () => StaAsync(LabelChooseDocumentAsync)),
-        ("STA changed TTN blocks stale preview and restarted Unknown requires repeat warning", () => StaAsync(LabelChangedAndRestartAsync))
+        ("STA changed TTN blocks stale preview and restarted Unknown requires repeat warning", () => StaAsync(LabelChangedAndRestartAsync)),
+        ("STA printed label highlight survives restart, refresh and failed retry but follows current TTN", () => StaAsync(LabelPrintedHighlightAsync))
     ];
     private sealed class LabelPrinter : ILabelPrinter
     {
@@ -53,6 +54,8 @@ internal static partial class MarketplaceViewModelTests
         Equal(1,p.Calls); Equal(1,p.Batch!.Pages.Count); Equal("ORDER-41",p.Batch.Pages[0].Shipment.OrderNumber);
         True(!w.AllOrderRows.Single(r => r.Model.Number == "ORDER-41").IsSelectedForLabels);
         True(w.AllOrderRows.Single(r => r.Model.Number == "ORDER-42").IsSelectedForLabels);
+        True(w.AllOrderRows.Single(r => r.Model.Number == "ORDER-41").HasPrintedLabel);
+        True(!w.AllOrderRows.Single(r => r.Model.Number == "ORDER-42").HasPrintedLabel);
         Equal(0,f.Printer.Calls); Equal(0,f.ReceiptSource.Calls); Equal(0,f.Settings.AppSaves);
         vm.ClearCommand.Execute(null); True(w.AllOrderRows.All(r => !r.IsSelectedForLabels));
     }
@@ -76,7 +79,7 @@ internal static partial class MarketplaceViewModelTests
         await h.SaveAsync(new("synthetic-old-attempt","synthetic-old-job",p.Printers()[0],DateTimeOffset.UtcNow,LabelSubmissionState.SubmissionUnknown,
             [new(shipment.Carrier,"synthetic",shipment.TrackingNumber,"synthetic-doc",1,"synthetic-hash")]));
         var restartedDialogs = new LabelDialogs { Confirm = false }; var restarted = Labels(w,h,new(),p,restartedDialogs);
-        await restarted.RestoreHistoryAsync(); True(row2.LabelPrintStatus.Contains("невідоме"));
+        await restarted.RestoreHistoryAsync(); True(row2.LabelPrintStatus.Contains("невідоме")); True(!row2.HasPrintedLabel);
         restarted.ClearCommand.Execute(null); row2.IsSelectedForLabels = true;
         await restarted.RunAsync(null,true); Equal(1,restartedDialogs.Previous.Count); Equal(0,p.Calls);
     }
@@ -89,5 +92,37 @@ internal static partial class MarketplaceViewModelTests
         var vm = Labels(w,new(),source,printer,dialogs);
         await vm.RunAsync(row,false); Equal(1,loads); Equal(1,dialogs.Previews); Equal(0,printer.Calls);
         Equal(0,f.Printer.Calls); True(!row.IsSelectedForLabels);
+    }
+
+    private static async Task LabelPrintedHighlightAsync()
+    {
+        var (w,_) = await LabelWorkspace(); var h = new ShippingLabelsTests.History(); var p = new LabelPrinter();
+        var vm = Labels(w,h,new(),p,new()); vm.SelectVisibleCommand.Execute(null);
+        await vm.RunAsync(null,true);
+        Equal(1,p.Calls); True(w.AllOrderRows.All(r => r.HasPrintedLabel)); // NP and Rozetka Delivery.
+
+        var (reopened,fixture) = await LabelWorkspace();
+        var restored = Labels(reopened,h,new(),p,new()); reopened.Labels = restored;
+        await restored.RestoreHistoryAsync(); True(reopened.AllOrderRows.All(r => r.HasPrintedLabel));
+        await reopened.SyncAsync(); await restored.RestoreHistoryAsync();
+        True(reopened.AllOrderRows.All(r => r.HasPrintedLabel));
+
+        // A failed repeat does not erase an earlier successful submission of the same TTN.
+        var old = h.Attempts.Single();
+        await h.SaveAsync(old with { AttemptId = "failed-repeat", TimeUtc = old.TimeUtc.AddMinutes(1), State = LabelSubmissionState.NotSubmitted });
+        await restored.RestoreHistoryAsync(); True(reopened.AllOrderRows.All(r => r.HasPrintedLabel));
+        var row = reopened.AllOrderRows.First(); var changes = 0;
+        row.PropertyChanged += (_,e) => { if (e.PropertyName == nameof(row.HasPrintedLabel)) changes++; };
+        fixture.Source.Orders = fixture.Source.Orders.Select(o => o.Key == row.Key
+            ? o with { Shipments = [new("nova_poshta","replacement-unprinted")] } : o).ToArray();
+        await reopened.SyncAsync(); await restored.RestoreHistoryAsync();
+        True(!row.HasPrintedLabel); True(changes > 0);
+        True(reopened.AllOrderRows.Last().HasPrintedLabel);
+
+        var shipment = ShippingCarrierNames.ForOrder(row.Model).Single();
+        await h.SaveAsync(new("unknown-current","unknown-job",p.Printers()[0],DateTimeOffset.UtcNow.AddMinutes(2),
+            LabelSubmissionState.SubmissionUnknown,[new(shipment.Carrier,"synthetic",shipment.TrackingNumber,"doc",1,"hash")]));
+        await restored.RestoreHistoryAsync(); True(!row.HasPrintedLabel);
+        True(row.LabelPrintStatus.Contains("невідоме"));
     }
 }
