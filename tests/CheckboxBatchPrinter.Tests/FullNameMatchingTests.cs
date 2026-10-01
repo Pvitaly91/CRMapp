@@ -10,7 +10,7 @@ internal static class FullNameMatchingTests
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
         ("full names: arbitrary categories and plural kits resolve both marketplaces in every input order", Run(ArbitraryNames)),
-        ("full names: typography normalizes without deleting words punctuation number roles or translating", Run(Normalization)),
+        ("full names: cleaning removes symbols without deleting words digits or translating", Run(Normalization)),
         ("full names: entire multibasket names and aggregated quantities are required", Run(CompleteBasket)),
         ("full names: absent names incomplete lists and unknown same-name quantities preserve competitors", Run(IncompleteEvidence)),
         ("full names: v6 graphs expire but details and manual decisions survive", Run(CacheMigration))
@@ -69,14 +69,19 @@ internal static class FullNameMatchingTests
     {
         Equal(ProductComparison.Match, Compare("Подарунковий набір DC-12 \"Весна\" O'Ring",
             "  ПОДАРУНКОВИЙ\u00a0набір\tDC–12 «Весна» O’Ring  ").Products);
+        // The explicitly requested cleaned-name policy now discards punctuation/symbols.
+        foreach (var (left, right) in new[]
+        {
+            ("Набір DC-12", "Набір DC12"), ("Набір \"А\"", "Набір А"),
+            ("Роз’єм XT60", "Роз?єм XT60"), ("Зарядка 2×USB", "Зарядка 2?USB"),
+            ("Перехідник USB→DC", "Перехідник USB?DC")
+        }) Equal(ProductComparison.Match, Compare(left, right).Products);
         foreach (var (left, right) in new[]
         {
             ("Кабель живлення", "Кабель питания"), ("Червоний кабель USB", "Кабель USB червоний"),
             ("Набір 12 В 24 В", "Набір 24 В 12 В"), ("Товар USB", "Товар USВ"),
-            ("Набір DC-12", "Набір DC12"), ("Набір \"А\"", "Набір А"),
             ("Кабель живлення USB", "Каб. USB"), ("Кабель USB", "Кабель USB подовжувач"),
-            ("Роз’єм XT60", "Роз?єм XT60"), ("Модуль 4/8Ω", "Модуль 4/8?"),
-            ("Зарядка 2×USB", "Зарядка 2?USB"), ("Перехідник USB→DC", "Перехідник USB?DC"),
+            ("Модуль 4/8Ω", "Модуль 4/8?"),
             ("Вимикач маси", "Вимикач маси, латунний контакт")
         })
         {

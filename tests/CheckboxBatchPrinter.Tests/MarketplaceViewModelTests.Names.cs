@@ -79,14 +79,14 @@ internal static partial class MarketplaceViewModelTests
     private static async Task NameAutomaticUiAsync()
     {
         var fixture = new Fixture(); var cache = new AutomaticCache();
-        // Unknown categories exercise full-name comparison all the way to both tables,
-        // rather than passing only because a category dictionary recognizes the goods.
-        var cable = Order() with { Total = 201, Items = [new("Подарункова листівка Весняний ранок", "", 1, 201, 201)], ItemListComplete = true };
+        // Fifty units with a damaged apostrophe exercise cleaned full names through tables,
+        // preserved source titles, serialized caches, and a later hidden-name collision.
+        var cable = Order() with { Total = 650, Items = [new("Роз’єм XT60H-F", "", 50, 13, 650)], ItemListComplete = true };
         var sensor = cable with { Key = cable.Key with { OrderId = "42" }, Number = "ORDER-42",
-            Items = [new("Запасна кришка для контейнера", "", 1, 201, 201)] };
+            Items = [new("Запасна кришка для контейнера", "", 50, 13, 650)] };
         fixture.Source.Orders = [cable, sensor];
-        fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 20100), Receipt(ReceiptTwo, 2, 20100)];
-        fixture.Details.Values[ReceiptOne] = new(ReceiptOne, [new("  ПОДАРУНКОВА\u00a0листівка Весняний ранок ", "", 1, 201, 201)]) { ItemListComplete = true };
+        fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 65000), Receipt(ReceiptTwo, 2, 65000)];
+        fixture.Details.Values[ReceiptOne] = new(ReceiptOne, [new("  РОЗ?ЄМ\u00a0XT60HF ", "", 50, 13, 650)]) { ItemListComplete = true };
         fixture.Details.Values[ReceiptTwo] = new(ReceiptTwo, sensor.Items) { ItemListComplete = true };
         var (main, workspace) = fixture.Create(automaticCache: cache);
         await main.RefreshAsync(); await OpenOrdersAsync(main, workspace);
@@ -98,16 +98,18 @@ internal static partial class MarketplaceViewModelTests
             Equal("Автозв’язок: сума й товари", row.LinkStatus);
         }
         True(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().All(o => o.HasSuggestedLink && o.LinkStatus == "Автозв’язок: сума й товари"));
+        Equal("Роз’єм XT60H-F", fixture.Cache.Snapshot.Orders.Single(o => o.Key == cable.Key).Items[0].Name);
+        Equal("  РОЗ?ЄМ\u00a0XT60HF ", fixture.Details.Values[ReceiptOne].Items[0].Name);
         Equal(2, fixture.Details.Calls);
         var (restarted, restored) = fixture.Create(automaticCache: cache);
         await restarted.RefreshAsync(); restarted.SelectedTabIndex = 1; await restarted.PrepareOrdersAsync();
         True(restarted.Receipts.All(r => r.OrderMatch?.Basis == AutomaticLinkBasis.AmountAndProducts));
         Equal(2, fixture.Details.Calls);
 
-        // A fully identical name remains a competitor even behind the table search.
+        // A different raw spelling with an identical cleaned name remains a competitor behind search.
         // Cached probable pairs must not reserve its receipt.
         fixture.Source.Orders = [sensor, cable, cable with { Key = cable.Key with { OrderId = "43" }, Number = "HIDDEN",
-            Items = [new("Подарункова листівка Весняний ранок", "", 1, 201, 201)] }];
+            Items = [new("Розєм XT60HF", "", 50, 13, 650)] }];
         restored.OrderSearch = "ORDER";
         await ExecuteAsync(restored.AutoMatchCommand);
         var ambiguous = restarted.Receipts.Single(r => r.Id == ReceiptOne);

@@ -115,6 +115,8 @@ internal static class BasketReceiptMatching
             else if (productState == ProductComparison.Insufficient) message += "Товари: недостатньо даних для порівняння повних назв і кількостей; відсутні або неповні товарні дані не виключають кандидата. ";
             if (selected?.OrderQuantity is { } units && selected.ReceiptQuantity == units)
                 message += $"Кількість товарних одиниць збігається: {units}. Це не доводить тотожність назв товарів. ";
+            if (productState == ProductComparison.Match)
+                message += "Повні назви порівняно після очищення спеціальних символів; оригінальні назви не змінено. ";
             if (selected?.Payment.State == PaymentComparison.Match) message += selected.Payment.Reason + " ";
             else if (canSuggest && selected?.Payment.State == PaymentComparison.Contradiction && !selected.PaymentTieBreak)
                 message += "Різницю оплати не використано: це додатковий критерій лише для розрізнення однакових повних кошиків. ";
@@ -244,15 +246,16 @@ internal static class BasketReceiptMatching
         try
         {
             var left = Group(order.Items); var right = Group(details.Items);
+            // A title made only of removed symbols contains no usable identity evidence.
+            if (left.ContainsKey("") || right.ContainsKey("")) return new(ProductComparison.Insufficient);
             if (!left.Keys.ToHashSet().SetEquals(right.Keys))
             {
-                // This integration transfers marketplace titles into Checkbox unchanged.
-                // Complete unequal title sets do not represent the same basket, irrespective
-                // of product category or language. Never infer synonyms or reorder words.
+                // Compare every cleaned title, not product categories or substrings.
+                // Original marketplace/receipt titles are kept unchanged in their records.
                 var onlyOrder = left.Keys.Except(right.Keys).Order(StringComparer.Ordinal);
                 var onlyReceipt = right.Keys.Except(left.Keys).Order(StringComparer.Ordinal);
                 return new(ProductComparison.Contradiction,
-                    $"Повні назви товарів не збігаються. Лише в замовленні: {NameList(onlyOrder)}. Лише в чеку: {NameList(onlyReceipt)}.");
+                    $"Повні назви товарів після очищення не збігаються. Лише в замовленні: {NameList(onlyOrder)}. Лише в чеку: {NameList(onlyReceipt)}.");
             }
             var mismatch = left.OrderBy(p => p.Key, StringComparer.Ordinal)
                 .FirstOrDefault(p => p.Value.HasValue && right[p.Key].HasValue && p.Value != right[p.Key]);

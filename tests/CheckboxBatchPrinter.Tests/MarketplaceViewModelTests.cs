@@ -80,7 +80,7 @@ internal static partial class MarketplaceViewModelTests
         ("STA cached automatic links restore after restart without detail requests", () => StaAsync(CachedAutomaticRestartAsync)),
         ("STA cached links survive a new unrelated receipt and pending refresh", () => StaAsync(CachedAutomaticPartialRestartAsync)),
         ("STA201 count links flow through workspace tables cache and hidden competitor refresh", () => StaAsync(QuantityAutomaticUiAsync)),
-        ("STA arbitrary full-name links flow through both tables cache and identical hidden competitor refresh", () => StaAsync(NameAutomaticUiAsync)),
+        ("STA cleaned names and 50 units flow through both tables cache and hidden normalization collision", () => StaAsync(NameAutomaticUiAsync)),
         ("STA terminal-kit Prom order links while unrelated unconnected-marketplace switch receipt remains available", () => StaAsync(ContactUnconnectedMarketplaceUiAsync)),
         ("STA payment links flow through both tables restart cache and hidden competitor refresh", () => StaAsync(PaymentAutomaticUiAsync)),
         ("STA distinct product names take priority over payment in both tables and restart cache", () => StaAsync(NameBeforePaymentUiAsync)),

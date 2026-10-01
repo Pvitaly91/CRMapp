@@ -19,7 +19,7 @@ internal static class BasketMatchingTests
         ("basket API-to-matcher: full Prom products and Checkbox goods suggest but never prove", () => AdapterToMatcherAsync(false)),
         ("basket API-to-matcher: localized Prom hryvnia totals and product prices permit probable links", () => AdapterToMatcherAsync(true)),
         ("basket API-to-matcher: identical name and price lines aggregate without bypassing ambiguity", SplitBasketAdapterAsync),
-        ("basket API-to-matcher: typography normalizes but product codes and punctuation stay distinct", TypographyAdapterAsync),
+        ("basket API-to-matcher: symbol cleaning preserves complete letters and numeric fragments", TypographyAdapterAsync),
         ("basket matching: complete details of every competing receipt are required", CompetingReceiptsAsync),
         ("basket matching: two orders stay ambiguous even after one is rejected", CompetingOrdersAsync),
         ("basket matching: unique sum tolerates missing basket fields but not product contradictions", FullBasketAsync),
@@ -158,13 +158,22 @@ internal static class BasketMatchingTests
         var normalized = await ParsePromProductsAsync(
             [Products[0] with { Name = "  pir\u00a0DC\u20139/60\u2003\u00ab12/24V\u00bb\tO\u2019Ring  " }, Products[1]]);
         Equal(ReceiptLinkState.Suggested, Match([normalized], details: details).State);
+        // New explicit cleaned-name contract discards symbols, keeping boundaries between numbers.
+        foreach (var cleanedEquivalent in new[]
+                 {
+                     "PIR DC9/60 \"12/24V\" O'Ring",
+                     "PIR DC-9-60 \"12/24V\" O'Ring",
+                     "PIR DC-9/60 12/24V O'Ring",
+                     "PIR DC-9/60 \"12/24V\" ORing"
+                 })
+        {
+            var equivalent = await ParsePromProductsAsync([Products[0] with { Name = cleanedEquivalent }, Products[1]]);
+            Equal(ReceiptLinkState.Suggested, Match([equivalent], details: details).State);
+        }
         foreach (var changed in new[]
                  {
                      "PIR DC-9/60 \"12/48V\" O'Ring", // Explicitly aligned voltage differs.
-                     "PIR DC9/60 \"12/24V\" O'Ring",  // Punctuation is not removed.
-                     "PIR DC-9-60 \"12/24V\" O'Ring", // Slash is not a dash variant.
-                     "PIR DC-9/60 12/24V O'Ring",      // Quotes are normalized, not removed.
-                     "PIR DC-9/60 \"12/24V\" ORing",
+                     "PIR DC-960 \"12/24V\" O'Ring", // Numeric fragments must not concatenate.
                      "DC-9/60 \"12/24V\" O'Ring"      // Partial names cannot match.
                  })
         {
