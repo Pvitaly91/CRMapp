@@ -2079,6 +2079,8 @@ internal static partial class MarketplaceViewModelTests
             True(ReferenceEquals(main.AllReceiptsTab.View, allGrid!.ItemsSource));
             True(ReferenceEquals(main.OrdersReceiptsTab.View, ordersGrid!.ItemsSource));
             True(ReferenceEquals(workspace.Orders, marketplaceOrdersGrid!.ItemsSource));
+            _xamlCheckpoint = "consecutive printed label row backgrounds";
+            await AssertConsecutivePrintedLabelRowsAsync(marketplaceOrdersGrid);
             var labelRowModel = new MarketplaceOrderRowViewModel(Order() with { Shipments = [new("nova_poshta", "synthetic-printed-ttn")] });
             var labelRow = new DataGridRow { DataContext = labelRowModel, Style = marketplaceOrdersGrid.RowStyle };
             labelRowModel.ApplyLabelHistory([new("synthetic-print", "synthetic-job", "synthetic-printer", DateTimeOffset.UtcNow,
@@ -2306,6 +2308,49 @@ internal static partial class MarketplaceViewModelTests
             InterceptedStartupCalls++;
             // The real App type is never constructed and none of its bootstrap is inherited.
         }
+    }
+
+    private static async Task AssertConsecutivePrintedLabelRowsAsync(DataGrid productionGrid)
+    {
+        var models = Enumerable.Range(0, 6).Select(i => new MarketplaceOrderRowViewModel(Order() with
+        {
+            Key = new(MarketplaceKind.Prom, "synthetic", i.ToString()), Number = i.ToString(),
+            Shipments = [new("nova_poshta", "synthetic-ttn-" + i)]
+        })).ToArray();
+        void MarkPrinted(int i) => models[i].ApplyLabelHistory([new("synthetic-print-" + i, "job", "printer", DateTimeOffset.UtcNow,
+            LabelSubmissionState.Submitted, [new(ShippingCarrier.NovaPoshta, "synthetic", "synthetic-ttn-" + i, "doc", 1, "hash")], 42)]);
+        for (var i = 0; i < 4; i++) MarkPrinted(i);
+        var grid = new DataGrid
+        {
+            ItemsSource = models, RowStyle = productionGrid.RowStyle,
+            AlternationCount = productionGrid.AlternationCount,
+            AutoGenerateColumns = false, CanUserAddRows = false, EnableRowVirtualization = false
+        };
+        // Preserve whether the actual grid sets this value: a local null also overrides row styles in WPF.
+        if (DependencyPropertyHelper.GetValueSource(productionGrid, DataGrid.AlternatingRowBackgroundProperty).BaseValueSource != BaseValueSource.Default)
+            grid.AlternatingRowBackground = productionGrid.AlternatingRowBackground;
+        grid.Columns.Add(new DataGridTextColumn { Binding = new System.Windows.Data.Binding(nameof(MarketplaceOrderRowViewModel.Number)) });
+        var host = new Window { Content = grid }; // Hidden; supplies the same WPF theme/layout context as the main window.
+        LayoutContent(host);
+        await DrainDispatcherAsync();
+        grid.UpdateLayout();
+        DataGridRow Row(int i) => grid.ItemContainerGenerator.ContainerFromItem(models[i]) as DataGridRow
+            ?? throw new InvalidOperationException($"Synthetic order row {i} was not generated.");
+        var green = Color.FromRgb(0xC7, 0xF2, 0xD4);
+        var alternating = Color.FromRgb(0xF5, 0xF8, 0xFC);
+        for (var i = 0; i < 4; i++)
+            True(Row(i).Background is SolidColorBrush brush && brush.Color == green,
+                $"Consecutive printed label row {i} must be green, including odd rows; actual {Row(i).Background}.");
+        Equal(Colors.White, ((SolidColorBrush)Row(4).Background).Color);
+        Equal(alternating, ((SolidColorBrush)Row(5).Background).Color);
+        models[1].ApplyLabelHistory([]); await DrainDispatcherAsync();
+        Equal(alternating, ((SolidColorBrush)Row(1).Background).Color);
+        MarkPrinted(1); await DrainDispatcherAsync();
+        Equal(green, ((SolidColorBrush)Row(1).Background).Color);
+        grid.Items.SortDescriptions.Add(new(nameof(MarketplaceOrderRowViewModel.Number), ListSortDirection.Descending));
+        grid.UpdateLayout(); await DrainDispatcherAsync();
+        for (var i = 0; i < 4; i++) Equal(green, ((SolidColorBrush)Row(i).Background).Color);
+        host.Close();
     }
 
     private static void LayoutContent(Window window)

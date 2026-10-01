@@ -22,7 +22,11 @@
             </Style.Triggers>
         </Style>
         <Style x:Key="OrderRowStyle" TargetType="DataGridRow">
+            <Setter Property="Background" Value="White" />
             <Style.Triggers>
+                <Trigger Property="ItemsControl.AlternationIndex" Value="1">
+                    <Setter Property="Background" Value="#F5F8FC" />
+                </Trigger>
                 <DataTrigger Binding="{Binding HasPrintedLabel}" Value="True">
                     <Setter Property="Background" Value="#C7F2D4" />
                     <Setter Property="Foreground" Value="#075E3A" />
@@ -248,7 +252,7 @@
                                       SelectedItem="{Binding Marketplace.SelectedOrder, Mode=TwoWay}"
                                       AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
                                       IsReadOnly="True" SelectionMode="Single" HeadersVisibility="Column"
-                                      GridLinesVisibility="Horizontal" BorderBrush="#D9DEE7" AlternatingRowBackground="#F5F8FC"
+                                      GridLinesVisibility="Horizontal" BorderBrush="#D9DEE7" AlternationCount="2"
                                       RowStyle="{StaticResource OrderRowStyle}">
                                 <DataGrid.Columns>
                                     <DataGridTemplateColumn Header="Наклейка ✓" Width="85" CanUserSort="False">
