@@ -1,5 +1,19 @@
 # Shipping labels — implementation and acceptance
 
+## 1.0.15 — one PDF request per selected NP account (2026-10-01)
+
+Started from `8a343dec32417fe11bde29fde1823936f4c2e017`. The prior optimization still made a paginated account lookup plus one PDF request per TTN. The print path now makes **one GET for all distinct selected TTNs of one explicitly bound NP account**, with no `getDocumentList` call. Different selected accounts each need their own request. The pinned [SDK Marking.php](https://github.com/sashalenz/nova-poshta-api/blob/1c7027da068363d9d06792a1e698b025d852b41d/src/Marking.php) supplies the exact bulk `orders/{comma-separated numbers}` route; one TTN retains `orders[]`. No new dependency or guessed write endpoint was added.
+
+The source inspects the shared PDF once, associates pages by printed TTN rather than response order, and retains every returned page for each TTN. Rendering selects original PDF page indices while preserving TTN-local history page numbers and selected order sequence, including mixed NP/RD packets. Missing or foreign/unidentified pages stop the complete packet. Known expected place counts reject too few pages; unknown counts no longer require a separate lookup or invented one-place assertion. This intentionally simplifies the old diagnostic-proof gate: no print-path Ref/deletion proof or claim of independently verified unknown place completeness. The user still previews and confirms the whole packet; the optional detailed diagnostic remains unchanged.
+
+The response cache exists only for one preparation and is separated by account, key fingerprint and selected TTNs. New packets fetch a fresh PDF. Credentials, history, receipt printing and printer geometry are unchanged. NP failures (including 5xx) do not retry or fan out to individual-TTN requests; existing HTTP 429 / supported HTTP 200 rate-limit cooldowns still apply. There is no fixed two-second delay and no promised two-second server latency. A batch error is identified as a packet error, not blamed on the first selected order.
+
+Release Development verification: **319/319 tests passed**, including all 308 previous groups (print-source expectations updated for the intentionally simplified path) and 11 new transport/render groups. Coverage includes exact SDK URL/allowlist, one GET/no list, 120 shipment references deduplicated to two TTNs, different accounts/key rotation, reordered/interleaved/multi-place pages with raster comparison, unknown/known place counts, missing/foreign pages, manual proof independence, whole-packet confirmation/cancellation, preserved 429 deadlines, no NP 5xx retry and unchanged RD/Seller retry behavior. Build succeeded with the existing WFAC010 warning only. Tests use synthetic identities, PDFs, HTTP handlers and fake print backends.
+
+No real bulk API request, user key access, carrier latency measurement or physical print was performed. The official [business-cabinet guide](https://my.novaposhta.ua/data/how-to-use.pdf), printed page 68, confirms multiple markings for multiple shipment places, but actual bulk ordering, server limits and multi-place completeness remain unverified with live documents. Production packaging/deployment use the existing isolated clean-commit and private-backup workflow; their exact results are recorded separately in local build/deployment artifacts.
+
+---
+
 ## 1.0.14 — immediate NP requests and one lookup per packet/account (2026-10-01)
 
 The user requested removal of the fixed two-second delay and repeated label preparation checks. Starting from `82464da6a338099e884ebc524abd3ece6836e2e9`, the transport now sends the next request as soon as the preceding response completes. Per-key serialization and pauses after actual HTTP 429 / supported HTTP 200 rate-limit responses remain, including server Retry-After and the existing fallback. Cancellation and other carriers' retry behavior are preserved.

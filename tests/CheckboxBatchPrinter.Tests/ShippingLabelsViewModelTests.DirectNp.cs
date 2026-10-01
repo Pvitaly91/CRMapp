@@ -14,8 +14,8 @@ internal static partial class MarketplaceViewModelTests
 {
     public static IReadOnlyList<(string Name, Func<Task> Test)> DirectNpShippingScenarios =>
     [
-        ("STA two selected NP TTNs verify through source and one packet confirmation before one job", () => StaAsync(DirectNpSelectionAsync)),
-        ("STA invalid second NP PDF blocks both labels and identifies the failing order", () => StaAsync(DirectNpInvalidSecondAsync))
+        ("STA two selected NP TTNs use one bulk GET before one packet confirmation and one job", () => StaAsync(DirectNpSelectionAsync)),
+        ("STA foreign page in NP bulk PDF blocks both labels with a whole-packet identity error", () => StaAsync(DirectNpInvalidSecondAsync))
     ];
 
     private const string BatchTtnOne = "20400000000001", BatchTtnTwo = "20400000000002";
@@ -44,9 +44,12 @@ internal static partial class MarketplaceViewModelTests
             Equal(HttpMethod.Get, request.Method);
             Equal(BatchConnection.ApiKey, request.RequestUri.AbsolutePath.Split('/')[^1]);
             PdfCalls++;
-            var number = request.RequestUri.AbsolutePath.Split('/')[4];
-            True(number is BatchTtnOne or BatchTtnTwo, "Unexpected public TTN in marking URL.");
-            var bytes = SyntheticShippingPdf.Create(pageTexts: [invalidSecond && number == BatchTtnTwo ? "20400000000003" : number]);
+            var segments = Uri.UnescapeDataString(request.RequestUri.AbsolutePath).Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var numbers = segments[3].Split(',');
+            True(numbers.All(n => n is BatchTtnOne or BatchTtnTwo), "Unexpected public TTN in marking URL.");
+            Equal(numbers.Length > 1 ? "orders" : "orders[]", segments[2]);
+            var texts = numbers.Select(n => invalidSecond && n == BatchTtnTwo ? "20400000000003" : n).Reverse().ToArray();
+            var bytes = SyntheticShippingPdf.Create(pages: texts.Length, pageTexts: texts);
             return new(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) { Headers = { ContentType = new("application/pdf") } } };
         }
     }
@@ -74,19 +77,23 @@ internal static partial class MarketplaceViewModelTests
                     ShippingCarrierNames.ForOrder(rows[0].Model).Single(), new(today.AddDays(-6), today)));
             }
             handler.JsonCalls = handler.PdfCalls = 0;
-            var source = new ConfiguredShippingLabelSource(store, new NovaPoshtaDirectLabelSource(store, client, inspector, session),
+            var source = new ConfiguredShippingLabelSource(store, new NovaPoshtaDirectLabelSource(store, client, inspector),
                 new ShippingLabelsTests.Source());
             var history = new ShippingLabelsTests.History();
             var printer = new LabelPrinter();
             var dialogs = new LabelDialogs { Confirm = confirm };
-            dialogs.OnPreview = () => { Equal(0, printer.Calls); Equal(0, history.Attempts.Count); };
+            dialogs.OnPreview = () =>
+            {
+                Equal(0, printer.Calls); Equal(0, history.Attempts.Count);
+                Equal(0, handler.JsonCalls); Equal(1, handler.PdfCalls);
+            };
             var labels = new ShippingLabelsViewModel(workspace, store, history, source, new WindowsShippingLabelRenderer(), printer, dialogs);
             labels.SelectVisibleCommand.Execute(null);
             await labels.RunAsync(null, true);
             True(dialogs.Errors.Count == 0, string.Join(" | ", dialogs.Errors));
             Equal(1, dialogs.Previews);
-            Equal(2, handler.JsonCalls);
-            Equal(2, handler.PdfCalls);
+            Equal(0, handler.JsonCalls);
+            Equal(1, handler.PdfCalls);
             Equal(confirm ? 1 : 0, printer.Calls);
             Equal(confirm ? 1 : 0, history.Attempts.Count);
             if (confirm)
@@ -97,7 +104,13 @@ internal static partial class MarketplaceViewModelTests
                 True(rows.All(r => !r.IsSelectedForLabels));
             }
             else True(rows.All(r => r.IsSelectedForLabels));
-            // Packet preparation must not turn API verification into a manual session decision.
+            // A manual diagnostic decision must not affect the bulk print request or be written by it.
+            if (approvedFirst) Equal("10000000-0000-0000-0000-000000000001", session.Require(BatchConnection, BatchTtnOne).DocumentRef);
+            else
+            {
+                try { session.Require(BatchConnection, BatchTtnOne); throw new Exception("Bulk download wrote a manual session approval."); }
+                catch (ShippingLabelException) { }
+            }
             try { session.Require(BatchConnection, BatchTtnTwo); throw new Exception("Automatic batch verification wrote a manual session approval."); }
             catch (ShippingLabelException) { }
             Equal(0, fixture.Printer.Calls);
@@ -116,7 +129,7 @@ internal static partial class MarketplaceViewModelTests
         var handler = new BatchNpHandler(invalidSecond: true);
         using var http = new HttpClient(handler);
         var source = new ConfiguredShippingLabelSource(store,
-            new NovaPoshtaDirectLabelSource(store, new(NovaPoshtaRequestPolicyTests.FastTransport(http)), new WindowsLabelPdfInspector(), new()),
+            new NovaPoshtaDirectLabelSource(store, new(NovaPoshtaRequestPolicyTests.FastTransport(http)), new WindowsLabelPdfInspector()),
             new ShippingLabelsTests.Source());
         var history = new ShippingLabelsTests.History();
         var printer = new LabelPrinter();
@@ -124,11 +137,15 @@ internal static partial class MarketplaceViewModelTests
         var labels = new ShippingLabelsViewModel(workspace, store, history, source, new WindowsShippingLabelRenderer(), printer, dialogs);
         labels.SelectVisibleCommand.Execute(null);
         await labels.RunAsync(null, true);
-        Equal(2, handler.PdfCalls);
+        Equal(0, handler.JsonCalls);
+        Equal(1, handler.PdfCalls);
         Equal(0, printer.Calls);
         Equal(0, dialogs.Previews);
         Equal(0, history.Attempts.Count);
-        True(dialogs.Errors.Single().Contains(BatchTtnTwo, StringComparison.Ordinal) && dialogs.Errors[0].Contains(rows[1].Model.Number, StringComparison.Ordinal));
+        True(dialogs.Errors.Single().Contains("Пакет наклейок Нової пошти", StringComparison.Ordinal) &&
+            dialogs.Errors[0].Contains("іншим номером", StringComparison.Ordinal) &&
+            !dialogs.Errors[0].Contains("Замовлення №" + rows[0].Model.Number, StringComparison.Ordinal),
+            "A foreign bulk page must fail the whole packet without blaming the first selected order.");
         True(rows.All(r => r.IsSelectedForLabels));
         Equal(0, fixture.Printer.Calls);
     }

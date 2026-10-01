@@ -4,14 +4,23 @@ public enum ShippingCarrier { Unknown, NovaPoshta, RozetkaDelivery }
 public enum LabelSubmissionState { NotSubmitted, SubmissionUnknown, Submitted }
 public enum LabelFailureKind { MissingDocument, AccessDenied, ConnectionRequired, Temporary, UnsupportedFormat, InvalidDocument }
 public sealed class ShippingLabelException(LabelFailureKind kind, string message) : Exception(message)
-{ public LabelFailureKind Kind { get; } = kind; public DateTimeOffset? RetryAtUtc { get; init; } }
+{
+    public LabelFailureKind Kind { get; } = kind;
+    public DateTimeOffset? RetryAtUtc { get; init; }
+    public bool AppliesToBatch { get; init; }
+}
 
 // None of these identities is an order/receipt ID inferred by basket matching.
 public sealed record ShipmentReference(OrderKey Order, string OrderNumber, ShippingCarrier Carrier,
     string TrackingNumber, string ShipmentId = "", string Source = "", int ExpectedPlaces = 0);
 public sealed record ShippingLabelDocument(ShipmentReference Shipment, string ConnectionId, string DocumentId,
     byte[] Pdf, string Fingerprint, DateTimeOffset RetrievedAtUtc, int ExpectedPages = 0)
-{ public string Source { get; init; } = ""; public string Format { get; init; } = "application/pdf"; }
+{
+    public string Source { get; init; } = "";
+    public string Format { get; init; } = "application/pdf";
+    // One-based indices in the original in-memory PDF, in this shipment's print order. Empty renders all pages.
+    public IReadOnlyList<int> SourcePageNumbers { get; init; } = [];
+}
 public sealed record ShippingLabelPage(ShipmentReference Shipment, string DocumentId, string Fingerprint,
     int PageNumber, double WidthMm, double HeightMm, byte[] Png)
 { public string ConnectionId { get; init; } = ""; public string Source { get; init; } = ""; }

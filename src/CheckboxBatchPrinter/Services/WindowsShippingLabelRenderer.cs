@@ -31,12 +31,20 @@ public sealed class WindowsShippingLabelRenderer : IShippingLabelRenderer
                     if (fpdf_formfill.FPDF_GetFormType(pdf) != 0)
                         throw new ShippingLabelException(LabelFailureKind.UnsupportedFormat,"PDF містить інтерактивну форму, а не готову етикетку. Потрібна офіційна пласка друкована форма.");
                     var count = fpdfview.FPDF_GetPageCount(pdf);
-                    if (count is < 1 or > 100 || document.ExpectedPages > 0 && count < document.ExpectedPages)
+                    if (count is < 1 or > 100)
                         throw Invalid("Кількість сторінок менша за кількість місць або перевищує 100.");
-                    var pages = new List<ShippingLabelPage>();
-                    for (var index = 0; index < count; index++)
+                    // Snapshot selection before rendering so the shared PDF stays intact and print order is stable.
+                    var sourcePages = document.SourcePageNumbers.ToArray();
+                    if (sourcePages.Any(number => number < 1 || number > count) || sourcePages.Distinct().Count() != sourcePages.Length)
+                        throw Invalid("Вибрані сторінки PDF відсутні або повторюються.");
+                    if (sourcePages.Length == 0) sourcePages = Enumerable.Range(1,count).ToArray();
+                    if (document.ExpectedPages > 0 && sourcePages.Length < document.ExpectedPages)
+                        throw Invalid("Кількість сторінок менша за кількість місць або перевищує 100.");
+                    var pages = new List<ShippingLabelPage>(sourcePages.Length);
+                    for (var ordinal = 0; ordinal < sourcePages.Length; ordinal++)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
+                        var index = sourcePages[ordinal] - 1;
                         var page = fpdfview.FPDF_LoadPage(pdf,index);
                         if (page is null || page.__Instance == IntPtr.Zero) throw Invalid("Не вдалося прочитати сторінку PDF.");
                         try
@@ -61,7 +69,8 @@ public sealed class WindowsShippingLabelRenderer : IShippingLabelRenderer
                                 var source = BitmapSource.Create(px,py,dpiX,dpiY,PixelFormats.Bgr32,null,pixels,stride); source.Freeze();
                                 var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(source));
                                 using var output = new MemoryStream(); encoder.Save(output);
-                                pages.Add(new(document.Shipment,document.DocumentId,document.Fingerprint,index+1,widthMm,heightMm,output.ToArray())
+                                // History identifies pages within a TTN, independently of its position in a shared PDF.
+                                pages.Add(new(document.Shipment,document.DocumentId,document.Fingerprint,ordinal+1,widthMm,heightMm,output.ToArray())
                                 { ConnectionId = document.ConnectionId, Source = document.Source });
                             }
                             finally { fpdfview.FPDFBitmapDestroy(bitmap); }

@@ -99,7 +99,7 @@ public partial class App : Application
                 new NovaPoshtaDiagnostics(npClient, pdfInspector), npSession, () => marketplace.SelectedOrder?.Model);
             marketplace.Labels = new ShippingLabelsViewModel(marketplace, shippingSettings, labelHistory,
                 new ConfiguredShippingLabelSource(shippingSettings,
-                    new NovaPoshtaDirectLabelSource(shippingSettings, npClient, pdfInspector, npSession),
+                    new NovaPoshtaDirectLabelSource(shippingSettings, npClient, pdfInspector),
                     new OfficialShippingLabelSource(shippingTransport, shippingSettings, marketplaceSettings, marketplaceSecrets)),
                 new WindowsShippingLabelRenderer(), labelPrinter, labelDialogs);
             var dialogs = new UiDialogService(settingsService, authentication, imageService, printService, _logger,

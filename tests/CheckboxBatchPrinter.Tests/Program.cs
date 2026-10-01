@@ -91,6 +91,8 @@ internal static class Program
         Tests.AddRange(ShippingLabelsTests.All);
         Tests.AddRange(NovaPoshtaDirectTests.All);
         Tests.AddRange(NovaPoshtaBatchSourceTests.All);
+        Tests.AddRange(NovaPoshtaBulkTransportTests.All);
+        Tests.AddRange(NovaPoshtaBulkRenderTests.All);
         Tests.AddRange(NovaPoshtaRequestPolicyTests.All);
         Tests.AddRange(NovaPoshtaCooldownUiTests.All);
         Tests.AddRange(SimpleShippingSettingsTests.All);

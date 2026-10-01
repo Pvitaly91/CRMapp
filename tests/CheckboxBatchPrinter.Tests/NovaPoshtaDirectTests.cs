@@ -411,34 +411,39 @@ internal static class NovaPoshtaDirectTests
     private static async Task MixedCore(bool broken)
     {
         var stores = new Stores(); stores.Config = stores.Config with { NovaPoshtaConnections = [Connection], NovaPoshtaStoreBindings = [new(Shipment().Order.ConnectionId,Connection.Id)] };
-        var handler = new Handler(async (request, _) =>
+        var npGets = 0;
+        var handler = new Handler((request, _) =>
         {
-            if (request.RequestUri!.Host == "api.novaposhta.ua") return await Page(request) == 1 ? List(Row(),Row(OtherTtn,"10000000-0000-0000-0000-000000000002")) : List();
+            Check(request.RequestUri!.Host != "api.novaposhta.ua", "Mixed printing performed a getDocumentList scan.");
             if (request.RequestUri.Host == "my.novaposhta.ua")
             {
-                var number = request.RequestUri.AbsolutePath.Contains(OtherTtn) ? OtherTtn : Ttn;
-                return Pdf(SyntheticShippingPdf.Create(pageTexts: [number]));
+                npGets++;
+                Check(request.Method == HttpMethod.Get && Uri.UnescapeDataString(request.RequestUri.AbsolutePath) ==
+                    $"/orders/printMarking100x100/orders/{Ttn},{OtherTtn}/type/pdf/zebra/zebra/apiKey/{Connection.ApiKey}",
+                    "Mixed packet did not request exactly its two selected NP labels in one GET.");
+                return Task.FromResult(Pdf(SyntheticShippingPdf.Create(pages: 2, pageTexts: [OtherTtn, Ttn])));
             }
             Check(request.Headers.Authorization?.Parameter == "synthetic-rd-token", "NP key sent to RD.");
-            return request.RequestUri.AbsolutePath.EndsWith("/label") ? Json(new { statusCode = 0, data = new { label = Convert.ToBase64String(SyntheticShippingPdf.Create()) } })
-                : Json(new { statusCode = 0, data = new { id = "00012345", places = 1 } });
+            return Task.FromResult(request.RequestUri.AbsolutePath.EndsWith("/label") ? Json(new { statusCode = 0, data = new { label = Convert.ToBase64String(SyntheticShippingPdf.Create()) } })
+                : Json(new { statusCode = 0, data = new { id = "00012345", places = 1 } }));
         });
         using var http = new HttpClient(handler); var transport = NovaPoshtaRequestPolicyTests.FastTransport(http); var client = new NovaPoshtaReadOnlyClient(transport);
-        var inspector = new WindowsLabelPdfInspector(); var session = new NovaPoshtaVerifiedSession(); var diagnostics = new NovaPoshtaDiagnostics(client,inspector);
-        foreach (var number in new[] { Ttn,OtherTtn }) session.Accept(Connection, await diagnostics.CheckAsync(Connection,Shipment(number),Period));
-        var source = new ConfiguredShippingLabelSource(stores,new NovaPoshtaDirectLabelSource(stores,client,inspector,session),new OfficialShippingLabelSource(transport,stores,stores,stores));
+        var inspector = new WindowsLabelPdfInspector();
+        var source = new ConfiguredShippingLabelSource(stores,new NovaPoshtaDirectLabelSource(stores,client,inspector),new OfficialShippingLabelSource(transport,stores,stores,stores));
         var orders = new[] { Order("NP1",ShippingCarrier.NovaPoshta,Ttn), Order("RD",ShippingCarrier.RozetkaDelivery,broken ? "000badid" : "00012345"), Order("NP2",ShippingCarrier.NovaPoshta,OtherTtn) };
         var device = new Device(); var history = new History();
         try
         {
             var batch = await new LabelBatchPreparation(source,new WindowsShippingLabelRenderer()).PrepareAsync(orders,Settings,ShippingLabelsTests.Geometry);
             if (broken) throw new Exception("Partial packet allowed.");
-            Check(batch.Pages.Select(p=>p.Shipment.OrderNumber).SequenceEqual(new[]{"NP1","RD","NP2"}) && batch.Pages[0].DocumentId == Ref && batch.Pages[2].DocumentId != Ref,"Mixed adapter sequence/Ref wrong.");
+            Check(batch.Pages.Select(p=>p.Shipment.OrderNumber).SequenceEqual(new[]{"NP1","RD","NP2"}) &&
+                batch.Pages[0].DocumentId == "ttn:" + Ttn && batch.Pages[2].DocumentId == "ttn:" + OtherTtn,
+                "Mixed adapter sequence/typed TTN identity wrong.");
             await new LabelPrintCoordinator(history,new WindowsLabelPrinter(_=>device)).SubmitAsync(batch);
             Check(device.Begins == 1 && device.Pages == 3 && device.Ends == 1,"Not one native backend job.");
         }
         catch (ShippingLabelException) when (broken) { Check(device.Begins == 0 && history.Attempts.Count == 0,"Partial print/history created."); }
-        Check(stores.Market.Connections.Count == 0,"Test accidentally required Seller.");
+        Check(npGets == 1 && stores.Market.Connections.Count == 0,"Mixed printing rescanned NP or required Seller.");
     }
     private static async Task Persistence()
     {

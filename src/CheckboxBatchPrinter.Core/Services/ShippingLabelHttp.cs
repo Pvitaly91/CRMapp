@@ -24,7 +24,7 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
         {
             "api.novaposhta.ua" => request.Method == HttpMethod.Post && uri.AbsolutePath == "/v2.0/json/" && uri.Query.Length == 0,
             "my.novaposhta.ua" => request.Method == HttpMethod.Get && uri.Query.Length == 0 && Regex.IsMatch(uri.AbsolutePath,
-                @"\A/orders/printMarking100x100/orders(?:\[\]|%5[Bb]%5[Dd])/[0-9]{14}/type/pdf/zebra/zebra/apiKey/[A-Za-z0-9_-]{1,128}\z"),
+                @"\A/orders/printMarking100x100/(?:orders(?:\[\]|%5[Bb]%5[Dd])/[0-9]{14}|orders/[0-9]{14}(?:,[0-9]{14}){1,99})/type/pdf/zebra/zebra/apiKey/[A-Za-z0-9_-]{1,128}\z"),
             "rz-delivery.rozetka.ua" => request.Method == HttpMethod.Get &&
                 (uri.AbsolutePath == "/api/track/label" || Regex.IsMatch(uri.AbsolutePath, @"^/api/track/[0-9A-Za-z-]+$")),
             "api-seller.rozetka.com.ua" => request.Method == HttpMethod.Post && uri.AbsolutePath == "/sites" ||
@@ -57,7 +57,8 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
                     throw novaPoshtaRequest.Limit(RetryDelay(response, _novaPoshtaPolicy.UtcNow));
                 if ((int)response.StatusCode >= 500 || (int)response.StatusCode == 429)
                 {
-                    if (attempt >= 2) throw new ShippingLabelException(LabelFailureKind.Temporary, "API доставки тимчасово недоступне.");
+                    // A direct NP operation is one request; a failed bulk marking must not fan out or retry.
+                    if (novaPoshtaRequest is not null || attempt >= 2) throw new ShippingLabelException(LabelFailureKind.Temporary, "API доставки тимчасово недоступне.");
                     var wait = response.Headers.RetryAfter?.Delta ??
                         (response.Headers.RetryAfter?.Date is { } retryAt ? retryAt - DateTimeOffset.UtcNow : TimeSpan.FromSeconds(attempt + 1));
                     // Do not shorten server delay; excessive delay requires a new explicit request.

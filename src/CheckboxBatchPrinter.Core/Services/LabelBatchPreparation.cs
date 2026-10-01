@@ -9,7 +9,8 @@ public sealed class LabelBatchPreparation(IShippingLabelSource source, IShipping
     {
         settings.Validate();
         if (selectedOrders.Count is 0 or > 100) throw new InvalidOperationException("Виберіть від 1 до 100 замовлень для наклейок.");
-        var batchSource = source is IShippingLabelBatchSource scoped ? scoped.CreateBatchSource() : source;
+        var selectedShipments = selectedOrders.SelectMany(ShippingCarrierNames.ForOrder).ToArray();
+        var batchSource = source is IShippingLabelBatchSource scoped ? scoped.CreateBatchSource(selectedShipments) : source;
         var pages = new List<ShippingLabelPage>();
         var seenShipments = new HashSet<(ShippingCarrier, string, string)>();
         var seenPages = new HashSet<(ShippingCarrier, string, int)>();
@@ -27,8 +28,9 @@ public sealed class LabelBatchPreparation(IShippingLabelSource source, IShipping
                 try { document = await batchSource.GetAsync(shipment, cancellationToken); }
                 catch (ShippingLabelException ex)
                 {
-                    throw new ShippingLabelException(ex.Kind, $"Замовлення №{shipment.OrderNumber} · ТТН {shipment.TrackingNumber}: {ex.Message}")
-                    { RetryAtUtc = ex.RetryAtUtc };
+                    throw new ShippingLabelException(ex.Kind, ex.AppliesToBatch ? ex.Message :
+                        $"Замовлення №{shipment.OrderNumber} · ТТН {shipment.TrackingNumber}: {ex.Message}")
+                    { RetryAtUtc = ex.RetryAtUtc, AppliesToBatch = ex.AppliesToBatch };
                 }
                 if (document.Shipment.TrackingNumber != shipment.TrackingNumber || document.Shipment.Carrier != shipment.Carrier ||
                     document.Shipment.Order != shipment.Order || document.DocumentId.Length == 0)
