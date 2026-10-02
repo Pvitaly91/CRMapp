@@ -87,6 +87,7 @@ internal static partial class MarketplaceViewModelTests
         ("STA Prom Ukrainian API names replace cached Russian names through refresh tables and restart", () => StaAsync(PromUkrainianNamesUiAsync)),
         ("STA automatic refresh loads details only for new receipts", () => StaAsync(CachedAutomaticNewReceiptAsync)),
         ("STA repeated identical morning and evening sale matches only unlinked orders across restart", () => StaAsync(RepeatedSameProductSaleAsync)),
+        ("STA uncached identical morning and evening sales resolve in both tables without manual links", () => StaAsync(UncachedRepeatedSameProductSaleAsync)),
         ("STA assigned pairs exclude new hidden competitors without reading their items", () => StaAsync(CachedAutomaticCompetitorAsync)),
         ("STA manual and rejected decisions override automatic cache", () => StaAsync(CachedAutomaticDecisionOverridesAsync)),
         ("STA automatic cache failures never block matching or base workflow", () => StaAsync(CachedAutomaticFailureIsolationAsync)),

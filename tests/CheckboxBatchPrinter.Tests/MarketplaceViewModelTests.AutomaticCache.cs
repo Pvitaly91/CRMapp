@@ -99,7 +99,9 @@ internal static partial class MarketplaceViewModelTests
         Equal(0, fixture.Printer.Calls);
     }
 
-    private static async Task RepeatedSameProductSaleAsync()
+    private static Task RepeatedSameProductSaleAsync() => RepeatedSameProductSaleAsync(true);
+    private static Task UncachedRepeatedSameProductSaleAsync() => RepeatedSameProductSaleAsync(false);
+    private static async Task RepeatedSameProductSaleAsync(bool cachedMorning)
     {
         var fixture = new Fixture(); var cache = new AutomaticCache();
         var day = new DateTimeOffset(2026, 9, 23, 0, 0, 0, TimeSpan.FromHours(3));
@@ -117,9 +119,12 @@ internal static partial class MarketplaceViewModelTests
         var old = Sale(ReceiptOne, 1, day.AddHours(12).AddMinutes(32));
         fixture.Source.Orders = [first]; fixture.ReceiptSource.Rows = [old];
         fixture.Details.Values[ReceiptOne] = new(ReceiptOne, first.Items) { ItemListComplete = true };
-        var (main, workspace) = fixture.Create(automaticCache: cache);
-        await main.RefreshAsync(); await OpenOrdersAsync(main, workspace);
-        Equal(first.Key, main.Receipts.Single().OrderMatch!.Order!.Key); Equal(1, fixture.Details.Calls);
+        if (cachedMorning)
+        {
+            var (main, workspace) = fixture.Create(automaticCache: cache);
+            await main.RefreshAsync(); await OpenOrdersAsync(main, workspace);
+            Equal(first.Key, main.Receipts.Single().OrderMatch!.Order!.Key); Equal(1, fixture.Details.Calls);
+        }
 
         var second = first with
         {
@@ -129,12 +134,13 @@ internal static partial class MarketplaceViewModelTests
         var next = Sale(ReceiptTwo, 2, day.AddHours(21).AddMinutes(13));
         fixture.Source.Orders = [first, second]; fixture.ReceiptSource.Rows = [old, next];
         fixture.Details.Values[ReceiptTwo] = new(ReceiptTwo, second.Items) { ItemListComplete = true };
-        fixture.Details.FailIds.Add(ReceiptOne);
+        if (cachedMorning) fixture.Details.FailIds.Add(ReceiptOne);
         var (restarted, restored) = fixture.Create(automaticCache: cache);
         await restarted.RefreshAsync(); await OpenOrdersAsync(restarted, restored);
         Equal(first.Key, restarted.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch!.Order!.Key);
         var added = restarted.Receipts.Single(r => r.Id == ReceiptTwo);
         Equal(second.Key, added.OrderMatch!.Order!.Key);
+        True(restarted.Receipts.All(r => r.OrderMatch is { Ambiguous: false }));
         True(added.OrderMatch.Candidates.All(o => o.Key != first.Key));
         True(restored.AllOrderRows.All(o => o.LinkedReceipts.Count == 1));
         Equal(2, fixture.Details.Calls); True(fixture.Details.RequestedIds.SequenceEqual([ReceiptOne, ReceiptTwo]));

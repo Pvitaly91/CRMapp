@@ -54,6 +54,7 @@ internal static class BasketReceiptMatching
         var byOrder = possible.ToLookup(e => e.Order.Key);
         var rawByReceipt = edges.ToLookup(e => e.Receipt.Id);
         var components = new Dictionary<string, (HashSet<OrderKey> Orders, HashSet<string> Receipts)>();
+        var allocated = new Dictionary<string, Edge>();
         var scopeText = (scope.Description.Length > 0 ? scope.Description :
             $"Область: усі {receipts.Count} завантажених чеків і {orders.Count} замовлень.") +
             " Автозіставлення за сумою: одна календарна дата чека й замовлення (Київ); замовлення не пізніше чека.";
@@ -82,11 +83,16 @@ internal static class BasketReceiptMatching
                             foreach (var competitor in byOrder[edge.Order.Key])
                                 if (component.Receipts.Add(competitor.Receipt.Id)) pending.Enqueue(competitor.Receipt.Id);
                 foreach (var id in component.Receipts) components[id] = component;
+                if (coverageComplete)
+                    foreach (var (id, edge) in UniqueCompleteAllocation(component.Receipts, component.Orders,
+                                 byReceipt, byOrder, matches, current, edges)) allocated[id] = edge;
             }
             var (componentOrders, componentReceipts) = component;
-            var ambiguous = componentOrders.Count > 1 || componentReceipts.Count > 1;
+            var resolvedByAllocation = allocated.TryGetValue(receipt.Id, out var allocation);
+            var ambiguous = !resolvedByAllocation && (componentOrders.Count > 1 || componentReceipts.Count > 1);
             current.TryGetValue(NormalizeId(receipt.Id), out var decision);
-            var selected = options.Length == 1 && byOrder[options[0].Order.Key].Count() == 1 ? options[0] : null;
+            var selected = resolvedByAllocation ? allocation :
+                options.Length == 1 && byOrder[options[0].Order.Key].Count() == 1 ? options[0] : null;
             var canSuggest = coverageComplete && selected is not null && selected.Issue.Length == 0 &&
                 receipt.TotalKnown && receipt.TotalSum > 0 && selected.Order.Total == receipt.TotalSum &&
                 receipt.DisplayDate.HasValue && selected.Order.CreatedAt.HasValue && !HasFiscalEvidence(selected.Order) &&
@@ -104,7 +110,8 @@ internal static class BasketReceiptMatching
                 productState == ProductComparison.Match ? AutomaticLinkBasis.AmountAndProducts :
                 resolvedByQuantity ? AutomaticLinkBasis.AmountAndQuantity : AutomaticLinkBasis.UniqueAmount;
             var message = canSuggest
-                ? (resolvedByPayment ? "За сумою й оплатою за один день: взаємно унікальна пара. " :
+                ? (resolvedByAllocation ? "За сумою й товарами за один день: єдиний можливий розподіл вільних чеків між замовленнями. " :
+                    resolvedByPayment ? "За сумою й оплатою за один день: взаємно унікальна пара. " :
                     productState == ProductComparison.Match ? "За сумою й товарами за один день. " :
                     resolvedByQuantity ? "За сумою та кількістю товарів за один день: взаємно унікальна пара. " : "За сумою за один день: взаємно унікальна пара. ") +
                     "Це ймовірний висновок за даними документів, не фіскальне підтвердження спільного UUID / fiscal_code. "
@@ -131,7 +138,8 @@ internal static class BasketReceiptMatching
             if (canSuggest && selected!.Order.DeliveryCost is > 0m)
                 message += "Доставка вказана окремо: Total дорівнює відомій сумі товарів; доставку не додано й не віднято. ";
             message += scopeText;
-            var candidates = raw.Select(e => e.Order).Where(o => decision?.RejectedOrders.Contains(o.Key) != true)
+            var candidates = (resolvedByAllocation ? new[] { selected!.Order } : raw.Select(e => e.Order))
+                .Where(o => decision?.RejectedOrders.Contains(o.Key) != true)
                 .OrderBy(o => o.Key.Marketplace).ThenBy(o => o.Key.ConnectionId, StringComparer.Ordinal)
                 .ThenBy(o => o.Key.OrderId, StringComparer.Ordinal).ToArray();
             matches[receipt.Id] = new(canSuggest ? ReceiptLinkState.Suggested : coverageComplete ? ReceiptLinkState.Candidates : ReceiptLinkState.Incomplete,
@@ -139,12 +147,52 @@ internal static class BasketReceiptMatching
             {
                 Basis = basis,
                 Products = productState, Payments = paymentState, Ambiguous = ambiguous, Scope = scopeText,
-                CompetingOrderCount = componentOrders.Count,
-                GroupOrders = freeOrders.Where(o => componentOrders.Contains(o.Key)).OrderBy(o => o.Key.Marketplace)
+                CompetingOrderCount = resolvedByAllocation ? 1 : componentOrders.Count,
+                GroupOrders = freeOrders.Where(o => resolvedByAllocation ? o.Key == selected!.Order.Key : componentOrders.Contains(o.Key)).OrderBy(o => o.Key.Marketplace)
                     .ThenBy(o => o.Key.ConnectionId, StringComparer.Ordinal).ThenBy(o => o.Key.OrderId, StringComparer.Ordinal).ToArray(),
-                CompetingReceiptIds = componentReceipts.Order(StringComparer.Ordinal).ToArray()
+                CompetingReceiptIds = resolvedByAllocation ? [receipt.Id] : componentReceipts.Order(StringComparer.Ordinal).ToArray()
             };
         }
+    }
+
+    private static IReadOnlyDictionary<string, Edge> UniqueCompleteAllocation(HashSet<string> receiptIds,
+        HashSet<OrderKey> orderKeys, ILookup<string, Edge> byReceipt, ILookup<OrderKey, Edge> byOrder,
+        IDictionary<string, ReceiptOrderMatch> matches, IReadOnlyDictionary<string, ReceiptOrderDecision> decisions,
+        IReadOnlyList<Edge> allEdges)
+    {
+        var empty = new Dictionary<string, Edge>();
+        // A complete one-to-one allocation needs equal document counts and complete evidence
+        // for every remaining edge. Unknown documents and manual decisions must not force it.
+        if (receiptIds.Count <= 1 || receiptIds.Count != orderKeys.Count || receiptIds.Any(id =>
+                matches[id].State is ReceiptLinkState.Conflict or ReceiptLinkState.Incomplete ||
+                decisions.TryGetValue(NormalizeId(id), out var decision) &&
+                (decision.SuppressAutomatic || decision.RejectedOrders.Any(orderKeys.Contains))) ||
+            receiptIds.SelectMany(id => byReceipt[id]).Any(e => e.Products != ProductComparison.Match ||
+                e.Issue.Length > 0 || e.Receipt.TotalSum <= 0 || string.IsNullOrWhiteSpace(e.Order.Currency) ||
+                HasFiscalEvidence(e.Order)) ||
+            // Payment exclusions keep their existing mutually-unique-pair rule; an unknown
+            // payment must not force a different receipt through a global allocation.
+            allEdges.Any(e => e.PaymentDiffers && (receiptIds.Contains(e.Receipt.Id) || orderKeys.Contains(e.Order.Key)))) return empty;
+
+        // A receipt with one remaining order forces that pair in every complete allocation.
+        // Remove it and its order, then repeat. Only accept if this resolves the ENTIRE group:
+        // a residual cycle has multiple allocations; a zero-degree remainder has none.
+        // Neither API order nor proximity in time is used to choose a pair.
+        var remaining = receiptIds.ToDictionary(id => id, id => byReceipt[id].Count());
+        var pending = new Queue<string>(remaining.Where(p => p.Value == 1).Select(p => p.Key));
+        var usedOrders = new HashSet<OrderKey>();
+        var result = new Dictionary<string, Edge>();
+        while (pending.TryDequeue(out var id))
+        {
+            if (result.ContainsKey(id) || remaining[id] != 1) continue;
+            var edge = byReceipt[id].Single(e => !usedOrders.Contains(e.Order.Key));
+            result[id] = edge;
+            usedOrders.Add(edge.Order.Key);
+            foreach (var neighbor in byOrder[edge.Order.Key])
+                if (!result.ContainsKey(neighbor.Receipt.Id) && --remaining[neighbor.Receipt.Id] == 1)
+                    pending.Enqueue(neighbor.Receipt.Id);
+        }
+        return result.Count == receiptIds.Count ? result : empty;
     }
 
     private static void EnablePaymentTieBreaks(IReadOnlyList<Edge> edges)

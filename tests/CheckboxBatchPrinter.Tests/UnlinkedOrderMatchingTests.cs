@@ -11,6 +11,8 @@ internal static class UnlinkedOrderMatchingTests
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
         ("unlinked orders: saved morning sale leaves identical evening sale free across restart", Run(RepeatedSale)),
+        ("unlinked orders: uncached morning and evening sales resolve the only complete allocation", Run(UncachedRepeatedSale)),
+        ("unlinked orders: complete allocation does not guess among cycles or incomplete documents", Run(AllocationGuardrails)),
         ("unlinked orders: linked order outside receipt range cannot take a new receipt", Run(OutsideReceiptRange)),
         ("unlinked orders: new unlinked competitors stay ambiguous without changing saved pair", Run(UnlinkedAmbiguity)),
         ("unlinked orders: manual suppression, rejection and fiscal evidence retain priority", Run(DecisionsAndFiscalEvidence)),
@@ -57,6 +59,53 @@ internal static class UnlinkedOrderMatchingTests
         }
         var incomplete = service.MatchAll(Restart(cache), [old, next], Account, [first, second], [], false).Matches;
         Pair(incomplete, old, first); Pair(incomplete, next, second);
+    }
+    private static void UncachedRepeatedSale()
+    {
+        foreach (var count in new[] { 2, 3, 12 })
+        foreach (var reversed in new[] { false, true })
+        {
+            var service = new CachedReceiptOrderMatchingService(new Clock());
+            var receipts = Enumerable.Range(0, count).Select(i => Receipt(4581 + i, count == 2 ? i == 0 ? 12 : 21 : 8 + i)).ToArray();
+            var orders = Enumerable.Range(0, count).Select(i => Order(431129512 + i, count == 2 ? i == 0 ? 11 : 21 : 8 + i)).ToArray();
+            var cache = new AutomaticMatchCache();
+            var result = service.MatchAll(cache, reversed ? receipts.Reverse().ToArray() : receipts, Account,
+                reversed ? orders.Reverse().ToArray() : orders, [], true, Details(receipts)).Matches;
+            for (var i = 0; i < count; i++)
+            {
+                Pair(result, receipts[i], orders[i]);
+                Check(!result[receipts[i].Id].Ambiguous, "The only complete allocation was marked ambiguous.");
+            }
+            var restored = service.MatchAll(Restart(cache), receipts, Account, orders, [], false).Matches;
+            for (var i = 0; i < count; i++) Pair(restored, receipts[i], orders[i]);
+        }
+    }
+    private static void AllocationGuardrails()
+    {
+        foreach (var mode in new[] { "cycle", "unbalanced", "missing", "loading", "incomplete", "suppressed", "rejected", "fiscal", "adjusted", "currency", "hall" })
+        {
+            var receipts = new[] { Receipt(1, 12), Receipt(2, 21) };
+            var orders = new[] { Order(1, 11), Order(2, 21) };
+            var details = Details(receipts);
+            var decisions = Array.Empty<ReceiptOrderDecision>();
+            if (mode == "cycle") orders[1] = Order(2, 11);
+            if (mode == "unbalanced") orders = [.. orders, Order(3, 21)];
+            if (mode == "missing") details.Remove(receipts[0].Id);
+            if (mode == "suppressed") decisions = [new() { AccountContext = Account, ReceiptId = receipts[0].Id, SuppressAutomatic = true }];
+            if (mode == "rejected") decisions = [new() { AccountContext = Account, ReceiptId = receipts[0].Id, RejectedOrders = [orders[0].Key] }];
+            if (mode == "fiscal") orders[0] = orders[0] with { FiscalReceiptNumbers = ["unverified-reference"] };
+            if (mode == "adjusted") orders[0] = orders[0] with { Discount = 1 };
+            if (mode == "currency") orders[0] = orders[0] with { Currency = "" };
+            if (mode == "hall")
+            {
+                receipts = [Receipt(1, 12), Receipt(2, 13), Receipt(3, 22)];
+                orders = [Order(1, 11), Order(2, 21), Order(3, 21)];
+                details = Details(receipts);
+            }
+            var result = new CachedReceiptOrderMatchingService(new Clock()).MatchAll(new(), receipts, Account, orders,
+                decisions, mode != "incomplete", details, loading: mode == "loading" ? new HashSet<string> { receipts[0].Id } : null).Matches;
+            Check(result.Values.All(m => m.Order is null), $"Incomplete or non-unique allocation was guessed: {mode}.");
+        }
     }
     private static void OutsideReceiptRange()
     {
