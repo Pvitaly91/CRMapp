@@ -85,6 +85,7 @@ function Test-ReleaseFile([string]$Directory, [string]$RelativeName) {
 }
 
 $repo = Split-Path $PSScriptRoot -Parent
+$repositoryDefault = $false
 if ($Build) {
     if ($ReleaseDirectory) { throw 'Використовуйте або -Build, або -ReleaseDirectory.' }
     $builder = Join-Path $PSScriptRoot 'Build-Production.ps1'
@@ -107,6 +108,7 @@ if (!$ReleaseDirectory) {
     if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'build-info.json') -PathType Leaf) {
         $ReleaseDirectory = $PSScriptRoot
     } else {
+        $repositoryDefault = $true
         $releaseRoot = Join-Path $repo 'artifacts\production'
         $available = @(if (Test-Path -LiteralPath $releaseRoot -PathType Container) {
             foreach ($directory in Get-ChildItem -LiteralPath $releaseRoot -Directory) {
@@ -130,6 +132,16 @@ if ($info.channel -ne 'Production' -or $info.version -notmatch '^\d+\.\d+\.\d+$'
     throw 'Потрібен production-пакет із правильними version/commit/channel у build-info.json.'
 }
 if ($Build -and $info.commit -ne $commit) { throw 'Готовий пакет не відповідає поточному Git HEAD.' }
+if ($repositoryDefault) {
+    $projectPath = Join-Path $repo 'src\CheckboxBatchPrinter\CheckboxBatchPrinter.csproj'
+    if (Test-Path -LiteralPath $projectPath -PathType Leaf) {
+        [xml]$project = Get-Content -LiteralPath $projectPath
+        $sourceVersion = [string]$project.Project.PropertyGroup.Version
+        if ([version]$sourceVersion -gt [version]$info.version) {
+            throw "Код має версію $sourceVersion, але останній готовий production-пакет — $($info.version). Спочатку запустіть цю команду з -Build. Старий пакет не встановлено."
+        }
+    }
+}
 $newHash = Test-ReleaseFile $release 'app/CheckboxBatchPrinter.exe'
 $source = Join-Path $release 'app\CheckboxBatchPrinter.exe'
 $targetPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($TargetExecutable)
@@ -149,7 +161,6 @@ if ($hadExecutable) {
         throw 'Встановлена версія новіша за вибраний пакет. Автоматичне пониження версії заборонено.'
     }
 }
-Assert-AppClosed
 $profile = (Resolve-Path -LiteralPath $ProfileDirectory).Path.TrimEnd('\')
 if (!(Test-Path -LiteralPath $profile -PathType Container)) { throw 'Папку production-профілю не знайдено.' }
 Assert-NoReparse $profile
@@ -164,6 +175,7 @@ Write-Host "Пакет: $($info.version), commit $($info.commit)"
 Write-Host "Програма: $target"
 if (!$hadExecutable) { Write-Host 'EXE відсутній: буде відновлено з готового production-пакета.' }
 if (!$PSCmdlet.ShouldProcess($target, 'Зберегти резервну копію профілю та наявного EXE, встановити production-пакет')) { return }
+Assert-AppClosed
 $before = Get-Snapshot $profile
 $backup = Join-Path $backupRoot ('before-' + $info.version + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $stage = Join-Path $installDirectory ('.CheckboxBatchPrinter.update-' + [guid]::NewGuid().ToString('N') + '.exe')

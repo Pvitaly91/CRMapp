@@ -54,6 +54,12 @@ Assert ((Get-Content -LiteralPath $f.TargetExecutable -Raw) -eq 'synthetic-old-e
 Assert (!(Test-Path -LiteralPath (Join-Path (Split-Path $f.TargetExecutable) 'CheckboxBatchPrinter-backups'))) 'WhatIf wrote backups.'
 Write-Host 'PASS update: WhatIf leaves EXE/profile untouched.'
 
+$f = Fixture 'whatif-running'; $updateTestState.AppRunning = $true
+try { & $updater @f -WhatIf } finally { $updateTestState.AppRunning = $false }
+Assert ((Get-Content -LiteralPath $f.TargetExecutable -Raw) -eq 'synthetic-old-executable-never-launched') 'Running-app WhatIf replaced EXE.'
+Assert (!(Test-Path -LiteralPath (Join-Path (Split-Path $f.TargetExecutable) 'CheckboxBatchPrinter-backups'))) 'Running-app WhatIf wrote backups.'
+Write-Host 'PASS update: preview is available while the app is running, without writes.'
+
 $f = Fixture 'missing-exe'; Remove-SyntheticExecutable $f
 $profileBefore = @{}
 foreach ($file in Get-ChildItem -LiteralPath $f.ProfileDirectory -Recurse -Force -File) { $profileBefore[$file.FullName] = (Get-FileHash -LiteralPath $file.FullName).Hash }
@@ -141,6 +147,32 @@ $f = Fixture 'auto-target'
 & (Join-Path $autoScripts 'Update-Production.ps1') -TargetExecutable $f.TargetExecutable -ProfileDirectory $f.ProfileDirectory
 Assert ((Get-Content -LiteralPath $f.TargetExecutable -Raw) -eq 'synthetic-newest') 'Latest Production version not chosen, or Development selected.'
 Write-Host 'PASS update: default invocation selects the newest Production package, excluding Development.'
+
+# Reproduce the stale no-op: the latest packaged EXE is already installed, but the source is newer.
+$autoProject = Join-Path $autoRepo 'src\CheckboxBatchPrinter\CheckboxBatchPrinter.csproj'
+New-Item -ItemType Directory -Path (Split-Path $autoProject) -Force | Out-Null
+[IO.File]::WriteAllText($autoProject, '<Project><PropertyGroup><Version>1.0.22</Version></PropertyGroup></Project>')
+$oldUpdater = $updater
+$updater = Join-Path $autoScripts 'Update-Production.ps1'
+$failure = $null
+try { & $updater -TargetExecutable $f.TargetExecutable -ProfileDirectory $f.ProfileDirectory }
+catch { $failure = $_.Exception.Message }
+Assert ($null -ne $failure -and $failure -match '1\.0\.22' -and $failure -match '\-Build') 'Newer source was silently reported as already installed.'
+Assert ((Get-Content -LiteralPath $f.TargetExecutable -Raw) -eq 'synthetic-newest') 'Stale package check changed installed EXE.'
+Assert (@(Get-ChildItem -LiteralPath (Join-Path (Split-Path $f.TargetExecutable) 'CheckboxBatchPrinter-backups') -Directory).Count -eq 1) 'Stale package check created another backup.'
+Write-Host 'PASS update: newer source blocks a misleading no-op before any installation writes.'
+
+[IO.File]::WriteAllText($autoProject, '<Project><PropertyGroup><Version>1.0.21</Version></PropertyGroup></Project>')
+& $updater -TargetExecutable $f.TargetExecutable -ProfileDirectory $f.ProfileDirectory
+Write-Host 'PASS update: matching source and package versions still allow the installed-release no-op.'
+
+# An explicit release remains independent of the checked-out source version.
+[IO.File]::WriteAllText($autoProject, '<Project><PropertyGroup><Version>1.0.22</Version></PropertyGroup></Project>')
+$explicit = Fixture 'explicit-release'
+& $updater @explicit
+Assert ((Get-Content -LiteralPath $explicit.TargetExecutable -Raw) -eq 'synthetic-new-executable-never-launched') 'Explicit release was incorrectly blocked by newer source.'
+$updater = $oldUpdater
+Write-Host 'PASS update: an explicitly selected release remains independent of source version.'
 
 $f = Fixture 'packaged-script'
 Copy-Item -LiteralPath $updater -Destination $f.ReleaseDirectory
