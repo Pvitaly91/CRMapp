@@ -112,6 +112,8 @@ internal static partial class PromOrdersTests
         Assert(receipts.All(r => restartedMatcher.TryGetDetails(restartedCache, "test-account", r, out _)), "Changing order names erased reusable receipt details.");
         var duplicate = ukrainianOrders[0] with { Key = ukrainianOrders[0].Key with { OrderId = "503" } };
         Assert(matcher.MatchAll(cache, receipts, "test-account", [.. ukrainianOrders, duplicate], [], true, details)
-            .Matches[receipts[0].Id].Order is null, "Ukrainian-name equality bypassed duplicate-order ambiguity.");
+            .Matches[receipts[0].Id].Order?.Key == ukrainianOrders[0].Key, "New duplicate erased an already assigned Ukrainian-name pair.");
+        Assert(matcher.MatchAll(new(), receipts, "test-account", [.. ukrainianOrders, duplicate], [], true, details)
+            .Matches[receipts[0].Id].Order is null, "Fresh unlinked duplicate orders were assigned arbitrarily.");
     }
 }

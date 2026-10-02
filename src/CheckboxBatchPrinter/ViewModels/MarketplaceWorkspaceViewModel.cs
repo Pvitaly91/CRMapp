@@ -675,12 +675,21 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
 
     private ReceiptRowViewModel[] DetailTargets(DateOnly? from = null, DateOnly? to = null)
     {
+        if (_account.Length == 0 || _rows.Count == 0) return [];
         var receiptFrom = from ?? _from;
         var receiptTo = to ?? _to;
         var range = MarketplaceSyncService.BuildRange(receiptFrom, receiptTo,
             Math.Min(3650, _config.HistoryDays + _extraHistory));
-        var orders = ActiveOrders.Where(o => o.Items.Count > 0).ToArray();
+        var activeOrders = ActiveOrders;
+        var linkedOrders = _matcher.LinkedOrderKeys(_automaticCache, _account, _rows.Select(r => r.Model).ToArray(),
+            activeOrders, ActiveDecisions).ToHashSet();
+        linkedOrders.UnionWith(_rows.Where(r => r.OrderMatch?.Order is not null && r.OrderMatch.Products != ProductComparison.Loading)
+            .Select(r => r.OrderMatch!.Order!.Key));
+        linkedOrders.UnionWith(ActiveDecisions.Where(d => d.AccountContext == _account && d.ConfirmedOrder is not null)
+            .Select(d => d.ConfirmedOrder!));
+        var orders = activeOrders.Where(o => !linkedOrders.Contains(o.Key) && o.Items.Count > 0).ToArray();
         return _rows.Where(row => row.RawType == ReceiptTypes.Sell && row.Model.Status == "DONE" && row.Model.DisplayDate is { } date &&
+            (row.OrderMatch?.Order is null || row.OrderMatch.Products == ProductComparison.Loading) &&
             IsInRange(row, receiptFrom, receiptTo) &&
             orders.Any(o => o.Total == row.Total && o.CreatedAt is { } created && created <= date &&
                 DateRangeBuilder.KyivDate(created) == DateRangeBuilder.KyivDate(date) && created >= range.From && created < range.ToExclusive))
@@ -845,6 +854,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         }
         var calculated = _matcher.MatchAll(_automaticCache, receipts, _account, orders, decisions,
             complete, details, matchScope, loading, EnabledConnectionIds).Matches;
+        if (!complete && calculated.Values.Any(m => m.State == ReceiptLinkState.Suggested)) _showingCachedMatches = true;
         if (!allowRestore || complete) return calculated;
         var known = _matcher.RestoreKnownSuggestions(_automaticCache, receipts, _account, orders,
             decisions, details, matchScope, loading, EnabledConnectionIds);

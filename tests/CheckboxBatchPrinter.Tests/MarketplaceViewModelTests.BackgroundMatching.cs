@@ -116,8 +116,10 @@ internal static partial class MarketplaceViewModelTests
         fixture.Details.Values[ReceiptTwo] = BasketDetails(ReceiptTwo);
         await main.BackgroundRefreshAsync(new(2026, 9, 23), new(2026, 9, 23));
         await workspace.SyncBackgroundAsync();
-        True(main.Receipts.All(r => r.OrderMatch!.Ambiguous && r.OrderMatch.Order is null));
-        True(!workspace.AllOrderRows.Single().HasSuggestedLink);
+        Equal(fixture.Source.Orders.Single().Key, first.OrderMatch!.Order!.Key);
+        True(main.Receipts.Single(r => r.Id == ReceiptTwo).OrderMatch!.Order is null);
+        True(workspace.AllOrderRows.Single().HasSuggestedLink);
+        Equal(1, fixture.Details.Calls);
         True(first.IsSelectedForOrders);
         Equal(0, fixture.Links.Saves);
         Equal(0, fixture.Printer.Calls);

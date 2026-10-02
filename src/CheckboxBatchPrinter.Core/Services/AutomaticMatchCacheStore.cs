@@ -45,7 +45,7 @@ public sealed class DpapiAutomaticMatchCacheStore(string path, TimeProvider? tim
         caches.RemoveAll(c => c.AccountContext == accountContext);
         caches.Add(copy);
         foreach (var item in caches) CachedReceiptOrderMatchingService.Prune(item, _clock.GetUtcNow());
-        caches = caches.Where(c => c.Details.Count > 0 || c.Snapshots.Count > 0)
+        caches = caches.Where(c => c.Details.Count > 0 || c.Snapshots.Count > 0 || c.Links.Count > 0)
             .OrderByDescending(NewestEntry).Take(MaxAccounts).ToList();
         // Bound the serialized payload as well as entry counts; unusually large API product lists
         // must not produce a file that our own guarded reader will subsequently reject.
@@ -61,6 +61,12 @@ public sealed class DpapiAutomaticMatchCacheStore(string path, TimeProvider? tim
             if (File.Exists(_path) && new FileInfo(_path).Length > MaxFileBytes) return [];
             var caches = await MarketplaceStoreFiles.ReadProtectedAsync<List<AutomaticMatchCache>>(_path, token).ConfigureAwait(false) ?? [];
             if (caches.Any(c => c is null || string.IsNullOrWhiteSpace(c.AccountContext) || c.Details is null || c.Snapshots is null ||
+                    c.Links is null || c.LinkSchema is < 0 or > 1 || c.Links.Any(p => string.IsNullOrWhiteSpace(p.Key) ||
+                        p.Value?.Match is null || p.Value.Match.State != ReceiptLinkState.Suggested ||
+                        !ValidKey(p.Value.Match.Order) || string.IsNullOrWhiteSpace(p.Value.Match.ReceiptFingerprint) ||
+                        string.IsNullOrWhiteSpace(p.Value.Match.OrderFingerprint) || p.Value.Match.Explanation is null ||
+                        p.Value.Match.Scope is null || !Enum.IsDefined(p.Value.Match.Basis) ||
+                        !Enum.IsDefined(p.Value.Match.Products) || !Enum.IsDefined(p.Value.Match.Payments)) ||
                     c.Details.Any(d => d.Value?.Details?.Items is null || string.IsNullOrWhiteSpace(d.Value.ReceiptFingerprint) ||
                         string.IsNullOrWhiteSpace(d.Value.Details.Id) || d.Value.Details.Items.Any(i => i is null || i.Name is null || i.Sku is null)) ||
                     c.Snapshots.Any(s => s?.Matches is null || s.Matches.Any(m => m.Value is null || m.Value.Candidates is null ||
@@ -78,7 +84,8 @@ public sealed class DpapiAutomaticMatchCacheStore(string path, TimeProvider? tim
     }
 
     private static DateTimeOffset NewestEntry(AutomaticMatchCache cache) => cache.Details.Values.Select(d => d.CachedAtUtc)
-        .Concat(cache.Snapshots.Select(s => s.CachedAtUtc)).DefaultIfEmpty(DateTimeOffset.MinValue).Max();
+        .Concat(cache.Snapshots.Select(s => s.CachedAtUtc)).Concat(cache.Links.Values.Select(l => l.LinkedAtUtc))
+        .DefaultIfEmpty(DateTimeOffset.MinValue).Max();
 
     private static bool ValidKey(OrderKey? key) => key is not null && Enum.IsDefined(key.Marketplace) &&
         !string.IsNullOrWhiteSpace(key.ConnectionId) && !string.IsNullOrWhiteSpace(key.OrderId);

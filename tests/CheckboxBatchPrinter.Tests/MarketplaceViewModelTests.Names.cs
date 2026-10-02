@@ -106,16 +106,15 @@ internal static partial class MarketplaceViewModelTests
         True(restarted.Receipts.All(r => r.OrderMatch?.Basis == AutomaticLinkBasis.AmountAndProducts));
         Equal(2, fixture.Details.Calls);
 
-        // A different raw spelling with an identical cleaned name remains a competitor behind search.
-        // Cached probable pairs must not reserve its receipt.
+        // A new free order with the same cleaned name cannot reopen a saved pair.
         fixture.Source.Orders = [sensor, cable, cable with { Key = cable.Key with { OrderId = "43" }, Number = "HIDDEN",
             Items = [new("Розєм XT60HF", "", 50, 13, 650)] }];
         restored.OrderSearch = "ORDER";
         await ExecuteAsync(restored.AutoMatchCommand);
         var ambiguous = restarted.Receipts.Single(r => r.Id == ReceiptOne);
-        True(ambiguous.OrderMatch!.Order is null && ambiguous.OrderMatch.Ambiguous);
-        Equal(2, ambiguous.OrderMatch.CompetingOrderCount);
-        True(!ambiguous.LinkStatus.StartsWith("Автозв’язок"));
+        Equal(cable.Key, ambiguous.OrderMatch!.Order!.Key); True(!ambiguous.OrderMatch.Ambiguous);
+        Equal(1, ambiguous.OrderMatch.CompetingOrderCount);
+        True(ambiguous.LinkStatus.StartsWith("Автозв’язок"));
         Equal(sensor.Key, restarted.Receipts.Single(r => r.Id == ReceiptTwo).OrderMatch!.Order!.Key);
         Equal(2, fixture.Details.Calls); Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
     }

@@ -2,7 +2,7 @@ using CheckboxBatchPrinter.Core.Models;
 
 namespace CheckboxBatchPrinter.Core.Services;
 
-/// <summary>A snapshot-wide, non-iterative bipartite graph. Suggestions never reserve nodes.</summary>
+/// <summary>Compare only unlinked receipts and orders; existing links reserve their documents.</summary>
 internal static class BasketReceiptMatching
 {
     private sealed record ProductCheck(ProductComparison State, string Reason = "");
@@ -24,15 +24,15 @@ internal static class BasketReceiptMatching
     internal static void Apply(IDictionary<string, ReceiptOrderMatch> matches, IReadOnlyList<ReceiptRecord> receipts,
         IReadOnlyList<MarketplaceOrder> orders, string account, IReadOnlyList<ReceiptOrderDecision> decisions,
         bool coverageComplete, IReadOnlyDictionary<string, ReceiptDetails> details, AmountMatchScope scope,
-        IReadOnlySet<string>? loading)
+        IReadOnlySet<string>? loading, IReadOnlySet<OrderKey>? existingLinkedOrders = null)
     {
         var current = decisions.Where(d => d.AccountContext == account)
             .GroupBy(d => NormalizeId(d.ReceiptId)).ToDictionary(g => g.Key, g => g.MaxBy(d => d.UpdatedAtUtc)!);
         var reservedOrders = current.Values.Where(d => d.ConfirmedOrder is not null).Select(d => d.ConfirmedOrder!)
-            .Concat(matches.Values.Where(m => (m.State is ReceiptLinkState.Manual or ReceiptLinkState.Exact) && m.Order is not null)
-                .Select(m => m.Order!.Key)).ToHashSet();
+            .Concat(matches.Values.Where(m => (m.State is ReceiptLinkState.Manual or ReceiptLinkState.Exact or ReceiptLinkState.Suggested) && m.Order is not null)
+                .Select(m => m.Order!.Key)).Concat(existingLinkedOrders ?? new HashSet<OrderKey>()).ToHashSet();
         var freeReceipts = receipts.Where(r => r.Type == ReceiptTypes.Sell && r.Status == "DONE" &&
-            matches[r.Id].State is not (ReceiptLinkState.Manual or ReceiptLinkState.Exact)).ToArray();
+            matches[r.Id].State is not (ReceiptLinkState.Manual or ReceiptLinkState.Exact or ReceiptLinkState.Suggested)).ToArray();
         var freeOrders = orders.Where(o => !reservedOrders.Contains(o.Key)).ToArray();
         var edges = new List<Edge>();
         foreach (var receipt in freeReceipts)
@@ -91,8 +91,9 @@ internal static class BasketReceiptMatching
                 receipt.TotalKnown && receipt.TotalSum > 0 && selected.Order.Total == receipt.TotalSum &&
                 receipt.DisplayDate.HasValue && selected.Order.CreatedAt.HasValue && !HasFiscalEvidence(selected.Order) &&
                 decision?.SuppressAutomatic != true && decision?.RejectedOrders.Contains(selected.Order.Key) != true;
-            var productState = selected?.Products ?? (options.Length == 0 && raw.All(e => e.Products == ProductComparison.Contradiction || e.QuantityDiffers)
-                ? ProductComparison.Contradiction : ProductComparison.Insufficient);
+            var productState = selected?.Products ?? (options.Length > 0 && options.All(e => e.Products == ProductComparison.Match)
+                ? ProductComparison.Match : options.Length == 0 && raw.All(e => e.Products == ProductComparison.Contradiction || e.QuantityDiffers)
+                    ? ProductComparison.Contradiction : ProductComparison.Insufficient);
             var paymentState = selected?.Payment.State ?? (options.Length == 0 && raw.All(e => e.PaymentDiffers)
                 ? PaymentComparison.Contradiction : PaymentComparison.Insufficient);
             var resolvedByPayment = selected?.PaymentTieBreak == true && selected.Payment.State == PaymentComparison.Match &&

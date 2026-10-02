@@ -5,10 +5,11 @@ using CheckboxBatchPrinter.Core.Models;
 
 namespace CheckboxBatchPrinter.Core.Services;
 
-/// <summary>Memoizes complete graphs; individual saved pairs are shown only after validating the current local graph.</summary>
+/// <summary>Keep assigned pairs and search only documents without a link. Manual/fiscal decisions have priority.</summary>
 public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider = null)
 {
-    public const string AlgorithmVersion = "same-kyiv-day-clean-names-payment-v8";
+    public const string AlgorithmVersion = "same-kyiv-day-unlinked-orders-v9";
+    private const string PreviousAlgorithmVersion = "same-kyiv-day-clean-names-payment-v8";
     public const int MaximumDetails = 5000;
     public const int MaximumSnapshots = 8;
     private const int MaximumMatchesPerSnapshot = 5000;
@@ -51,10 +52,13 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
         if (coverageComplete && TryRestore(cache, receipts, accountContext, orders, decisions, out var restored,
                 details, scope, loading, enabledConnectionIds))
             return new(restored, true);
-        var matches = _matcher.MatchAll(receipts, accountContext, orders, decisions, coverageComplete, details, scope, loading);
+        var existing = ResolveSavedLinks(cache, receipts, orders, decisions, scope);
+        var matches = _matcher.MatchAll(receipts, accountContext, orders, decisions, coverageComplete, details, scope, loading, existing);
+        RememberLinks(cache, receipts, matches, loading);
         if (coverageComplete && loading?.Count is not > 0 && matches.Count <= MaximumMatchesPerSnapshot)
         {
-            var fingerprint = Fingerprint(receipts, accountContext, orders, decisions, details, scope, loading);
+            var fingerprint = Fingerprint(receipts, accountContext, orders, decisions, details, scope, loading,
+                ResolveSavedLinks(cache, receipts, orders, decisions, scope));
             var historyDays = scope?.HistoryDays ?? 30;
             var orderRange = scope?.OrderRange;
             // A newer complete graph supersedes older conclusions for this same range.
@@ -80,7 +84,8 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
         matches = new Dictionary<string, ReceiptOrderMatch>();
         if (!BindAccount(cache, accountContext) || loading?.Count is > 0) return false;
         Prune(cache, _clock.GetUtcNow());
-        var fingerprint = Fingerprint(receipts, accountContext, orders, decisions, details, scope, loading);
+        var fingerprint = Fingerprint(receipts, accountContext, orders, decisions, details, scope, loading,
+            ResolveSavedLinks(cache, receipts, orders, decisions, scope));
         var entry = cache.Snapshots.FirstOrDefault(s => s.InputFingerprint == fingerprint &&
             (ConnectionsMatch(s.EnabledConnectionIds, enabledConnectionIds) ||
                 legacyCoverageVerified && s.EnabledConnectionIds.Count == 0));
@@ -103,10 +108,8 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
     }
 
     /// <summary>
-    /// Reuse only previously suggested pairs when an unrelated new receipt changed the full
-    /// graph fingerprint. Recheck the entire locally available graph first: a new competitor,
-    /// changed document, decision or fiscal link must defeat the old suggestion.
-    /// This is a last-known result, not proof that a fresh API check has completed.
+    /// Restore saved pairs without comparing their baskets to other documents again.
+    /// Changed documents and explicit decisions still invalidate their own saved link.
     /// </summary>
     public IReadOnlyDictionary<string, ReceiptOrderMatch> RestoreKnownSuggestions(AutomaticMatchCache cache,
         IReadOnlyList<ReceiptRecord> receipts, string accountContext, IReadOnlyList<MarketplaceOrder> orders,
@@ -116,32 +119,96 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
     {
         if (!BindAccount(cache, accountContext)) return new Dictionary<string, ReceiptOrderMatch>();
         Prune(cache, _clock.GetUtcNow());
-        var snapshot = cache.Snapshots.FirstOrDefault(s => s.HistoryDays == (scope?.HistoryDays ?? 30) &&
-            Equals(s.OrderRange, scope?.OrderRange) && ConnectionsMatch(s.EnabledConnectionIds, enabledConnectionIds));
-        if (snapshot is null || snapshot.Matches.Count == 0) return new Dictionary<string, ReceiptOrderMatch>();
-        var currentOrders = orders.GroupBy(o => o.Key).ToDictionary(g => g.Key, g => g.MaxBy(o => o.RetrievedAtUtc)!);
-        var current = _matcher.MatchAll(receipts, accountContext, orders, decisions, true, details, scope, loading);
-        var restored = new Dictionary<string, ReceiptOrderMatch>(StringComparer.Ordinal);
-        foreach (var receipt in receipts)
+        var existing = ResolveSavedLinks(cache, receipts, orders, decisions, scope);
+        var current = _matcher.MatchAll(receipts, accountContext, orders, decisions, false, details, scope, loading, existing);
+        return current.Where(p => existing.TryGetValue(p.Key, out var saved) &&
+                p.Value.State == ReceiptLinkState.Suggested && p.Value.Order?.Key == saved.Order?.Key)
+            .ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
+    }
+
+    public IReadOnlySet<OrderKey> LinkedOrderKeys(AutomaticMatchCache cache, string accountContext,
+        IReadOnlyList<ReceiptRecord> receipts, IReadOnlyList<MarketplaceOrder> orders,
+        IReadOnlyList<ReceiptOrderDecision> decisions)
+    {
+        if (!BindAccount(cache, accountContext)) return new HashSet<OrderKey>();
+        Prune(cache, _clock.GetUtcNow());
+        return ResolveSavedLinks(cache, receipts, orders, decisions, null).Values.Select(m => m.Order!.Key).ToHashSet();
+    }
+
+    private Dictionary<string, ReceiptOrderMatch> ResolveSavedLinks(AutomaticMatchCache cache,
+        IReadOnlyList<ReceiptRecord> receipts, IReadOnlyList<MarketplaceOrder> orders,
+        IReadOnlyList<ReceiptOrderDecision> decisions, AmountMatchScope? scope)
+    {
+        var byReceipt = receipts.DistinctBy(r => Normalize(r.Id)).ToDictionary(r => Normalize(r.Id));
+        var byOrder = orders.GroupBy(o => o.Key).ToDictionary(g => g.Key, g => g.MaxBy(o => o.RetrievedAtUtc)!);
+        var currentDecisions = decisions.Where(d => d.AccountContext == cache.AccountContext)
+            .GroupBy(d => Normalize(d.ReceiptId)).ToDictionary(g => g.Key, g => g.MaxBy(d => d.UpdatedAtUtc)!);
+        var manualOrders = currentDecisions.Values.Where(d => d.ConfirmedOrder is not null)
+            .Select(d => d.ConfirmedOrder!).ToHashSet();
+        var valid = new Dictionary<string, ReceiptOrderMatch>(StringComparer.Ordinal);
+        foreach (var (id, link) in cache.Links.ToArray())
+        {
+            var saved = link.Match;
+            currentDecisions.TryGetValue(id, out var decision);
+            if (saved.Order is null || decision?.ConfirmedOrder is not null || decision?.SuppressAutomatic == true ||
+                decision?.RejectedOrders.Contains(saved.Order) == true || manualOrders.Contains(saved.Order) ||
+                byReceipt.TryGetValue(id, out var receipt) && saved.ReceiptFingerprint != ReceiptFingerprint(receipt))
+            { cache.Links.Remove(id); continue; }
+            if (!byOrder.TryGetValue(saved.Order, out var order)) continue;
+            if (saved.OrderFingerprint != OrderFingerprint(order)) { cache.Links.Remove(id); continue; }
+            var receiptId = byReceipt.TryGetValue(id, out var currentReceipt) ? currentReceipt.Id : id;
+            const string prefix = "Збережений автозв’язок; новий пошук виконується лише серед замовлень без зв’язку. ";
+            valid[receiptId] = new(ReceiptLinkState.Suggested, order,
+                saved.Explanation.StartsWith(prefix, StringComparison.Ordinal) ? saved.Explanation : prefix + saved.Explanation, [order])
+            {
+                Basis = saved.Basis, Products = saved.Products, Payments = saved.Payments,
+                CompetingOrderCount = 1, CompetingReceiptIds = [receiptId], GroupOrders = [order],
+                Scope = scope?.Description ?? saved.Scope
+            };
+        }
+        // Conflicting cache entries cannot reserve one order for two independent automatic links.
+        var duplicates = valid.Values.GroupBy(m => m.Order!.Key).Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet();
+        return valid.Where(p => !duplicates.Contains(p.Value.Order!.Key)).ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
+    }
+
+    private void RememberLinks(AutomaticMatchCache cache, IReadOnlyList<ReceiptRecord> receipts,
+        IReadOnlyDictionary<string, ReceiptOrderMatch> matches, IReadOnlySet<string>? loading)
+    {
+        var authoritativeOrders = matches.Values.Where(m => m.State is ReceiptLinkState.Manual or ReceiptLinkState.Exact)
+            .Where(m => m.Order is not null).Select(m => m.Order!.Key).ToHashSet();
+        foreach (var (id, link) in cache.Links.ToArray())
+            if (authoritativeOrders.Contains(link.Match.Order!) ||
+                matches.TryGetValue(id, out var match) && match.State != ReceiptLinkState.Suggested) cache.Links.Remove(id);
+        foreach (var receipt in receipts.DistinctBy(r => Normalize(r.Id)))
         {
             if (loading?.Contains(Normalize(receipt.Id)) == true ||
-                !snapshot.Matches.TryGetValue(receipt.Id, out var previous) ||
-                previous.State != ReceiptLinkState.Suggested || previous.Order is null ||
-                previous.ReceiptFingerprint.Length == 0 || previous.OrderFingerprint.Length == 0 ||
-                previous.ReceiptFingerprint != ReceiptFingerprint(receipt) ||
-                !currentOrders.TryGetValue(previous.Order, out var order) ||
-                previous.OrderFingerprint != OrderFingerprint(order) ||
-                !current.TryGetValue(receipt.Id, out var validated) ||
-                validated.State != ReceiptLinkState.Suggested || validated.Order?.Key != previous.Order) continue;
-            restored[receipt.Id] = validated;
+                !matches.TryGetValue(receipt.Id, out var match) || match.State != ReceiptLinkState.Suggested || match.Order is null) continue;
+            var id = Normalize(receipt.Id);
+            var saved = Pack(match, receipt);
+            var linkedAt = cache.Links.TryGetValue(id, out var previous) && previous.Match.Order == saved.Order
+                ? previous.LinkedAtUtc : _clock.GetUtcNow();
+            cache.Links[id] = new(saved, linkedAt);
         }
-        return restored;
     }
 
     internal static void Prune(AutomaticMatchCache cache, DateTimeOffset now)
     {
         cache.RetentionDays = Math.Clamp(cache.RetentionDays, 1, 90);
         var cutoff = now.AddDays(-cache.RetentionDays);
+        if (cache.LinkSchema == 0)
+        {
+            // Import assigned pairs from the immediately previous release once, before invalidating its graph cache.
+            foreach (var snapshot in cache.Snapshots.Where(s => s.AlgorithmVersion == PreviousAlgorithmVersion &&
+                         s.CachedAtUtc >= cutoff && s.CachedAtUtc <= now).OrderByDescending(s => s.CachedAtUtc))
+                foreach (var (id, match) in snapshot.Matches)
+                    if (match.State == ReceiptLinkState.Suggested && match.Order is not null &&
+                        match.ReceiptFingerprint.Length > 0 && match.OrderFingerprint.Length > 0)
+                        cache.Links.TryAdd(Normalize(id), new(match, snapshot.CachedAtUtc));
+            cache.LinkSchema = 1;
+        }
+        cache.Links = cache.Links.Where(p => p.Value.LinkedAtUtc >= cutoff && p.Value.LinkedAtUtc <= now)
+            .OrderByDescending(p => p.Value.LinkedAtUtc).ThenBy(p => p.Key, StringComparer.Ordinal).Take(MaximumDetails)
+            .ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
         cache.Details = cache.Details.Where(p => p.Value.CachedAtUtc >= cutoff && p.Value.CachedAtUtc <= now)
             .OrderByDescending(p => p.Value.CachedAtUtc).ThenBy(p => p.Key, StringComparer.Ordinal).Take(MaximumDetails)
             .ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
@@ -169,7 +236,8 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
 
     private static string Fingerprint(IReadOnlyList<ReceiptRecord> receipts, string account,
         IReadOnlyList<MarketplaceOrder> orders, IReadOnlyList<ReceiptOrderDecision> decisions,
-        IReadOnlyDictionary<string, ReceiptDetails>? details, AmountMatchScope? scope, IReadOnlySet<string>? loading)
+        IReadOnlyDictionary<string, ReceiptDetails>? details, AmountMatchScope? scope, IReadOnlySet<string>? loading,
+        IReadOnlyDictionary<string, ReceiptOrderMatch> existingLinks)
     {
         // Hash all model fields conservatively, but never persist buyer payloads or churn from retrieval timestamps.
         // Memory-only verified fiscal evidence MUST be explicit despite its JsonIgnore attribute.
@@ -181,6 +249,8 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
         return Hash(JsonSerializer.Serialize(new
         {
             AlgorithmVersion, Account = account, Complete = true,
+            Links = existingLinks.OrderBy(p => Normalize(p.Key), StringComparer.Ordinal)
+                .Select(p => new { Receipt = Normalize(p.Key), Order = p.Value.Order!.Key }).ToArray(),
             Receipts = receipts.DistinctBy(r => Normalize(r.Id)).Select(r => JsonSerializer.Serialize(r)).Order(StringComparer.Ordinal).ToArray(),
             Orders = relevantOrders,
             // Preserve tie precedence for malformed duplicate decisions with identical timestamps.

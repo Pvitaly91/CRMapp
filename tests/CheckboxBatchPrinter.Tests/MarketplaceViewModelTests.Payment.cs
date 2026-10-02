@@ -62,7 +62,7 @@ internal static partial class MarketplaceViewModelTests
         fixture.Source.Orders = [cod, online, cod with { Key = cod.Key with { OrderId = "43" }, Number = "HIDDEN" }];
         restored.OrderSearch = "ORDER";
         await ExecuteAsync(restored.AutoMatchCommand);
-        True(restarted.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch!.Order is null);
+        Equal(cod.Key, restarted.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch!.Order!.Key);
         Equal(online.Key, restarted.Receipts.Single(r => r.Id == ReceiptTwo).OrderMatch!.Order!.Key);
         Equal(2, fixture.Details.Calls); Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
     }

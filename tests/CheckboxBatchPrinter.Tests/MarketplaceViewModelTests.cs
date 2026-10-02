@@ -73,7 +73,7 @@ internal static partial class MarketplaceViewModelTests
         ("STA amount matcher workspace tables display unique missing and contradictory products", () => StaAsync(AmountBasisUiAsync)),
         ("STA different full translated cable names remain unlinked through tables filters refresh and permutations", () => StaAsync(TranslatedCableUiAsync)),
         ("STA equal sums distinguish products, while buyers and filters do not resolve identical orders", () => StaAsync(AmountGroupsUiAsync)),
-        ("STA amount suggestions withdraw on new competitors and incomplete API, manual links survive restart", () => StaAsync(AmountRecomputeUiAsync)),
+        ("STA assigned amount links survive new competitors and incomplete API, manual links retain priority", () => StaAsync(AmountRecomputeUiAsync)),
         ("STA item loading rechecks amount suggestion without changing print selection", () => StaAsync(AmountLoadingUiAsync)),
         ("STA history stays cached behind shared date filter while amount links use the same Kyiv day", () => StaAsync(AmountHistoryUiAsync)),
         ("STA September26 amounts355 and1400 link after completed sync without historical competitors", () => StaAsync(SameDayAmountsUiAsync)),
@@ -86,16 +86,17 @@ internal static partial class MarketplaceViewModelTests
         ("STA distinct product names take priority over payment in both tables and restart cache", () => StaAsync(NameBeforePaymentUiAsync)),
         ("STA Prom Ukrainian API names replace cached Russian names through refresh tables and restart", () => StaAsync(PromUkrainianNamesUiAsync)),
         ("STA automatic refresh loads details only for new receipts", () => StaAsync(CachedAutomaticNewReceiptAsync)),
-        ("STA cached probable links yield to a new hidden competitor", () => StaAsync(CachedAutomaticCompetitorAsync)),
+        ("STA repeated identical morning and evening sale matches only unlinked orders across restart", () => StaAsync(RepeatedSameProductSaleAsync)),
+        ("STA assigned pairs exclude new hidden competitors without reading their items", () => StaAsync(CachedAutomaticCompetitorAsync)),
         ("STA manual and rejected decisions override automatic cache", () => StaAsync(CachedAutomaticDecisionOverridesAsync)),
         ("STA automatic cache failures never block matching or base workflow", () => StaAsync(CachedAutomaticFailureIsolationAsync)),
-        ("STA cached matches require complete enabled connection coverage", () => StaAsync(CachedAutomaticCoverageAsync)),
+        ("STA saved pairs survive incomplete newly enabled connection coverage", () => StaAsync(CachedAutomaticCoverageAsync)),
         ("STA August display, probable link, filters and selection survive September background sync", () => StaAsync(HistoricalBackgroundRangeAsync)),
         ("STA recent background orders are cached and appear when switching to today", () => StaAsync(BackgroundTodayCacheAsync)),
         ("STA old manual link and frozen print batch survive background sync", () => StaAsync(BackgroundManualPrintAsync)),
         ("STA background links recent receipts despite incomplete wider interactive coverage", () => StaAsync(BackgroundRecentLinksAsync)),
         ("STA partial background check preserves cached pairs but cannot link new receipts", () => StaAsync(BackgroundPartialLinksAsync)),
-        ("STA hidden background competitors withdraw stale cached automatic links", () => StaAsync(BackgroundCompetingLinksAsync)),
+        ("STA background matching searches only unlinked orders and receipts", () => StaAsync(BackgroundCompetingLinksAsync)),
         ("STA background coordinator notifications ignore display filters and duplicate Prom aliases after restart", () => StaAsync(BackgroundNotificationsAsync)),
         ("STA background notifications require fresh completed source coverage and defer partial shops", () => StaAsync(BackgroundPartialNotificationsAsync)),
         ("STA changed same-ID receipt invalidates cached details", () => StaAsync(CachedAutomaticChangedReceiptAsync)),
@@ -1399,14 +1400,14 @@ internal static partial class MarketplaceViewModelTests
         Equal(ReceiptLinkState.Suggested, row.OrderMatch!.State);
         fixture.Source.Complete = false;
         await workspace.SyncAsync();
-        Equal(ReceiptLinkState.Incomplete, row.OrderMatch.State);
-        Equal("Перевірка неповна", workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single().LinkStatus);
+        Equal(ReceiptLinkState.Suggested, row.OrderMatch.State);
+        True(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single().HasSuggestedLink);
         fixture.Source.Complete = true;
         await workspace.SyncAsync();
         Equal(ReceiptLinkState.Suggested, row.OrderMatch.State);
         fixture.Source.Orders = [original, original with { Key = new(MarketplaceKind.Prom, "prom-test", "42"), Number = "ORDER-42" }];
         await workspace.SyncAsync();
-        Equal(ReceiptLinkState.Candidates, row.OrderMatch.State); True(row.OrderMatch.Ambiguous);
+        Equal(ReceiptLinkState.Suggested, row.OrderMatch.State); Equal(original.Key, row.OrderMatch.Order!.Key);
         workspace.SelectedReceipt = row;
         fixture.Dialogs.Choice = new(original.Key, false);
         await ExecuteAsync(workspace.LinkCommand);
@@ -1631,10 +1632,10 @@ internal static partial class MarketplaceViewModelTests
         fixture.Source.Orders = [duplicate, oldSecond, first, second, oldFirst];
         await workspace.SyncAsync();
         var ambiguous = main.Receipts.Single(r => r.Total == 355);
-        True(ambiguous.OrderMatch!.Ambiguous && ambiguous.OrderMatch.Order is null);
-        Equal(2, ambiguous.OrderMatch.CompetingOrderCount);
+        Equal(first.Key, ambiguous.OrderMatch!.Order!.Key); True(!ambiguous.OrderMatch.Ambiguous);
+        Equal(1, ambiguous.OrderMatch.CompetingOrderCount);
         workspace.OrderSearch = "CURRENT-355"; await workspace.AutoMatchAsync();
-        True(ambiguous.OrderMatch.Order is null);
+        Equal(first.Key, ambiguous.OrderMatch.Order!.Key);
         Equal(second.Key, main.Receipts.Single(r => r.Total == 1400).OrderMatch!.Order!.Key);
         Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
     }

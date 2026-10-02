@@ -31,12 +31,11 @@ internal static partial class MarketplaceViewModelTests
         await restarted.RefreshAsync(); restarted.SelectedTabIndex = 1; await restarted.PrepareOrdersAsync();
         True(restarted.Receipts.All(r => r.OrderMatch?.Basis == AutomaticLinkBasis.AmountAndQuantity));
         Equal(2, fixture.Details.Calls);
-        // A third order with the same amount AND count defeats the old unique-count link,
-        // even while hidden in the order table. The unrelated two-unit pair survives.
+        // A third free order must not reopen either already assigned count-based pair.
         fixture.Source.Orders = [first, second, first with { Key = first.Key with { OrderId = "43" }, Number = "HIDDEN" }];
         restored.OrderSearch = "ORDER";
         await ExecuteAsync(restored.AutoMatchCommand);
-        True(restarted.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch!.Order is null);
+        Equal(first.Key, restarted.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch!.Order!.Key);
         Equal(second.Key, restarted.Receipts.Single(r => r.Id == ReceiptTwo).OrderMatch!.Order!.Key);
         Equal(2, fixture.Details.Calls); Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
     }

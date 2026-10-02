@@ -13,7 +13,7 @@ internal static class AutomaticMatchCacheTests
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
         ("automatic cache: DPAPI restart restores details and complete graph without manual promotion", Restart),
-        ("automatic cache: new order or receipt competitors invalidate complete cached graph", Run(ChangedCompetitors)),
+        ("automatic cache: new competitors invalidate graph cache but retain assigned pairs", Run(ChangedCompetitors)),
         ("automatic cache: manual suppressions and exact evidence invalidate probable results", Run(DecisionsAndEvidence)),
         ("automatic cache: verified fiscal evidence, details and scope are fingerprinted", Run(FingerprintInputs)),
         ("automatic cache: retention, algorithm version and account isolation are bounded", RetentionAndAccounts),
@@ -73,7 +73,7 @@ internal static class AutomaticMatchCacheTests
             Yes(ReferenceEquals(refresh, result.Matches[r.Id].Order));
             Yes(restartedService.TryRestore(restarted, [r], Account, [refresh], [], out _, details));
             var incomplete = restartedService.MatchAll(restarted, [r], Account, [refresh], [], false, details);
-            Yes(!incomplete.CacheHit); Eq(ReceiptLinkState.Incomplete, incomplete.Matches[r.Id].State);
+            Yes(!incomplete.CacheHit); Eq(ReceiptLinkState.Suggested, incomplete.Matches[r.Id].State);
             var clear = JsonSerializer.Serialize(restarted);
             Yes(!clear.Contains("NEW SYNTHETIC BUYER") && !clear.Contains("PaymentStatus"));
         }
@@ -87,11 +87,12 @@ internal static class AutomaticMatchCacheTests
         var duplicate = Order(2);
         Yes(!service.TryRestore(cache, [r], Account, [o, duplicate], [], out _));
         var manyOrders = service.MatchAll(cache, [r], Account, [o, duplicate], [], true);
-        Yes(!manyOrders.CacheHit); Yes(manyOrders.Matches[r.Id].Ambiguous); Eq(2, manyOrders.Matches[r.Id].CompetingOrderCount);
+        Yes(!manyOrders.CacheHit); Yes(!manyOrders.Matches[r.Id].Ambiguous); Eq(o.Key, manyOrders.Matches[r.Id].Order!.Key);
         var reordered = service.MatchAll(cache, [r], Account, [duplicate, o], [], true);
-        Yes(reordered.CacheHit); Yes(reordered.Matches[r.Id].Ambiguous);
+        Yes(reordered.CacheHit); Yes(!reordered.Matches[r.Id].Ambiguous);
         var manyReceipts = service.MatchAll(cache, [r, Receipt(2)], Account, [o], [], true);
-        Yes(!manyReceipts.CacheHit); Yes(manyReceipts.Matches.Values.All(m => m.State != ReceiptLinkState.Suggested));
+        Yes(!manyReceipts.CacheHit); Eq(o.Key, manyReceipts.Matches[r.Id].Order!.Key);
+        Yes(manyReceipts.Matches[Receipt(2).Id].Order is null);
         Yes(service.MatchAll(cache, [Receipt(2), r], Account, [o], [], true).CacheHit);
         var legacy = Cache();
         service.MatchAll(legacy, [r], Account, [o], [], true);

@@ -7,7 +7,11 @@ public sealed class AutomaticMatchCache
     public int RetentionDays { get; set; } = 30;
     public Dictionary<string, CachedReceiptDetails> Details { get; set; } = new(StringComparer.Ordinal);
     public List<CachedMatchingSnapshot> Snapshots { get; set; } = [];
+    public Dictionary<string, CachedAutomaticLink> Links { get; set; } = new(StringComparer.Ordinal);
+    public int LinkSchema { get; set; }
 }
+
+public sealed record CachedAutomaticLink(CachedReceiptMatch Match, DateTimeOffset LinkedAtUtc);
 
 public sealed record CachedReceiptDetails(string ReceiptFingerprint, ReceiptDetails Details, DateTimeOffset CachedAtUtc);
 

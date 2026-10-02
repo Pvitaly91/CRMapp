@@ -99,6 +99,50 @@ internal static partial class MarketplaceViewModelTests
         Equal(0, fixture.Printer.Calls);
     }
 
+    private static async Task RepeatedSameProductSaleAsync()
+    {
+        var fixture = new Fixture(); var cache = new AutomaticCache();
+        var day = new DateTimeOffset(2026, 9, 23, 0, 0, 0, TimeSpan.FromHours(3));
+        ReceiptRecord Sale(string id, int serial, DateTimeOffset date) => new()
+        {
+            Id = id, Serial = serial, Type = "SELL", Status = "DONE", FiscalDate = date, TotalSumMinor = 32000,
+            Payments = [new("CASHLESS", "Платіж RozetkaPay", 32000)]
+        };
+        var first = Order() with
+        {
+            Number = "MORNING", Total = 320, CreatedAt = day.AddHours(11).AddMinutes(1),
+            PaymentMethod = "Наложенный платеж", DeliveryMethod = "Магазины Rozetka", Shipments = [new("rozetka_delivery", "")],
+            Items = [new("LED підсвітка багажника 2 м", "", 1, 320, 320)], ItemsComplete = true, ItemListComplete = true
+        };
+        var old = Sale(ReceiptOne, 1, day.AddHours(12).AddMinutes(32));
+        fixture.Source.Orders = [first]; fixture.ReceiptSource.Rows = [old];
+        fixture.Details.Values[ReceiptOne] = new(ReceiptOne, first.Items) { ItemListComplete = true };
+        var (main, workspace) = fixture.Create(automaticCache: cache);
+        await main.RefreshAsync(); await OpenOrdersAsync(main, workspace);
+        Equal(first.Key, main.Receipts.Single().OrderMatch!.Order!.Key); Equal(1, fixture.Details.Calls);
+
+        var second = first with
+        {
+            Key = first.Key with { OrderId = "evening" }, Number = "EVENING", CreatedAt = day.AddHours(21).AddMinutes(11),
+            PaymentMethod = "Пром-оплата", DeliveryMethod = "Нова Пошта", Shipments = [new("nova_poshta", "")]
+        };
+        var next = Sale(ReceiptTwo, 2, day.AddHours(21).AddMinutes(13));
+        fixture.Source.Orders = [first, second]; fixture.ReceiptSource.Rows = [old, next];
+        fixture.Details.Values[ReceiptTwo] = new(ReceiptTwo, second.Items) { ItemListComplete = true };
+        fixture.Details.FailIds.Add(ReceiptOne);
+        var (restarted, restored) = fixture.Create(automaticCache: cache);
+        await restarted.RefreshAsync(); await OpenOrdersAsync(restarted, restored);
+        Equal(first.Key, restarted.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch!.Order!.Key);
+        var added = restarted.Receipts.Single(r => r.Id == ReceiptTwo);
+        Equal(second.Key, added.OrderMatch!.Order!.Key);
+        True(added.OrderMatch.Candidates.All(o => o.Key != first.Key));
+        True(restored.AllOrderRows.All(o => o.LinkedReceipts.Count == 1));
+        Equal(2, fixture.Details.Calls); True(fixture.Details.RequestedIds.SequenceEqual([ReceiptOne, ReceiptTwo]));
+        await ExecuteAsync(restored.AutoMatchCommand);
+        Equal(2, fixture.Details.Calls); // Repeated explicit refresh also skips both assigned baskets.
+        Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
+    }
+
     private static async Task CachedAutomaticPartialRestartAsync()
     {
         var fixture = AutomaticCacheFixture();
@@ -160,15 +204,17 @@ internal static partial class MarketplaceViewModelTests
             var (restarted, restored) = fixture.Create(automaticCache: cache);
             await restarted.RefreshAsync();
             await restored.EnsureAttachedAsync();
-            True(restarted.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch?.State != ReceiptLinkState.Suggested,
-                "A locally visible competitor must block cached restore before API refresh.");
+            Equal(original.Key, restarted.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch?.Order?.Key);
             // Hide the new order/receipt from its table without removing it from the graph.
             restored.OrderSearch = original.Number;
             restarted.OrdersReceiptsTab.SearchText = "1";
             await OpenOrdersAsync(restarted, restored);
             var row = restarted.Receipts.Single(r => r.Id == ReceiptOne);
-            Equal(ReceiptLinkState.Candidates, row.OrderMatch!.State);
-            True(row.OrderMatch.Order is null && row.OrderMatch.Ambiguous);
+            Equal(ReceiptLinkState.Suggested, row.OrderMatch!.State);
+            Equal(original.Key, row.OrderMatch.Order!.Key); True(!row.OrderMatch.Ambiguous);
+            if (competingReceipt) True(restarted.Receipts.Single(r => r.Id == ReceiptTwo).OrderMatch!.Order is null);
+            else True(restored.AllOrderRows.Single(o => o.Number == "OTHER-42").LinkedReceipts.Count == 0);
+            Equal(1, fixture.Details.Calls); // Neither a linked receipt nor an already linked order needs comparison again.
             Equal(1, restored.Orders.Cast<object>().Count());
             if (competingReceipt) Equal(1, restarted.OrdersReceiptsTab.View.Cast<object>().Count());
             Equal(0, fixture.Links.Saves);
@@ -241,10 +287,9 @@ internal static partial class MarketplaceViewModelTests
         await restarted.RefreshAsync();
         restarted.SelectedTabIndex = 1;
         await restarted.PrepareOrdersAsync();
-        True(restarted.Receipts.Single().OrderMatch?.State != ReceiptLinkState.Suggested,
-            "An empty newly enabled shop cannot inherit the old complete coverage merely because order arrays match.");
+        Equal(ReceiptLinkState.Suggested, restarted.Receipts.Single().OrderMatch!.State);
         await restored.SyncAsync();
-        Equal(ReceiptLinkState.Incomplete, restarted.Receipts.Single().OrderMatch!.State);
+        Equal(ReceiptLinkState.Suggested, restarted.Receipts.Single().OrderMatch!.State);
         fixture.Rozetka.Complete = true;
         await restored.SyncAsync();
         Equal(ReceiptLinkState.Suggested, restarted.Receipts.Single().OrderMatch!.State);

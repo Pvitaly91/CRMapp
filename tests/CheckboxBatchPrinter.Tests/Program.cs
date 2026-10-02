@@ -90,6 +90,7 @@ internal static class Program
         Tests.AddRange(ContactNameMatchingTests.All);
         Tests.AddRange(PaymentMatchingTests.All);
         Tests.AddRange(AutomaticMatchCacheTests.All);
+        Tests.AddRange(UnlinkedOrderMatchingTests.All);
         Tests.AddRange(MarketplaceSyncTests.All);
         Tests.AddRange(OrderHeaderPrintTests.All);
         Tests.AddRange(ShippingLabelsTests.All);

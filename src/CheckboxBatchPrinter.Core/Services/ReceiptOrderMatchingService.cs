@@ -19,7 +19,8 @@ public sealed class ReceiptOrderMatchingService
 
     public IReadOnlyDictionary<string, ReceiptOrderMatch> MatchAll(IReadOnlyList<ReceiptRecord> receipts, string accountContext,
         IReadOnlyList<MarketplaceOrder> orders, IReadOnlyList<ReceiptOrderDecision> decisions, bool coverageComplete,
-        IReadOnlyDictionary<string, ReceiptDetails>? details = null, AmountMatchScope? scope = null, IReadOnlySet<string>? loading = null)
+        IReadOnlyDictionary<string, ReceiptDetails>? details = null, AmountMatchScope? scope = null, IReadOnlySet<string>? loading = null,
+        IReadOnlyDictionary<string, ReceiptOrderMatch>? existingLinks = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(accountContext);
         var unique = receipts.DistinctBy(r => BasketReceiptMatching.NormalizeId(r.Id)).ToArray();
@@ -28,8 +29,25 @@ public sealed class ReceiptOrderMatchingService
             .ToDictionary(g => g.Key, g => g.First());
         var result = unique.ToDictionary(r => r.Id, r => MatchEvidence(r, accountContext, available, decisions,
             coverageComplete, normalizedDetails.GetValueOrDefault(BasketReceiptMatching.NormalizeId(r.Id)), unique));
+        var reserved = decisions.Where(d => d.AccountContext == accountContext)
+            .GroupBy(d => BasketReceiptMatching.NormalizeId(d.ReceiptId)).Select(g => g.MaxBy(d => d.UpdatedAtUtc)!)
+            .Where(d => d.ConfirmedOrder is not null).Select(d => d.ConfirmedOrder!)
+            .Concat(result.Values.Where(m => m.State is ReceiptLinkState.Manual or ReceiptLinkState.Exact)
+                .Where(m => m.Order is not null).Select(m => m.Order!.Key)).ToHashSet();
+        var retainedOrders = new HashSet<OrderKey>();
+        foreach (var (id, match) in existingLinks ?? new Dictionary<string, ReceiptOrderMatch>())
+        {
+            if (match.State != ReceiptLinkState.Suggested || match.Order is null || reserved.Contains(match.Order.Key)) continue;
+            if (result.TryGetValue(id, out var evidence))
+            {
+                if (evidence.State is ReceiptLinkState.Manual or ReceiptLinkState.Exact or ReceiptLinkState.Conflict) continue;
+                result[id] = match;
+            }
+            // Saved links also reserve orders whose receipts are outside the selected date range.
+            retainedOrders.Add(match.Order.Key);
+        }
         BasketReceiptMatching.Apply(result, unique, available, accountContext, decisions, coverageComplete,
-            normalizedDetails, scope ?? new(), loading);
+            normalizedDetails, scope ?? new(), loading, retainedOrders);
         return result;
     }
 
