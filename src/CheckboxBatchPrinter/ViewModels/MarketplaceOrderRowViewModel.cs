@@ -37,11 +37,13 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
         var shipments = ShippingCarrierNames.ForOrder(Model);
         var attempts = history.Where(a => a.Pages.Any(p => shipments.Any(s =>
             s.Carrier == p.Carrier && s.TrackingNumber == p.TrackingNumber))).ToArray();
-        HasPrintedLabel = attempts.Any(a => a.State == LabelSubmissionState.Submitted);
+        HasPrintedLabel = shipments.Count > 0 && shipments.All(s => attempts.Any(a => a.State == LabelSubmissionState.Submitted &&
+            a.Pages.Any(p => s.Carrier == p.Carrier && s.TrackingNumber == p.TrackingNumber)));
         var latest = attempts.MaxBy(a => a.TimeUtc);
         LabelPrintStatus = latest?.State switch
         {
-            LabelSubmissionState.Submitted => $"Передано Windows, job {latest.WindowsJobId}",
+            LabelSubmissionState.Submitted => HasPrintedLabel ? $"Передано Windows, job {latest.WindowsJobId}" :
+                $"Частину наклейок передано Windows, job {latest.WindowsJobId}",
             LabelSubmissionState.SubmissionUnknown => "Передавання невідоме; можливий дубль",
             _ => "Не передано"
         };

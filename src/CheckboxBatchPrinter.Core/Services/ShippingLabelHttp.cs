@@ -141,7 +141,7 @@ public sealed class OfficialShippingLabelSource(ShippingLabelHttp http, IShippin
     private async Task<ShippingLabelDocument> ReadDeliveryAsync(ShipmentReference shipment, ShippingLabelSettings config, CancellationToken ct)
     {
         var token = config.RozetkaDeliveryToken;
-        if (string.IsNullOrWhiteSpace(token)) throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Потрібен окремий токен Rozetka Delivery у налаштуваннях наклейок.");
+        if (string.IsNullOrWhiteSpace(token)) throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Потрібен окремий токен Rozetka Delivery у налаштуваннях наклейок.") { MissingCredentials = true };
         var id = shipment.ShipmentId.Length > 0 ? shipment.ShipmentId : shipment.TrackingNumber;
         if (!Regex.IsMatch(id, @"^[0-9A-Za-z-]{4,80}$")) throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "Некоректний ідентифікатор відправлення.");
         using var details = await JsonAsync("https://rz-delivery.rozetka.ua/api/track/" + Uri.EscapeDataString(id), token, ct);
@@ -167,10 +167,11 @@ public sealed class OfficialShippingLabelSource(ShippingLabelHttp http, IShippin
             : shipment.Order.Marketplace == MarketplaceKind.Rozetka ? shipment.Order.ConnectionId : "";
         if (!connections.Connections.Any(c => c.Id == connectionId && c.Enabled && c.Marketplace == MarketplaceKind.Rozetka))
             throw new ShippingLabelException(LabelFailureKind.ConnectionRequired,
-                "Потрібне підключення Rozetka Seller з доступом до цієї ТТН Нової пошти. Прямий NP API ще не підключено: його актуальний контракт потребує перевірки.");
+                "Потрібне підключення Rozetka Seller з доступом до цієї ТТН Нової пошти. Прямий NP API ще не підключено: його актуальний контракт потребує перевірки.")
+            { MissingCredentials = string.IsNullOrWhiteSpace(connectionId) };
         var credentials = await marketplaceSecrets.LoadAsync(connectionId, ct);
         if (credentials is null || string.IsNullOrWhiteSpace(credentials.Login) || credentials.Password.Length == 0)
-            throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Налаштуйте підключення Rozetka Seller локально.");
+            throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Налаштуйте підключення Rozetka Seller локально.") { MissingCredentials = true };
         var body = JsonSerializer.Serialize(new { username = credentials.Login.Trim(), password = Convert.ToBase64String(Encoding.UTF8.GetBytes(credentials.Password)) });
         using var auth = JsonDocument.Parse(await http.SendAsync(() => new(HttpMethod.Post, "https://api-seller.rozetka.com.ua/sites")
         { Content = new StringContent(body, Encoding.UTF8, "application/json") }, "application/json", ct));

@@ -26,6 +26,7 @@ internal static class ShippingLabelsTests
         ("NP reads document Ref and official Zebra through verified Seller API", SellerApi),
         ("shipping HTTP rejects every create/edit/registry route and redirects", ReadOnlyRoutes),
         ("mixed label preparation preserves order, seats and deduplicates identical pages", MixedPreparation),
+        ("missing label credentials skip only unconfigured shipments and keep ready pages", () => Sta(MissingCredentialsPreparation)),
         ("invalid or unavailable label blocks complete batch; no partial print", BrokenBatch),
         ("STA real label backend produces one job and separate pages", () => Sta(Backend)),
         ("STA backend registration-then-exception persists whole batch Unknown", () => Sta(Unknown)),
@@ -146,9 +147,12 @@ internal static class ShippingLabelsTests
     internal sealed class Source : IShippingLabelSource
     {
         public string? FailTracking; public Action? OnLoad;
+        public string? MissingCredentialTracking; public bool MissingAllCredentials;
         public Task<ShippingLabelDocument> GetAsync(ShipmentReference shipment, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested(); OnLoad?.Invoke();
+            if (MissingAllCredentials || shipment.TrackingNumber == MissingCredentialTracking)
+                throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Потрібен ключ доставки.") { MissingCredentials = true };
             if (shipment.TrackingNumber == FailTracking) throw new ShippingLabelException(LabelFailureKind.AccessDenied, "Synthetic denied");
             var bytes = SyntheticShippingPdf.Create(pages: shipment.TrackingNumber == "two" ? 2 : 1);
             return Task.FromResult(new ShippingLabelDocument(shipment, "synthetic", "doc-" + shipment.TrackingNumber, bytes, Convert.ToHexString(SHA256.HashData(bytes)), DateTimeOffset.UtcNow, shipment.TrackingNumber == "two" ? 2 : 1));
@@ -175,6 +179,46 @@ internal static class ShippingLabelsTests
         var deduplicated = await new LabelBatchPreparation(new Source(), new Renderer()).PrepareAsync([order, duplicate], Settings, Geometry);
         Check(deduplicated.Pages.Count == 1, "Duplicate connection duplicated sticker.");
         Check(batch.Pages.All(p => p.Png.Length > 0), "No raster payload.");
+    }
+    private static async Task MissingCredentialsPreparation()
+    {
+        var orders = new[] { Order("1", ShippingCarrier.NovaPoshta, "first"),
+            Order("2", ShippingCarrier.RozetkaDelivery, "two"), Order("3", ShippingCarrier.NovaPoshta, "last") };
+        var batch = await new LabelBatchPreparation(new Source { MissingCredentialTracking = "two" }, new Renderer())
+            .PrepareAsync(orders, Settings, Geometry);
+        Check(batch.Pages.Select(p => p.Shipment.TrackingNumber).SequenceEqual(new[] { "first", "last" }), "A missing key blocked or changed available pages.");
+        Check(batch.SelectedOrderCount == 2 && batch.SkippedShipments.Count == 1 && batch.SkippedShipments[0].Shipment.Order == orders[1].Key,
+            "Skipped shipment was lost or counted as printable.");
+        var empty = await new LabelBatchPreparation(new Source { MissingAllCredentials = true }, new Renderer()).PrepareAsync(orders, Settings, Geometry);
+        Check(empty.Pages.Count == 0 && empty.SelectedOrderCount == 0 && empty.SkippedShipments.Count == 3, "All-missing-keys batch invented printable pages.");
+        var stores = new Stores();
+        var np = new NovaPoshtaConnection("10000000000000000000000000000007", "Synthetic NP", "");
+        stores.Config = stores.Config with { RozetkaDeliveryToken = "", NovaPoshtaConnections = [np],
+            NovaPoshtaStoreBindings = [new(orders[0].Key.ConnectionId, np.Id)] };
+        var handler = new Handler(_ => throw new Exception("A missing-key source contacted the API."));
+        using var http = new HttpClient(handler);
+        var official = new OfficialShippingLabelSource(new(http), stores, stores, stores);
+        var rdMissing = await new LabelBatchPreparation(new ConfiguredShippingLabelSource(stores, new Source(), official), new Renderer())
+            .PrepareAsync(orders, Settings, Geometry);
+        Check(rdMissing.Pages.Count == 2 && rdMissing.SkippedShipments.Single().Shipment.Carrier == ShippingCarrier.RozetkaDelivery,
+            "The real RD token check did not skip only RD labels.");
+        var direct = new NovaPoshtaDirectLabelSource(stores, new(NovaPoshtaRequestPolicyTests.FastTransport(http)), new WindowsLabelPdfInspector());
+        var npMissing = await new LabelBatchPreparation(new ConfiguredShippingLabelSource(stores, direct, new Source()), new Renderer())
+            .PrepareAsync(orders, Settings, Geometry);
+        Check(npMissing.Pages.Count == 2 && npMissing.Pages.All(p => p.Shipment.Carrier == ShippingCarrier.RozetkaDelivery) &&
+            npMissing.SkippedShipments.Count == 2, "The real NP key check blocked configured other labels.");
+        Check(handler.Paths.Count == 0, "Missing credentials sent a network request.");
+        try
+        {
+            await new LabelBatchPreparation(new RequiredVerificationSource(), new Renderer()).PrepareAsync(orders, Settings, Geometry);
+            throw new Exception("Missing verification was mistaken for a missing credential.");
+        }
+        catch (ShippingLabelException ex) { Check(!ex.MissingCredentials, "Verification guard was weakened."); }
+    }
+    private sealed class RequiredVerificationSource : IShippingLabelSource
+    {
+        public Task<ShippingLabelDocument> GetAsync(ShipmentReference shipment, CancellationToken ct = default) =>
+            throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Спочатку перевірте належність накладної.");
     }
     private static async Task BrokenBatch()
     {

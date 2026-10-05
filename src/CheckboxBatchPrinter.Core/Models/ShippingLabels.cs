@@ -8,6 +8,7 @@ public sealed class ShippingLabelException(LabelFailureKind kind, string message
     public LabelFailureKind Kind { get; } = kind;
     public DateTimeOffset? RetryAtUtc { get; init; }
     public bool AppliesToBatch { get; init; }
+    public bool MissingCredentials { get; init; }
 }
 
 // None of these identities is an order/receipt ID inferred by basket matching.
@@ -25,7 +26,13 @@ public sealed record ShippingLabelPage(ShipmentReference Shipment, string Docume
     int PageNumber, double WidthMm, double HeightMm, byte[] Png)
 { public string ConnectionId { get; init; } = ""; public string Source { get; init; } = ""; }
 public sealed record LabelPrintBatch(string Id, IReadOnlyList<ShippingLabelPage> Pages, LabelPrintSettings Settings)
-{ public int SelectedOrderCount { get; init; } public double RasterDpiX { get; init; } public double RasterDpiY { get; init; } }
+{
+    public int SelectedOrderCount { get; init; }
+    public double RasterDpiX { get; init; }
+    public double RasterDpiY { get; init; }
+    public IReadOnlyList<LabelSkippedShipment> SkippedShipments { get; init; } = [];
+}
+public sealed record LabelSkippedShipment(ShipmentReference Shipment, string Reason);
 public sealed record LabelPrintAttempt(string AttemptId, string JobName, string PrinterName, DateTimeOffset TimeUtc,
     LabelSubmissionState State, IReadOnlyList<LabelAttemptPage> Pages, int? WindowsJobId = null);
 public sealed record LabelAttemptPage(ShippingCarrier Carrier, string ConnectionId, string TrackingNumber,

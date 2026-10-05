@@ -274,8 +274,8 @@ public sealed class NovaPoshtaDirectLabelSource(IShippingSettingsStore settings,
         var config = await settings.LoadAsync(cancellationToken);
         var binding = config.NovaPoshtaStoreBindings.SingleOrDefault(b => b.MarketplaceConnectionId == shipment.Order.ConnectionId);
         var connection = config.NovaPoshtaConnections.SingleOrDefault(c => c.Id == binding?.NovaPoshtaConnectionId)
-            ?? throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Збережіть API-ключ Нової пошти для цього магазину Prom у налаштуваннях наклейок.");
-        if (connection.ApiKey.Length == 0) throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Очікує локального введення ключа Нової пошти.");
+            ?? throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Збережіть API-ключ Нової пошти для цього магазину Prom у налаштуваннях наклейок.") { MissingCredentials = true };
+        if (string.IsNullOrWhiteSpace(connection.ApiKey)) throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Очікує локального введення ключа Нової пошти.") { MissingCredentials = true };
         var group = _selectedShipments.Append(shipment).Where(s => s.Carrier == ShippingCarrier.NovaPoshta &&
             s.Order.Marketplace == MarketplaceKind.Prom && config.NovaPoshtaStoreBindings.Any(b =>
                 b.MarketplaceConnectionId == s.Order.ConnectionId && b.NovaPoshtaConnectionId == connection.Id)).Distinct().ToArray();
@@ -315,7 +315,7 @@ public sealed class ConfiguredShippingLabelSource(IShippingSettingsStore setting
             if (config.NovaPoshtaStoreBindings.Any(b => b.MarketplaceConnectionId == shipment.Order.ConnectionId))
                 return await direct.GetAsync(shipment, cancellationToken);
             if (config.NovaPoshtaSellerConnectionId.Length == 0)
-                throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Для магазину Prom збережіть API-ключ Нової пошти у налаштуваннях наклейок. Rozetka Seller не потрібний; акаунти не перебираються.");
+                throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Для магазину Prom збережіть API-ключ Нової пошти у налаштуваннях наклейок. Rozetka Seller не потрібний; акаунти не перебираються.") { MissingCredentials = true };
         }
         return await existing.GetAsync(shipment, cancellationToken);
     }

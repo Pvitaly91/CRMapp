@@ -19,6 +19,15 @@ public sealed class LabelPreviewWindow : Window
         header.Children.Add(new TextBlock { Text = $"Принтер: {batch.Settings.PrinterName}\nНосій драйвера: {batch.Settings.WidthMm:0.##} × {batch.Settings.HeightMm:0.##} мм · {geometry.DpiX:0} × {geometry.DpiY:0} DPI · масштаб {batch.Settings.ScalePercent:0.##}% · копій {batch.Settings.Copies}\nGDI-рамка: {geometry.WidthMm:0.##} × {geometry.HeightMm:0.##} мм; область друку: {geometry.PrintableWidthMm:0.##} × {geometry.PrintableHeightMm:0.##} мм", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6) });
         header.Children.Add(new TextBlock { Text = $"Замовлень: {(batch.SelectedOrderCount > 0 ? batch.SelectedOrderCount : batch.Pages.Select(p => p.Shipment.Order).Distinct().Count())} · ТТН: {batch.Pages.Select(p => (p.Shipment.Carrier, p.Shipment.TrackingNumber)).Distinct().Count()} · етикеток: {batch.Pages.Count} · сторінок з копіями: {batch.Pages.Count * batch.Settings.Copies}", FontWeight = FontWeights.SemiBold });
         header.Children.Add(new TextBlock { Text = "Одна етикетка — одна сторінка. Один Windows job. Фізичний вихід не гарантується статусом черги.", Margin = new Thickness(0, 6, 0, 8) });
+        if (batch.SkippedShipments.Count > 0)
+        {
+            header.Children.Add(new TextBlock { Text = $"Пропущено без ключа: {batch.SkippedShipments.Count} відправлень. Друкуватимуться тільки доступні наклейки.",
+                Foreground = Brushes.DarkGoldenrod, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6) });
+            header.Children.Add(new Expander { Header = "Які наклейки пропущено", IsExpanded = batch.SkippedShipments.Count <= 3,
+                Content = new ScrollViewer { MaxHeight = 110, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    Content = new TextBlock { Text = string.Join("\n", batch.SkippedShipments.Select(s =>
+                        $"Замовлення №{s.Shipment.OrderNumber} · ТТН {s.Shipment.TrackingNumber}: {s.Reason}")), TextWrapping = TextWrapping.Wrap } } });
+        }
         if (batch.Pages.Any(p => p.Source.StartsWith("NovaPoshta.Direct.", StringComparison.Ordinal)))
             header.Children.Add(new TextBlock { Text = "Нова пошта: отримано PDF вибраних ТТН. Перегляньте етикетки й підтвердьте друк пакета.",
                 ToolTip = "Один PDF-запит для вибраних ТТН одного NP-акаунта. Усі отримані сторінки включено до пакета.",
@@ -32,7 +41,7 @@ public sealed class LabelPreviewWindow : Window
             header.Children.Add(new TextBlock { Text = "УВАГА: ці етикетки вже передавалися або могли передатися Windows. Частина пакета могла надрукуватися. Повтор потребує окремого підтвердження ризику дублювання.", Foreground = Brushes.DarkRed, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) });
             header.Children.Add(new TextBlock { Text = string.Join("\n", previous.Select(a => $"{a.TimeUtc.LocalDateTime:g}: {a.State}, принтер {a.PrinterName}, job {a.WindowsJobId?.ToString() ?? "невідомий"}, {a.JobName}")), FontSize = 11, TextWrapping = TextWrapping.Wrap });
         }
-        var print = new Button { Content = "Підтверджую — друк усього пакета", Padding = new Thickness(10, 6, 10, 6), IsEnabled = previous.Count == 0, Visibility = allowPrint ? Visibility.Visible : Visibility.Collapsed };
+        var print = new Button { Content = batch.SkippedShipments.Count > 0 ? "Підтверджую — друк доступних наклейок" : "Підтверджую — друк усього пакета", Padding = new Thickness(10, 6, 10, 6), IsEnabled = previous.Count == 0, Visibility = allowPrint ? Visibility.Visible : Visibility.Collapsed };
         repeat.Checked += (_, _) => print.IsEnabled = true; repeat.Unchecked += (_, _) => print.IsEnabled = false;
         print.Click += (_, _) => DialogResult = true;
         var close = new Button { Content = allowPrint ? "Скасувати" : "Закрити", Padding = new Thickness(10, 6, 10, 6), Margin = new Thickness(8), IsCancel = true };

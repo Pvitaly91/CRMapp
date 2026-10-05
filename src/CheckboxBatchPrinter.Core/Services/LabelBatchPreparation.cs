@@ -12,6 +12,7 @@ public sealed class LabelBatchPreparation(IShippingLabelSource source, IShipping
         var selectedShipments = selectedOrders.SelectMany(ShippingCarrierNames.ForOrder).ToArray();
         var batchSource = source is IShippingLabelBatchSource scoped ? scoped.CreateBatchSource(selectedShipments) : source;
         var pages = new List<ShippingLabelPage>();
+        var skipped = new List<LabelSkippedShipment>();
         var seenShipments = new HashSet<(ShippingCarrier, string, string)>();
         var seenPages = new HashSet<(ShippingCarrier, string, int)>();
         long rasterBytes = 0;
@@ -26,11 +27,16 @@ public sealed class LabelBatchPreparation(IShippingLabelSource source, IShipping
                 if (!seenShipments.Add((shipment.Carrier, shipment.TrackingNumber, shipment.ShipmentId))) continue;
                 ShippingLabelDocument document;
                 try { document = await batchSource.GetAsync(shipment, cancellationToken); }
+                catch (ShippingLabelException ex) when (ex.Kind == LabelFailureKind.ConnectionRequired && ex.MissingCredentials && !ex.AppliesToBatch)
+                {
+                    skipped.Add(new(shipment, ex.Message));
+                    continue;
+                }
                 catch (ShippingLabelException ex)
                 {
                     throw new ShippingLabelException(ex.Kind, ex.AppliesToBatch ? ex.Message :
                         $"Замовлення №{shipment.OrderNumber} · ТТН {shipment.TrackingNumber}: {ex.Message}")
-                    { RetryAtUtc = ex.RetryAtUtc, AppliesToBatch = ex.AppliesToBatch };
+                    { RetryAtUtc = ex.RetryAtUtc, AppliesToBatch = ex.AppliesToBatch, MissingCredentials = ex.MissingCredentials };
                 }
                 if (document.Shipment.TrackingNumber != shipment.TrackingNumber || document.Shipment.Carrier != shipment.Carrier ||
                     document.Shipment.Order != shipment.Order || document.DocumentId.Length == 0)
@@ -52,6 +58,10 @@ public sealed class LabelBatchPreparation(IShippingLabelSource source, IShipping
             }
         }
         return new(Guid.NewGuid().ToString("N"), Array.AsReadOnly(pages.ToArray()), settings with { })
-        { SelectedOrderCount = selectedOrders.Select(o => o.Key).Distinct().Count(), RasterDpiX = geometry.DpiX, RasterDpiY = geometry.DpiY };
+        {
+            SelectedOrderCount = skipped.Count == 0 ? selectedOrders.Select(o => o.Key).Distinct().Count() :
+                pages.Select(p => p.Shipment.Order).Distinct().Count(),
+            SkippedShipments = Array.AsReadOnly(skipped.ToArray()), RasterDpiX = geometry.DpiX, RasterDpiY = geometry.DpiY
+        };
     }
 }

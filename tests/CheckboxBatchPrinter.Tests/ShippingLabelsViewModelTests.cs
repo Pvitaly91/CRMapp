@@ -10,6 +10,9 @@ internal static partial class MarketplaceViewModelTests
     [
         ("STA labels without Checkbox freeze visible selection through preparation and confirmation", () => StaAsync(LabelSelectionAsync)),
         ("STA label cancellation and inaccessible document never submit partial packets", () => StaAsync(LabelBlockedAsync)),
+        ("STA missing RD key permits ready labels with explicit preview and leaves skipped rows selected", () => StaAsync(LabelMissingCredentialsAsync)),
+        ("STA all missing label keys produce no dialog, preview, history or print job", () => StaAsync(LabelAllCredentialsMissingAsync)),
+        ("STA partly skipped multi-shipment order is not marked fully printed", () => StaAsync(LabelPartlySkippedOrderAsync)),
         ("STA multi-shipment row previews the chosen document without selecting or printing receipts", () => StaAsync(LabelChooseDocumentAsync)),
         ("STA changed TTN blocks stale preview and restarted Unknown requires repeat warning", () => StaAsync(LabelChangedAndRestartAsync)),
         ("STA printed label highlight survives restart, refresh and failed retry but follows current TTN", () => StaAsync(LabelPrintedHighlightAsync))
@@ -29,8 +32,9 @@ internal static partial class MarketplaceViewModelTests
         public bool ChooseFirst;
         public MarketplaceOrder? ChoosePreviewShipment(MarketplaceOrder order) => ChooseFirst ? order with { Shipments = [order.Shipments[0]] } : order;
         public IReadOnlyList<LabelPrintAttempt> Previous = []; public List<string> Errors = [];
+        public LabelPrintBatch? PreviewedBatch;
         public bool Preview(LabelPrintBatch b, LabelPrinterGeometry g, IReadOnlyList<LabelPrintAttempt> p, bool allow)
-        { Previews++; Previous = p; OnPreview?.Invoke(); return Confirm; }
+        { Previews++; Previous = p; PreviewedBatch = b; OnPreview?.Invoke(); return Confirm; }
         public Task SettingsAsync() => Task.CompletedTask;
         public void Error(string message) => Errors.Add(message);
     }
@@ -68,6 +72,76 @@ internal static partial class MarketplaceViewModelTests
         await vm.RunAsync(null,true); Equal(0,p.Calls); Equal(1,d.Previews); True(d.Errors.Count > 0);
         s.FailTracking = null; s.OnLoad = () => vm.CancelCommand.Execute(null);
         await vm.RunAsync(null,true); Equal(0,p.Calls); Equal(0,h.Attempts.Count);
+    }
+    private static async Task LabelMissingCredentialsAsync()
+    {
+        foreach (var confirm in new[] { false, true })
+        {
+            var (workspace, fixture) = await LabelWorkspace(); var history = new ShippingLabelsTests.History();
+            var printer = new LabelPrinter(); var dialogs = new LabelDialogs { Confirm = confirm };
+            var source = new ShippingLabelsTests.Source { MissingCredentialTracking = "two" };
+            var labels = Labels(workspace, history, source, printer, dialogs); labels.SelectVisibleCommand.Execute(null);
+            dialogs.OnPreview = () =>
+            {
+                Equal(0, printer.Calls); Equal(0, history.Attempts.Count);
+                var batch = dialogs.PreviewedBatch!;
+                Equal(1, batch.Pages.Count); Equal(1, batch.SkippedShipments.Count);
+                var preview = new CheckboxBatchPrinter.Views.LabelPreviewWindow(batch, ShippingLabelsTests.Geometry, [], true);
+                var root = (System.Windows.FrameworkElement)preview.Content;
+                True(VisualChildren<System.Windows.Controls.TextBlock>(root).Any(t => t.Text.Contains("Пропущено")));
+                True(VisualChildren<System.Windows.Controls.Button>(root).Any(b => b.IsEnabled && b.Content?.ToString()?.Contains("доступних") == true));
+                var renderDirectory = Environment.GetEnvironmentVariable("CBP_TEST_RENDER_DIR");
+                if (!string.IsNullOrEmpty(renderDirectory))
+                {
+                    root.Measure(new System.Windows.Size(970, 700)); root.Arrange(new System.Windows.Rect(0, 0, 970, 700)); root.UpdateLayout();
+                    var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(970, 700, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+                    bitmap.Render(root);
+                    var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder(); encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
+                    System.IO.Directory.CreateDirectory(renderDirectory);
+                    using var output = System.IO.File.Create(System.IO.Path.Combine(renderDirectory, "missing-key-preview.png")); encoder.Save(output);
+                }
+                preview.Close();
+                // A skipped order changing after preview must not invalidate the ready NP pages.
+                var skipped = workspace.AllOrderRows.Single(r => r.Number == "ORDER-42");
+                skipped.Update(skipped.Model with { Shipments = [new("rozetka_delivery", "new-skipped-ttn")] }, [], []);
+            };
+            await labels.RunAsync(null, true);
+            Equal(0, dialogs.Errors.Count); Equal(1, dialogs.Previews); Equal(confirm ? 1 : 0, printer.Calls);
+            var readyRow = workspace.AllOrderRows.Single(r => r.Number == "ORDER-41");
+            var skippedRow = workspace.AllOrderRows.Single(r => r.Number == "ORDER-42");
+            True(skippedRow.IsSelectedForLabels && !skippedRow.HasPrintedLabel);
+            if (confirm)
+            {
+                True(!readyRow.IsSelectedForLabels && readyRow.HasPrintedLabel);
+                True(history.Attempts.Single().Pages.All(p => p.TrackingNumber == "first"));
+                True(labels.Status.Contains("Пропущено"));
+            }
+            else { True(readyRow.IsSelectedForLabels); Equal(0, history.Attempts.Count); }
+            Equal(0, fixture.Printer.Calls); Equal(0, fixture.ReceiptSource.Calls);
+        }
+    }
+    private static async Task LabelAllCredentialsMissingAsync()
+    {
+        var (workspace, fixture) = await LabelWorkspace(); var history = new ShippingLabelsTests.History();
+        var printer = new LabelPrinter(); var dialogs = new LabelDialogs();
+        var labels = Labels(workspace, history, new() { MissingAllCredentials = true }, printer, dialogs);
+        labels.SelectVisibleCommand.Execute(null); await labels.RunAsync(null, true);
+        Equal(0, dialogs.Errors.Count); Equal(0, dialogs.Previews); Equal(0, printer.Calls); Equal(0, history.Attempts.Count);
+        True(workspace.AllOrderRows.All(r => r.IsSelectedForLabels && !r.HasPrintedLabel && r.LabelStatus.Contains("ключ")));
+        True(labels.Status.Contains("Немає доступних наклейок"));
+        Equal(0, fixture.Printer.Calls); Equal(0, fixture.ReceiptSource.Calls);
+    }
+    private static async Task LabelPartlySkippedOrderAsync()
+    {
+        var (workspace, _) = await LabelWorkspace(); var row = workspace.AllOrderRows.First();
+        row.Update(row.Model with { Shipments = [new("nova_poshta", "first"), new("rozetka_delivery", "two")] }, [], []);
+        row.IsSelectedForLabels = true;
+        var history = new ShippingLabelsTests.History(); var printer = new LabelPrinter(); var dialogs = new LabelDialogs();
+        var labels = Labels(workspace, history, new() { MissingCredentialTracking = "two" }, printer, dialogs);
+        await labels.RunAsync(null, true);
+        Equal(1, printer.Calls); Equal(0, dialogs.Errors.Count); Equal(1, history.Attempts.Single().Pages.Count);
+        True(row.IsSelectedForLabels && !row.HasPrintedLabel);
+        True(row.LabelPrintStatus.Contains("Частину"));
     }
     private static async Task LabelChangedAndRestartAsync()
     {
