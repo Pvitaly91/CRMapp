@@ -82,7 +82,14 @@ public sealed record MarketplaceOrder
     public string FiscalDataStatus { get; init; } = "";
     public string? SellerUrl { get; init; }
     public DateTimeOffset RetrievedAtUtc { get; init; } = DateTimeOffset.UtcNow;
+    [JsonIgnore] public bool IsCanceled => CanceledStatus(SourceStatus) || CanceledStatus(Status);
     [JsonIgnore] public string TrackingDisplay => string.Join(", ", Shipments.Select(s => s.TrackingNumber).Where(s => s.Length > 0).Distinct());
+
+    // Recognize explicit source/localized order statuses; unknown numeric codes and
+    // payment statuses must not silently remove an order from matching.
+    private static bool CanceledStatus(string? status) => status?.Trim().ToUpperInvariant() is
+        "CANCELED" or "CANCELLED" or "СКАСОВАНО" or "СКАСОВАНЕ" or "СКАСОВАНИЙ" or
+        "ЗАМОВЛЕННЯ СКАСОВАНО" or "ОТМЕНЕН" or "ОТМЕНЁН" or "ОТМЕНЕНО" or "ОТМЕНЁНО";
 }
 
 public sealed record MarketplaceRange(DateTimeOffset From, DateTimeOffset ToExclusive);

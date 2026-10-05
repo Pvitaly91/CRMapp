@@ -8,7 +8,7 @@ namespace CheckboxBatchPrinter.Core.Services;
 /// <summary>Keep assigned pairs and search only documents without a link. Manual/fiscal decisions have priority.</summary>
 public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider = null)
 {
-    public const string AlgorithmVersion = "same-kyiv-day-unlinked-allocation-v10";
+    public const string AlgorithmVersion = "same-kyiv-day-active-unlinked-allocation-v11";
     private const string PreviousAlgorithmVersion = "same-kyiv-day-clean-names-payment-v8";
     public const int MaximumDetails = 5000;
     public const int MaximumSnapshots = 8;
@@ -155,6 +155,7 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
                 byReceipt.TryGetValue(id, out var receipt) && saved.ReceiptFingerprint != ReceiptFingerprint(receipt))
             { cache.Links.Remove(id); continue; }
             if (!byOrder.TryGetValue(saved.Order, out var order)) continue;
+            if (order.IsCanceled) { cache.Links.Remove(id); continue; }
             if (saved.OrderFingerprint != OrderFingerprint(order)) { cache.Links.Remove(id); continue; }
             var receiptId = byReceipt.TryGetValue(id, out var currentReceipt) ? currentReceipt.Id : id;
             const string prefix = "Збережений автозв’язок; новий пошук виконується лише серед замовлень без зв’язку. ";

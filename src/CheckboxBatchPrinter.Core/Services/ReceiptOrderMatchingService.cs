@@ -25,6 +25,7 @@ public sealed class ReceiptOrderMatchingService
         ArgumentException.ThrowIfNullOrWhiteSpace(accountContext);
         var unique = receipts.DistinctBy(r => BasketReceiptMatching.NormalizeId(r.Id)).ToArray();
         var available = orders.GroupBy(o => o.Key).Select(g => g.MaxBy(o => o.RetrievedAtUtc)!).ToArray();
+        var currentOrders = available.ToDictionary(o => o.Key);
         var normalizedDetails = (details?.Values ?? []).GroupBy(d => BasketReceiptMatching.NormalizeId(d.Id))
             .ToDictionary(g => g.Key, g => g.First());
         var result = unique.ToDictionary(r => r.Id, r => MatchEvidence(r, accountContext, available, decisions,
@@ -38,6 +39,7 @@ public sealed class ReceiptOrderMatchingService
         foreach (var (id, match) in existingLinks ?? new Dictionary<string, ReceiptOrderMatch>())
         {
             if (match.State != ReceiptLinkState.Suggested || match.Order is null || reserved.Contains(match.Order.Key)) continue;
+            if ((currentOrders.GetValueOrDefault(match.Order.Key) ?? match.Order).IsCanceled) continue;
             if (result.TryGetValue(id, out var evidence))
             {
                 if (evidence.State is ReceiptLinkState.Manual or ReceiptLinkState.Exact or ReceiptLinkState.Conflict) continue;
@@ -127,7 +129,7 @@ public sealed class ReceiptOrderMatchingService
                 "Знайдено точний фіскальний ключ, але перевірка підключень неповна; однозначність ще не підтверджена.", allowedExact);
         }
 
-        var unresolvedFiscal = available.Where(order => !rejected.Contains(order.Key) && receipt.FiscalCode.Length > 0 &&
+        var unresolvedFiscal = available.Where(order => !order.IsCanceled && !rejected.Contains(order.Key) && receipt.FiscalCode.Length > 0 &&
             order.FiscalReferences.Any(reference => reference.Order == order.Key &&
                 (reference.Kind == FiscalDocumentKeyKind.FiscalCode && reference.Value == receipt.FiscalCode ||
                  reference.Kind == FiscalDocumentKeyKind.CheckboxReceiptUrl && CheckboxReceiptReference.TryParseUrl(reference.Value, out var url) &&
@@ -139,7 +141,7 @@ public sealed class ReceiptOrderMatchingService
         var candidates = allowedExact;
         if (receipt.Type == ReceiptTypes.Sell && receipt.DisplayDate is { } receiptDate)
         {
-            candidates = candidates.Concat(available.Where(order => !rejected.Contains(order.Key) &&
+            candidates = candidates.Concat(available.Where(order => !order.IsCanceled && !rejected.Contains(order.Key) &&
                     order.Total == receipt.TotalSum && (string.IsNullOrWhiteSpace(order.Currency) ||
                         string.Equals(order.Currency, "UAH", StringComparison.OrdinalIgnoreCase)) &&
                     order.CreatedAt is { } created && BasketReceiptMatching.SameDayBeforeReceipt(created, receiptDate)))

@@ -149,6 +149,48 @@ internal static partial class MarketplaceViewModelTests
         Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
     }
 
+    private static async Task CanceledOrderAutomaticUiAsync()
+    {
+        var fixture = new Fixture(); var cache = new AutomaticCache();
+        var day = new DateTimeOffset(2026, 9, 23, 0, 0, 0, TimeSpan.FromHours(3));
+        var canceled = Order() with
+        {
+            Number = "CANCELED-HONDA", Total = 400, CreatedAt = day.AddHours(6).AddMinutes(22),
+            Status = "Скасовано", SourceStatus = "canceled", PaymentMethod = "Наложенный платеж",
+            DeliveryMethod = "Магазины Rozetka", Shipments = [],
+            Items = [new("Ремкомплект петель Honda Civic", "", 1, 400, 400)], ItemsComplete = true, ItemListComplete = true
+        };
+        fixture.Source.Orders = [canceled];
+        fixture.ReceiptSource.Rows = [new ReceiptRecord
+        {
+            Id = ReceiptOne, Serial = 4669, Type = "SELL", Status = "DONE", FiscalDate = day.AddHours(21).AddMinutes(51),
+            TotalSumMinor = 40000, Payments = [new("CASHLESS", "Платіж NovaPay", 40000)]
+        }];
+        fixture.Details.Values[ReceiptOne] = new(ReceiptOne, canceled.Items) { ItemListComplete = true };
+        var (main, workspace) = fixture.Create(automaticCache: cache);
+        await main.RefreshAsync(); await OpenOrdersAsync(main, workspace);
+        Equal(1, workspace.AllOrderRows.Count); Equal(0, fixture.Details.Calls);
+        True(!workspace.AllOrderRows.Single().HasSuggestedLink);
+        True(main.Receipts.Single().OrderMatch!.Candidates.All(o => o.Key != canceled.Key));
+
+        var active = canceled with
+        {
+            Key = canceled.Key with { OrderId = "active" }, Number = "ACTIVE-HONDA", CreatedAt = day.AddHours(21).AddMinutes(22),
+            SourceStatus = "received", Status = "Отримано", DeliveryMethod = "Нова Пошта", Shipments = [new("nova_poshta", "")]
+        };
+        fixture.Source.Orders = [canceled, active];
+        await workspace.SyncAsync();
+        var row = main.Receipts.Single();
+        Equal(active.Key, row.OrderMatch!.Order!.Key); True(!row.OrderMatch.Ambiguous);
+        Equal(2, workspace.AllOrderRows.Count); Equal(1, fixture.Details.Calls);
+        True(!workspace.AllOrderRows.Single(o => o.Key == canceled.Key).HasSuggestedLink);
+        True(workspace.AllOrderRows.Single(o => o.Key == active.Key).HasSuggestedLink);
+        var (restarted, restored) = fixture.Create(automaticCache: cache);
+        await restarted.RefreshAsync(); await OpenOrdersAsync(restarted, restored);
+        Equal(active.Key, restarted.Receipts.Single().OrderMatch!.Order!.Key);
+        Equal(1, fixture.Details.Calls); Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
+    }
+
     private static async Task CachedAutomaticPartialRestartAsync()
     {
         var fixture = AutomaticCacheFixture();

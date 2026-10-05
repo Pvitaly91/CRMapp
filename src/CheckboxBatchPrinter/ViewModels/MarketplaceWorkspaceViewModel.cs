@@ -687,7 +687,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
             .Select(r => r.OrderMatch!.Order!.Key));
         linkedOrders.UnionWith(ActiveDecisions.Where(d => d.AccountContext == _account && d.ConfirmedOrder is not null)
             .Select(d => d.ConfirmedOrder!));
-        var orders = activeOrders.Where(o => !linkedOrders.Contains(o.Key) && o.Items.Count > 0).ToArray();
+        var orders = activeOrders.Where(o => !o.IsCanceled && !linkedOrders.Contains(o.Key) && o.Items.Count > 0).ToArray();
         return _rows.Where(row => row.RawType == ReceiptTypes.Sell && row.Model.Status == "DONE" && row.Model.DisplayDate is { } date &&
             (row.OrderMatch?.Order is null || row.OrderMatch.Products == ProductComparison.Loading) &&
             IsInRange(row, receiptFrom, receiptTo) &&
