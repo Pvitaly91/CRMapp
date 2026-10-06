@@ -23,16 +23,34 @@
         </Style>
         <Style x:Key="OrderRowStyle" TargetType="DataGridRow">
             <Setter Property="Background" Value="White" />
+            <Setter Property="ToolTip" Value="{Binding Marketplace}" />
             <Style.Triggers>
-                <Trigger Property="ItemsControl.AlternationIndex" Value="1">
-                    <Setter Property="Background" Value="#F5F8FC" />
-                </Trigger>
-                <DataTrigger Binding="{Binding HasPrintedLabel}" Value="True">
-                    <Setter Property="Background" Value="#C7F2D4" />
-                    <Setter Property="Foreground" Value="#075E3A" />
-                    <Setter Property="FontWeight" Value="SemiBold" />
-                    <Setter Property="ToolTip" Value="ТТН цього замовлення вже передано в чергу друку Windows." />
+                <DataTrigger Binding="{Binding Marketplace}" Value="Prom">
+                    <Setter Property="Background" Value="#EDF5FF" />
+                    <Setter Property="Foreground" Value="#143E70" />
                 </DataTrigger>
+                <DataTrigger Binding="{Binding Marketplace}" Value="Rozetka">
+                    <Setter Property="Background" Value="#EFFAF2" />
+                    <Setter Property="Foreground" Value="#175A35" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding HasPrintedLabel}" Value="True">
+                    <Setter Property="FontWeight" Value="SemiBold" />
+                    <Setter Property="ToolTip" Value="{Binding LabelPrintStatus}" />
+                </DataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding Marketplace}" Value="Prom" />
+                        <Condition Binding="{Binding HasPrintedLabel}" Value="True" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Background" Value="#BFDAFA" />
+                </MultiDataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding Marketplace}" Value="Rozetka" />
+                        <Condition Binding="{Binding HasPrintedLabel}" Value="True" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Background" Value="#BCE8C9" />
+                </MultiDataTrigger>
             </Style.Triggers>
         </Style>
         <Style x:Key="ReceiptGridStyle" TargetType="DataGrid">
@@ -252,35 +270,47 @@
                                       SelectedItem="{Binding Marketplace.SelectedOrder, Mode=TwoWay}"
                                       AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
                                       IsReadOnly="True" SelectionMode="Single" HeadersVisibility="Column"
-                                      GridLinesVisibility="Horizontal" BorderBrush="#D9DEE7" AlternationCount="2"
+                                      GridLinesVisibility="Horizontal" BorderBrush="#D9DEE7"
                                       RowStyle="{StaticResource OrderRowStyle}">
                                 <DataGrid.Columns>
-                                    <DataGridTemplateColumn Header="Наклейка ✓" Width="85" CanUserSort="False">
+                                    <DataGridTemplateColumn Header="№ / ✓" Width="76" CanUserSort="False">
                                         <DataGridTemplateColumn.CellTemplate><DataTemplate>
-                                            <CheckBox IsChecked="{Binding IsSelectedForLabels, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" HorizontalAlignment="Center" VerticalAlignment="Center" Focusable="False" />
+                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                <CheckBox IsChecked="{Binding IsSelectedForLabels, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" Focusable="False" />
+                                                <TextBlock Tag="OrderRowIndex" Text="{Binding DisplayIndex}" MinWidth="26" TextAlignment="Right" Margin="6,0,0,0"
+                                                           VerticalAlignment="Center" ToolTip="Номер запису в поточному списку" />
+                                            </StackPanel>
                                         </DataTemplate></DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
-                                    <DataGridTextColumn Header="Маркетплейс" Binding="{Binding Marketplace}" Width="100" />
-                                    <DataGridTextColumn Header="№ замовлення" Binding="{Binding Number}" Width="125" />
-                                    <DataGridTextColumn Header="Дата" Binding="{Binding CreatedAt, StringFormat=dd.MM.yyyy HH:mm}" Width="135" />
-                                    <DataGridTextColumn Header="Сума / валюта" Binding="{Binding TotalDisplay}" Width="175">
+                                    <DataGridTextColumn Header="№ замовлення" Binding="{Binding Number}" Width="115" />
+                                    <DataGridTextColumn Header="Дата" Binding="{Binding CreatedAt, StringFormat=dd.MM.yyyy HH:mm}" Width="130" />
+                                    <DataGridTextColumn Header="Сума / валюта" Binding="{Binding TotalDisplay}" Width="115">
                                         <DataGridTextColumn.ElementStyle>
                                             <Style TargetType="TextBlock"><Setter Property="ToolTip" Value="{Binding TotalDisplay}" /></Style>
                                         </DataGridTextColumn.ElementStyle>
                                     </DataGridTextColumn>
-                                    <DataGridTextColumn Header="Зв’язок із чеками" Binding="{Binding LinkStatus}" Width="230">
-                                        <DataGridTextColumn.ElementStyle>
-                                            <Style TargetType="TextBlock"><Setter Property="ToolTip" Value="{Binding LinkExplanation}" /></Style>
-                                        </DataGridTextColumn.ElementStyle>
-                                    </DataGridTextColumn>
-                                    <DataGridTextColumn Header="Пов’язані чеки" Binding="{Binding LinkedReceiptsDisplay}" Width="160">
-                                        <DataGridTextColumn.ElementStyle>
-                                            <Style TargetType="TextBlock"><Setter Property="ToolTip" Value="{Binding LinkedReceiptsDisplay}" /></Style>
-                                        </DataGridTextColumn.ElementStyle>
-                                    </DataGridTextColumn>
-                                    <DataGridTemplateColumn Header="Відкрити чек" Width="110">
+                                    <DataGridTemplateColumn Header="Відкрити чек" Width="150">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
+                                                <DockPanel Margin="2">
+                                                    <Button Tag="OrderLinkInfo" DockPanel.Dock="Right" Content="ⓘ" Padding="3,1" MinWidth="24" Margin="4,0,0,0"
+                                                            VerticalAlignment="Center" Click="OrderLinkInfo_Click" LostKeyboardFocus="OrderLinkInfo_LostKeyboardFocus"
+                                                            AutomationProperties.Name="Інформація про зв’язок із чеками"
+                                                            AutomationProperties.HelpText="{Binding LinkStatus}"
+                                                            ToolTipService.InitialShowDelay="150" ToolTipService.ShowDuration="60000">
+                                                        <Button.ToolTip>
+                                                            <ToolTip MaxWidth="520" DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                                                <ScrollViewer MaxHeight="320" VerticalScrollBarVisibility="Auto">
+                                                                    <StackPanel>
+                                                                        <TextBlock Text="{Binding Marketplace}" FontWeight="SemiBold" />
+                                                                        <TextBlock Text="{Binding LinkStatus}" FontWeight="SemiBold" Margin="0,4,0,0" TextWrapping="Wrap" />
+                                                                        <TextBlock Text="{Binding LinkedReceiptsDisplay}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                                                                        <TextBlock Text="{Binding LinkExplanation}" Margin="0,6,0,0" TextWrapping="Wrap" />
+                                                                    </StackPanel>
+                                                                </ScrollViewer>
+                                                            </ToolTip>
+                                                        </Button.ToolTip>
+                                                    </Button>
                                                 <ItemsControl ItemsSource="{Binding LinkedReceipts}">
                                                     <ItemsControl.ItemTemplate>
                                                         <DataTemplate>
@@ -290,6 +320,7 @@
                                                         </DataTemplate>
                                                     </ItemsControl.ItemTemplate>
                                                 </ItemsControl>
+                                                </DockPanel>
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
@@ -297,7 +328,6 @@
                                         Visibility="{Binding IsChecked, Source={x:Reference ExtraOrderColumns}, Converter={StaticResource BoolToVisibility}}" />
                                     <DataGridTextColumn Header="Статус замовлення" Binding="{Binding Status}" Width="150"
                                         Visibility="{Binding IsChecked, Source={x:Reference ExtraOrderColumns}, Converter={StaticResource BoolToVisibility}}" />
-                                    <DataGridTextColumn Header="Доставка" Binding="{Binding DeliveryDisplay}" Width="130" />
                                     <DataGridTextColumn Header="ТТН" Binding="{Binding TrackingDisplay}" Width="150" />
                                     <DataGridTemplateColumn Header="Етикетка" Width="145">
                                         <DataGridTemplateColumn.CellTemplate><DataTemplate>

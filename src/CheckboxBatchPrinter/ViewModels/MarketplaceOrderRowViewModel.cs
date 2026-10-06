@@ -11,6 +11,8 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
     public string Marketplace => Key.Marketplace.ToString();
     public string StoreName => Model.StoreName;
     public string Number => Model.Number;
+    private int _displayIndex;
+    public int DisplayIndex { get => _displayIndex; internal set => SetProperty(ref _displayIndex, value); }
     public DateTime? CreatedAt => Model.CreatedAt is { } date ? TimeZoneInfo.ConvertTime(date, DateRangeBuilder.KyivZone).DateTime : null;
     public string TotalDisplay => Model.Total is { } total ? $"{total:N2} {(Model.Currency.Length > 0 ? Model.Currency : "(валюта не надана)")}" : "Сума не надана";
     public string BuyerDisplay => Model.Buyer?.Name ?? "";

@@ -138,6 +138,7 @@ internal static partial class MarketplaceViewModelTests
             try
             {
                 await XamlSmokeAsync();
+                await OrdersDashboardAsync();
                 Console.WriteLine("XAML assertions and binding cleanup completed.");
                 await DrainDispatcherAsync();
                 Console.WriteLine("XAML final dispatcher drain completed.");
@@ -2089,11 +2090,11 @@ internal static partial class MarketplaceViewModelTests
             labelRowModel.ApplyLabelHistory([new("synthetic-print", "synthetic-job", "synthetic-printer", DateTimeOffset.UtcNow,
                 LabelSubmissionState.Submitted, [new(ShippingCarrier.NovaPoshta, "synthetic", "synthetic-printed-ttn", "doc", 1, "hash")], 42)]);
             await DrainDispatcherAsync();
-            Equal(Color.FromRgb(0xC7, 0xF2, 0xD4), ((SolidColorBrush)labelRow.Background).Color);
-            Equal(Color.FromRgb(0x07, 0x5E, 0x3A), ((SolidColorBrush)labelRow.Foreground).Color);
+            Equal(Color.FromRgb(0xBF, 0xDA, 0xFA), ((SolidColorBrush)labelRow.Background).Color);
+            Equal(Color.FromRgb(0x14, 0x3E, 0x70), ((SolidColorBrush)labelRow.Foreground).Color);
             labelRowModel.ApplyLabelHistory([]);
             await DrainDispatcherAsync();
-            True(labelRow.Background is not SolidColorBrush background || background.Color != Color.FromRgb(0xC7, 0xF2, 0xD4));
+            Equal(Color.FromRgb(0xED, 0xF5, 0xFF), ((SolidColorBrush)labelRow.Background).Color);
             True(!ReferenceEquals(allGrid.ItemsSource, ordersGrid.ItemsSource));
             Equal(3, allGrid.Items.Count);
             var selectAll = (Button)mainWindow.FindName("SelectAllChecksButton");
@@ -2249,7 +2250,7 @@ internal static partial class MarketplaceViewModelTests
             workspace.DetailsExpanded = false;
             var openColumn = marketplaceOrdersGrid.Columns.Single(c => c.Header?.ToString() == "Відкрити чек");
             marketplaceOrdersGrid.ScrollIntoView(amountOrder, openColumn); marketplaceOrdersGrid.UpdateLayout();
-            var openReceipt = VisualChildren<Button>(openColumn.GetCellContent(amountOrder)).Single();
+            var openReceipt = VisualChildren<Button>(openColumn.GetCellContent(amountOrder)).Single(b => b.Command is not null);
             True(ReferenceEquals(main.PreviewCommand, openReceipt.Command) && ReferenceEquals(amountRow, openReceipt.CommandParameter));
             await DrainDispatcherAsync();
             RenderSyntheticContent(mainWindow, "amount-links.png");
@@ -2273,13 +2274,19 @@ internal static partial class MarketplaceViewModelTests
             ordersGrid.ScrollIntoView(cableRow, receiptLinkColumn); ordersGrid.UpdateLayout();
             var receiptLinkText = ((TextBlock)receiptLinkColumn.GetCellContent(cableRow)).Text;
             Equal(cableRow.LinkStatus, receiptLinkText); Equal("Сума збігається, товари суперечать", receiptLinkText);
-            var orderLinkColumn = marketplaceOrdersGrid.Columns.Single(c => c.Header?.ToString() == "Зв’язок із чеками");
+            var orderLinkColumn = marketplaceOrdersGrid.Columns.Single(c => c.Header?.ToString() == "Відкрити чек");
             foreach (var cableOrder in workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Where(o => o.Key == translatedOrder.Key || o.Key == shortOrder.Key))
             {
                 True(!cableOrder.HasSuggestedLink && !cableOrder.HasConfirmedLink);
                 marketplaceOrdersGrid.ScrollIntoView(cableOrder, orderLinkColumn); marketplaceOrdersGrid.UpdateLayout();
-                var orderLinkText = ((TextBlock)orderLinkColumn.GetCellContent(cableOrder)).Text;
-                Equal(cableOrder.LinkStatus, orderLinkText);
+                var orderInfo = VisualChildren<Button>(orderLinkColumn.GetCellContent(cableOrder)).Single(b => b.Tag?.ToString() == "OrderLinkInfo");
+                var tip = (ToolTip)orderInfo.ToolTip;
+                tip.PlacementTarget = orderInfo;
+                tip.GetBindingExpression(FrameworkElement.DataContextProperty)!.UpdateTarget();
+                await DrainDispatcherAsync();
+                var tipPanel = (StackPanel)((ScrollViewer)tip.Content).Content;
+                True(tipPanel.Children.OfType<TextBlock>().Any(t => t.Text == cableOrder.LinkStatus));
+                True(tipPanel.Children.OfType<TextBlock>().Any(t => t.Text == cableOrder.LinkExplanation));
             }
             Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
             True(bindingFailures.Messages.Count == 0, "Compiled XAML binding errors: " + string.Join("\n", bindingFailures.Messages));
@@ -2317,7 +2324,7 @@ internal static partial class MarketplaceViewModelTests
     {
         var models = Enumerable.Range(0, 6).Select(i => new MarketplaceOrderRowViewModel(Order() with
         {
-            Key = new(MarketplaceKind.Prom, "synthetic", i.ToString()), Number = i.ToString(),
+            Key = new(i % 2 == 0 ? MarketplaceKind.Prom : MarketplaceKind.Rozetka, "synthetic", i.ToString()), Number = i.ToString(),
             Shipments = [new("nova_poshta", "synthetic-ttn-" + i)]
         })).ToArray();
         void MarkPrinted(int i) => models[i].ApplyLabelHistory([new("synthetic-print-" + i, "job", "printer", DateTimeOffset.UtcNow,
@@ -2339,20 +2346,22 @@ internal static partial class MarketplaceViewModelTests
         grid.UpdateLayout();
         DataGridRow Row(int i) => grid.ItemContainerGenerator.ContainerFromItem(models[i]) as DataGridRow
             ?? throw new InvalidOperationException($"Synthetic order row {i} was not generated.");
-        var green = Color.FromRgb(0xC7, 0xF2, 0xD4);
-        var alternating = Color.FromRgb(0xF5, 0xF8, 0xFC);
+        var promPrinted = Color.FromRgb(0xBF, 0xDA, 0xFA);
+        var rozetkaPrinted = Color.FromRgb(0xBC, 0xE8, 0xC9);
+        var promLight = Color.FromRgb(0xED, 0xF5, 0xFF);
+        var rozetkaLight = Color.FromRgb(0xEF, 0xFA, 0xF2);
         for (var i = 0; i < 4; i++)
-            True(Row(i).Background is SolidColorBrush brush && brush.Color == green,
-                $"Consecutive printed label row {i} must be green, including odd rows; actual {Row(i).Background}.");
-        Equal(Colors.White, ((SolidColorBrush)Row(4).Background).Color);
-        Equal(alternating, ((SolidColorBrush)Row(5).Background).Color);
+            True(Row(i).Background is SolidColorBrush brush && brush.Color == (i % 2 == 0 ? promPrinted : rozetkaPrinted),
+                $"Consecutive printed label row {i} must retain its marketplace palette; actual {Row(i).Background}.");
+        Equal(promLight, ((SolidColorBrush)Row(4).Background).Color);
+        Equal(rozetkaLight, ((SolidColorBrush)Row(5).Background).Color);
         models[1].ApplyLabelHistory([]); await DrainDispatcherAsync();
-        Equal(alternating, ((SolidColorBrush)Row(1).Background).Color);
+        Equal(rozetkaLight, ((SolidColorBrush)Row(1).Background).Color);
         MarkPrinted(1); await DrainDispatcherAsync();
-        Equal(green, ((SolidColorBrush)Row(1).Background).Color);
+        Equal(rozetkaPrinted, ((SolidColorBrush)Row(1).Background).Color);
         grid.Items.SortDescriptions.Add(new(nameof(MarketplaceOrderRowViewModel.Number), ListSortDirection.Descending));
         grid.UpdateLayout(); await DrainDispatcherAsync();
-        for (var i = 0; i < 4; i++) Equal(green, ((SolidColorBrush)Row(i).Background).Color);
+        for (var i = 0; i < 4; i++) Equal(i % 2 == 0 ? promPrinted : rozetkaPrinted, ((SolidColorBrush)Row(i).Background).Color);
         host.Close();
     }
 

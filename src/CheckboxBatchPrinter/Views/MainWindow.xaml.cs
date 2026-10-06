@@ -37,6 +37,20 @@ public partial class MainWindow : Window
         // WPF performs stable collection-view sorting. The handler exists to make the intent explicit.
     }
 
+    private void OrderLinkInfo_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { ToolTip: ToolTip tip } button)
+        {
+            tip.PlacementTarget = button;
+            tip.IsOpen = !tip.IsOpen;
+        }
+    }
+
+    private void OrderLinkInfo_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is Button { ToolTip: ToolTip tip }) tip.IsOpen = false;
+    }
+
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (DataContext is not MainViewModel viewModel) return;

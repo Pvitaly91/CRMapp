@@ -32,6 +32,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     private readonly HashSet<string> _basketAttempted = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _loadingDetails = new(StringComparer.OrdinalIgnoreCase);
     private readonly ObservableCollection<MarketplaceOrderRowViewModel> _orderRows = [];
+    private bool _updatingOrderRows;
     private MarketplaceOrderRowViewModel? _selectedOrder;
     private string _orderSearch = "", _orderFilter = "Усі";
     private const string SetupHint = "Інтеграції не налаштовані.\nУсі чеки доступні на вкладці “Усі чеки”.";
@@ -72,6 +73,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         _autoLinkEnabled = autoLinkEnabled;
         Orders = new ListCollectionView(_orderRows) { Filter = MatchesOrderFilter };
         Orders.SortDescriptions.Add(new(nameof(MarketplaceOrderRowViewModel.CreatedAt), ListSortDirection.Descending));
+        Orders.CollectionChanged += (_, _) => UpdateDisplayedOrderNumbers();
         SyncCommand = new AsyncRelayCommand(_ => SyncAsync(), _ => !IsBusy && (_account.Length > 0 || _orderDatesValid));
         ExpandCommand = new AsyncRelayCommand(async _ => { _extraHistory = Math.Min(_extraHistory + 30, 3650); await SyncAsync(); }, _ => !IsBusy && (_account.Length > 0 || _orderDatesValid));
         CancelCommand = new RelayCommand(_ => _cancel?.Cancel(), _ => IsBusy);
@@ -576,21 +578,41 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         OnPropertyChanged(nameof(OrderListSummary)); RaiseCommands();
     }
 
+    private void UpdateDisplayedOrderNumbers()
+    {
+        if (_updatingOrderRows) return;
+        var visible = new HashSet<MarketplaceOrderRowViewModel>();
+        var index = 0;
+        foreach (var row in Orders.Cast<MarketplaceOrderRowViewModel>())
+        {
+            row.DisplayIndex = ++index;
+            visible.Add(row);
+        }
+        foreach (var row in _orderRows)
+            if (!visible.Contains(row)) row.DisplayIndex = 0;
+    }
+
     private void RefreshOrderRows(IReadOnlyList<MarketplaceOrder> orders)
     {
         var decisions = ActiveDecisions;
         var unique = orders.DistinctBy(o => o.Key).ToArray();
         var keys = unique.Select(o => o.Key).ToHashSet();
         var existing = _orderRows.ToDictionary(r => r.Key);
-        // Keep the view queryable while WPF reevaluates selection/commands after collection changes.
-        for (var i = _orderRows.Count - 1; i >= 0; i--)
-            if (!keys.Contains(_orderRows[i].Key)) _orderRows.RemoveAt(i);
-        foreach (var order in unique)
+        // Renumber once after a source batch, rather than once for every inserted row.
+        _updatingOrderRows = true;
+        try
         {
-            if (!existing.TryGetValue(order.Key, out var row))
-            { row = new(order); _orderRows.Add(row); }
-            row.Update(order, _rows, decisions);
+            // Keep the view queryable while WPF reevaluates selection/commands after collection changes.
+            for (var i = _orderRows.Count - 1; i >= 0; i--)
+                if (!keys.Contains(_orderRows[i].Key)) _orderRows.RemoveAt(i);
+            foreach (var order in unique)
+            {
+                if (!existing.TryGetValue(order.Key, out var row))
+                { row = new(order); _orderRows.Add(row); }
+                row.Update(order, _rows, decisions);
+            }
         }
+        finally { _updatingOrderRows = false; }
         if (Labels is not null) _ = Labels.RestoreHistoryAsync();
         RefreshOrdersView();
     }
