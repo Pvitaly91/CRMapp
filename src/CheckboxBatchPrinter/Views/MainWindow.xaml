@@ -328,12 +328,24 @@
                                         Visibility="{Binding IsChecked, Source={x:Reference ExtraOrderColumns}, Converter={StaticResource BoolToVisibility}}" />
                                     <DataGridTextColumn Header="Статус замовлення" Binding="{Binding Status}" Width="150"
                                         Visibility="{Binding IsChecked, Source={x:Reference ExtraOrderColumns}, Converter={StaticResource BoolToVisibility}}" />
-                                    <DataGridTextColumn Header="ТТН" Binding="{Binding TrackingDisplay}" Width="150" />
-                                    <DataGridTemplateColumn Header="Етикетка" Width="145">
-                                        <DataGridTemplateColumn.CellTemplate><DataTemplate>
-                                            <Button Content="Перегляд наклейки" ToolTip="{Binding LabelStatus}"
-                                                Command="{Binding DataContext.Marketplace.Labels.PreviewCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" />
-                                        </DataTemplate></DataGridTemplateColumn.CellTemplate>
+                                    <DataGridTemplateColumn Header="ТТН" Width="160" SortMemberPath="TrackingDisplay">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ItemsControl ItemsSource="{Binding ShipmentLinks}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <TextBlock Margin="4,3" VerticalAlignment="Center">
+                                                                <Hyperlink ToolTip="Переглянути наклейку цієї ТТН"
+                                                                    Command="{Binding DataContext.Marketplace.Labels.PreviewShipmentCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                    CommandParameter="{Binding}">
+                                                                    <Run Text="{Binding TrackingNumber, Mode=OneWay}" />
+                                                                </Hyperlink>
+                                                            </TextBlock>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
                                     <DataGridTextColumn Header="Друк наклейки" Binding="{Binding LabelPrintStatus}" Width="170" />
                                 </DataGrid.Columns>

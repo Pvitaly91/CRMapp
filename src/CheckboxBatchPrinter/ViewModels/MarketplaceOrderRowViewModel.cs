@@ -17,6 +17,10 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
     public string TotalDisplay => Model.Total is { } total ? $"{total:N2} {(Model.Currency.Length > 0 ? Model.Currency : "(валюта не надана)")}" : "Сума не надана";
     public string BuyerDisplay => Model.Buyer?.Name ?? "";
     public string TrackingDisplay => Model.TrackingDisplay;
+    public IReadOnlyList<OrderShipmentLink> ShipmentLinks => Model.Shipments
+        .Where(s => !string.IsNullOrWhiteSpace(s.TrackingNumber))
+        .DistinctBy(s => (s.Carrier, TrackingNumber: s.TrackingNumber.Trim(), s.ShipmentId))
+        .Select(s => new OrderShipmentLink(this, s)).ToArray();
     public string Status => Model.Status;
     private bool _selectedForLabels;
     private bool _hasPrintedLabel;
@@ -72,7 +76,12 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
         LinkedReceiptsDisplay = string.Join(", ", linked.Select(r => $"№{r.Serial} ({r.Type})")) +
             (outsideRange > 0 ? $"; збережено поза списком: {outsideRange}" : "");
         foreach (var property in new[] { nameof(Model), nameof(Marketplace), nameof(StoreName), nameof(Number), nameof(CreatedAt),
-            nameof(TotalDisplay), nameof(BuyerDisplay), nameof(TrackingDisplay), nameof(DeliveryDisplay), nameof(Status), nameof(LinkStatus),
+            nameof(TotalDisplay), nameof(BuyerDisplay), nameof(TrackingDisplay), nameof(ShipmentLinks), nameof(DeliveryDisplay), nameof(Status), nameof(LinkStatus),
             nameof(LinkedReceiptsDisplay), nameof(LinkedReceipts), nameof(LinkExplanation), nameof(HasConfirmedLink), nameof(HasSuggestedLink) }) OnPropertyChanged(property);
     }
+}
+
+public sealed record OrderShipmentLink(MarketplaceOrderRowViewModel Row, OrderShipment Shipment)
+{
+    public string TrackingNumber => Shipment.TrackingNumber.Trim();
 }

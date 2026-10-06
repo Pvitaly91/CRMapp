@@ -2422,9 +2422,9 @@ internal static partial class MarketplaceViewModelTests
         public override void WriteLine(string? message) => Write(message);
     }
 
-    private static Task ExecuteAsync(ICommand command, Func<bool>? finished = null)
+    private static Task ExecuteAsync(ICommand command, Func<bool>? finished = null, object? parameter = null)
     {
-        if (!command.CanExecute(null)) throw new InvalidOperationException("Expected enabled command.");
+        if (!command.CanExecute(parameter)) throw new InvalidOperationException("Expected enabled command.");
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var observedBusy = false;
         void Changed(object? sender, EventArgs args)
@@ -2439,7 +2439,7 @@ internal static partial class MarketplaceViewModelTests
             completed.TrySetResult();
         }
         command.CanExecuteChanged += Changed;
-        command.Execute(null);
+        command.Execute(parameter);
         return completed.Task.WaitAsync(TimeSpan.FromSeconds(8));
     }
 

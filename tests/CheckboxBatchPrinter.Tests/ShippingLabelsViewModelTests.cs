@@ -14,6 +14,7 @@ internal static partial class MarketplaceViewModelTests
         ("STA all missing label keys produce no dialog, preview, history or print job", () => StaAsync(LabelAllCredentialsMissingAsync)),
         ("STA partly skipped multi-shipment order is not marked fully printed", () => StaAsync(LabelPartlySkippedOrderAsync)),
         ("STA multi-shipment row previews the chosen document without selecting or printing receipts", () => StaAsync(LabelChooseDocumentAsync)),
+        ("STA clickable TTN previews exactly its shipment without a chooser or print job", () => StaAsync(LabelTrackingLinkAsync)),
         ("STA changed TTN blocks stale preview and restarted Unknown requires repeat warning", () => StaAsync(LabelChangedAndRestartAsync)),
         ("STA printed label highlight survives restart, refresh and failed retry but follows current TTN", () => StaAsync(LabelPrintedHighlightAsync))
     ];
@@ -29,8 +30,9 @@ internal static partial class MarketplaceViewModelTests
     private sealed class LabelDialogs : ILabelDialogs
     {
         public bool Confirm = true; public int Previews; public Action? OnPreview;
-        public bool ChooseFirst;
-        public MarketplaceOrder? ChoosePreviewShipment(MarketplaceOrder order) => ChooseFirst ? order with { Shipments = [order.Shipments[0]] } : order;
+        public bool ChooseFirst; public int Choices;
+        public MarketplaceOrder? ChoosePreviewShipment(MarketplaceOrder order)
+        { Choices++; return ChooseFirst ? order with { Shipments = [order.Shipments[0]] } : order; }
         public IReadOnlyList<LabelPrintAttempt> Previous = []; public List<string> Errors = [];
         public LabelPrintBatch? PreviewedBatch;
         public bool Preview(LabelPrintBatch b, LabelPrinterGeometry g, IReadOnlyList<LabelPrintAttempt> p, bool allow)
@@ -166,6 +168,26 @@ internal static partial class MarketplaceViewModelTests
         var vm = Labels(w,new(),source,printer,dialogs);
         await vm.RunAsync(row,false); Equal(1,loads); Equal(1,dialogs.Previews); Equal(0,printer.Calls);
         Equal(0,f.Printer.Calls); True(!row.IsSelectedForLabels);
+    }
+
+    private static async Task LabelTrackingLinkAsync()
+    {
+        var (workspace, fixture) = await LabelWorkspace(); var row = workspace.AllOrderRows.First();
+        row.Update(row.Model with { Shipments = [new("nova_poshta", "first"), new("rozetka_delivery", "two")] }, [], []);
+        var history = new ShippingLabelsTests.History(); var printer = new LabelPrinter(); var dialogs = new LabelDialogs();
+        var source = new ShippingLabelsTests.Source(); var loads = 0; source.OnLoad = () => loads++;
+        var labels = Labels(workspace, history, source, printer, dialogs);
+        var link = row.ShipmentLinks.Single(l => l.TrackingNumber == "two");
+        await ExecuteAsync(labels.PreviewShipmentCommand, parameter: link);
+        Equal(0, dialogs.Choices); Equal(1, loads); Equal(1, dialogs.Previews);
+        True(dialogs.PreviewedBatch!.Pages.All(p => p.Shipment.TrackingNumber == "two"));
+        Equal(0, printer.Calls); Equal(0, history.Attempts.Count); True(!row.IsSelectedForLabels);
+        row.Update(row.Model with { Shipments = [new("nova_poshta", "replacement")] }, [], []);
+        await ExecuteAsync(labels.PreviewShipmentCommand, parameter: link);
+        Equal(1, loads); Equal(1, dialogs.Previews); Equal(1, dialogs.Errors.Count);
+        True(row.ShipmentLinks.Single().TrackingNumber == "replacement");
+        row.Update(row.Model with { Shipments = [] }, [], []); Equal(0, row.ShipmentLinks.Count);
+        Equal(0, fixture.Printer.Calls); Equal(0, fixture.ReceiptSource.Calls);
     }
 
     private static async Task LabelPrintedHighlightAsync()

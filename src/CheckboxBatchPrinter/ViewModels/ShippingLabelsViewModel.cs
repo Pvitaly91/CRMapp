@@ -33,6 +33,8 @@ public sealed class ShippingLabelsViewModel : ObservableObject
         ClearCommand = new RelayCommand(_ => { foreach (var row in _workspace.AllOrderRows) row.IsSelectedForLabels = false; }, _ => !IsBusy);
         PrintCommand = new AsyncRelayCommand(_ => RunAsync(null, true), _ => !IsBusy);
         PreviewCommand = new AsyncRelayCommand(p => RunAsync(p as MarketplaceOrderRowViewModel, false), _ => !IsBusy);
+        PreviewShipmentCommand = new AsyncRelayCommand(p => p is OrderShipmentLink link
+            ? RunAsync(link.Row, false, link.Shipment) : Task.CompletedTask, _ => !IsBusy);
         SettingsCommand = new AsyncRelayCommand(async _ =>
         {
             try { await _dialogs.SettingsAsync(); }
@@ -40,12 +42,13 @@ public sealed class ShippingLabelsViewModel : ObservableObject
         }, _ => !IsBusy);
         CancelCommand = new RelayCommand(_ => _cancel?.Cancel(), _ => IsBusy);
     }
-    public bool IsBusy { get => _busy; private set { SetProperty(ref _busy, value); foreach (var c in new[] { SelectVisibleCommand, ClearCommand, CancelCommand }) ((RelayCommand)c).RaiseCanExecuteChanged(); foreach (var c in new[] { PrintCommand, PreviewCommand, SettingsCommand }) ((AsyncRelayCommand)c).RaiseCanExecuteChanged(); } }
+    public bool IsBusy { get => _busy; private set { SetProperty(ref _busy, value); foreach (var c in new[] { SelectVisibleCommand, ClearCommand, CancelCommand }) ((RelayCommand)c).RaiseCanExecuteChanged(); foreach (var c in new[] { PrintCommand, PreviewCommand, PreviewShipmentCommand, SettingsCommand }) ((AsyncRelayCommand)c).RaiseCanExecuteChanged(); } }
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
     public ICommand SelectVisibleCommand { get; }
     public ICommand ClearCommand { get; }
     public ICommand PrintCommand { get; }
     public ICommand PreviewCommand { get; }
+    public ICommand PreviewShipmentCommand { get; }
     public ICommand SettingsCommand { get; }
     public ICommand CancelCommand { get; }
     private MarketplaceOrderRowViewModel[] Visible() => _workspace.Orders.Cast<MarketplaceOrderRowViewModel>().ToArray();
@@ -60,7 +63,9 @@ public sealed class ShippingLabelsViewModel : ObservableObject
         }
         catch (Exception) { Status = "Не вдалося прочитати історію наклейок; перед друком вона перевірятиметься знову."; }
     }
-    public async Task RunAsync(MarketplaceOrderRowViewModel? previewRow, bool print)
+    public Task RunAsync(MarketplaceOrderRowViewModel? previewRow, bool print) => RunAsync(previewRow, print, null);
+
+    private async Task RunAsync(MarketplaceOrderRowViewModel? previewRow, bool print, OrderShipment? selectedShipment)
     {
         if (IsBusy) return;
         var rows = previewRow is null ? Visible().Where(r => r.IsSelectedForLabels).ToArray() : new[] { previewRow };
@@ -69,9 +74,18 @@ public sealed class ShippingLabelsViewModel : ObservableObject
         var orders = rows.Select(r => r.Model with { Shipments = r.Model.Shipments.Select(s => s with { }).ToArray() }).ToArray();
         if (previewRow is not null && !print)
         {
-            var chosen = _dialogs.ChoosePreviewShipment(orders[0]);
-            if (chosen is null) return;
-            orders = [chosen];
+            if (selectedShipment is not null)
+            {
+                if (!orders[0].Shipments.Contains(selectedShipment))
+                { _dialogs.Error("ТТН замінено. Виберіть її актуальний номер у таблиці."); return; }
+                orders = [orders[0] with { Shipments = [selectedShipment with { }] }];
+            }
+            else
+            {
+                var chosen = _dialogs.ChoosePreviewShipment(orders[0]);
+                if (chosen is null) return;
+                orders = [chosen];
+            }
         }
         IsBusy = true;
         _cancel = new();

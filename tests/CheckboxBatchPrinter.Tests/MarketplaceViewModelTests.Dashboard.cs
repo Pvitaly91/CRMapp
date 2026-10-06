@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 using CheckboxBatchPrinter.Core.Models;
 using CheckboxBatchPrinter.ViewModels;
@@ -35,6 +36,10 @@ internal static partial class MarketplaceViewModelTests
         main.SelectedTabIndex = 1;
         await main.PrepareOrdersAsync();
         await workspace.SyncAsync();
+        var labelPrinter = new LabelPrinter();
+        var labelDialogs = new LabelDialogs();
+        var labelHistory = new ShippingLabelsTests.History();
+        workspace.Labels = Labels(workspace, labelHistory, new ShippingLabelsTests.Source(), labelPrinter, labelDialogs);
         var window = new MainWindow { DataContext = main };
         var bindingFailures = new BindingErrorListener();
         var previousTraceLevel = PresentationTraceSources.DataBindingSource.Switch.Level;
@@ -48,12 +53,13 @@ internal static partial class MarketplaceViewModelTests
             var grid = (DataGrid)window.FindName("MarketplaceOrdersGrid");
             var receiptGrid = (DataGrid)window.FindName("OrdersReceiptsGrid");
             True(ReferenceEquals(workspace.Orders, grid.ItemsSource));
-            foreach (var removed in new[] { "Маркетплейс", "Пов’язані чеки", "Зв’язок із чеками", "Доставка" })
+            foreach (var removed in new[] { "Маркетплейс", "Пов’язані чеки", "Зв’язок із чеками", "Доставка", "Етикетка" })
                 True(grid.Columns.All(c => c.Header?.ToString() != removed), $"Removed orders column returned: {removed}.");
             True(receiptGrid.Columns.Any(c => c.Header?.ToString() == "Маркетплейс"),
                 "Compact orders columns must not remove the receipt table's marketplace column.");
             var indexColumn = grid.Columns[0];
             var receiptColumn = grid.Columns.Single(c => c.Header?.ToString() == "Відкрити чек");
+            var trackingColumn = grid.Columns.Single(c => c.Header?.ToString() == "ТТН");
             workspace.Orders.SortDescriptions.Clear();
             workspace.Orders.SortDescriptions.Add(new(nameof(MarketplaceOrderRowViewModel.Number), ListSortDirection.Ascending));
             await DrainDispatcherAsync();
@@ -166,6 +172,15 @@ internal static partial class MarketplaceViewModelTests
             Equal(0, rows[1].LinkedReceipts.Count);
             Equal(1, rows[0].LinkedReceipts.Count);
 
+            await Realize(rows[0], trackingColumn);
+            var trackingCell = trackingColumn.GetCellContent(rows[0]);
+            var trackingLink = VisualChildren<TextBlock>(trackingCell).SelectMany(t => t.Inlines.OfType<Hyperlink>()).Single();
+            True(ReferenceEquals(workspace.Labels.PreviewShipmentCommand, trackingLink.Command));
+            True(trackingLink.Inlines.OfType<Run>().Single().Text == rows[0].ShipmentLinks.Single().TrackingNumber);
+            await ExecuteAsync(trackingLink.Command!, parameter: trackingLink.CommandParameter);
+            Equal(1, labelDialogs.Previews); Equal(0, labelDialogs.Choices); Equal(0, labelPrinter.Calls); Equal(0, labelHistory.Attempts.Count);
+            True(labelDialogs.PreviewedBatch!.Pages.All(p => p.Shipment.TrackingNumber == rows[0].ShipmentLinks.Single().TrackingNumber));
+
             // Exercise the real checkbox binding before view resets. Hiding an order
             // may clear its current selection, but must preserve its label checkmark.
             await Realize(rows[0], indexColumn);
@@ -217,6 +232,8 @@ internal static partial class MarketplaceViewModelTests
             await DrainDispatcherAsync();
             RenderSyntheticContent(window, "orders-dashboard.png");
             RenderSyntheticContent(window, "orders-dashboard-mixed-palette.png");
+            await Realize(rows[0], trackingColumn);
+            RenderSyntheticContent(window, "tracking-links.png");
             Equal(0, fixture.Printer.Calls);
             Equal(0, fixture.Links.Saves);
             True(bindingFailures.Messages.Count == 0,
