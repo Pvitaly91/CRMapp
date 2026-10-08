@@ -53,6 +53,12 @@ internal static partial class MarketplaceViewModelTests
             var grid = (DataGrid)window.FindName("MarketplaceOrdersGrid");
             var receiptGrid = (DataGrid)window.FindName("OrdersReceiptsGrid");
             True(ReferenceEquals(workspace.Orders, grid.ItemsSource));
+            True(!VisualChildren<Button>((FrameworkElement)window.Content).Any(b => b.Content?.ToString() is
+                "Налаштування маркетплейсів" or "Налаштування наклейок"));
+            True(VisualChildren<Button>((FrameworkElement)window.Content).Any(b => b.Content?.ToString() == "Налаштування"));
+            Equal(DataGridSelectionMode.Extended, grid.SelectionMode);
+            Equal(DataGridSelectionUnit.CellOrRowHeader, grid.SelectionUnit);
+            Equal(DataGridSelectionMode.Extended, receiptGrid.SelectionMode);
             foreach (var removed in new[] { "Маркетплейс", "Пов’язані чеки", "Зв’язок із чеками", "Доставка", "Етикетка" })
                 True(grid.Columns.All(c => c.Header?.ToString() != removed), $"Removed orders column returned: {removed}.");
             True(receiptGrid.Columns.Any(c => c.Header?.ToString() == "Маркетплейс"),
@@ -210,6 +216,27 @@ internal static partial class MarketplaceViewModelTests
             }
             Equal(0, rows[1].LinkedReceipts.Count);
             Equal(1, rows[0].LinkedReceipts.Count);
+
+            // Build the exact clipboard payload without overwriting the user's
+            // clipboard. Cell selection must not change any printing checkmarks.
+            var numberColumn = grid.Columns.Single(c => c.Header?.ToString() == "№ замовлення");
+            grid.SelectedCells.Clear();
+            grid.SelectedCells.Add(new DataGridCellInfo(rows[1], numberColumn));
+            grid.SelectedCells.Add(new DataGridCellInfo(rows[0], numberColumn));
+            Equal("ORD-001" + Environment.NewLine + "ORD-002", MainWindow.BuildDashboardClipboardText(grid));
+            True(rows.All(r => !r.IsSelectedForLabels));
+            grid.SelectedCells.Clear();
+            grid.SelectedCells.Add(new DataGridCellInfo(rows[0], trackingColumn));
+            Equal(rows[0].TrackingDisplay, MainWindow.BuildDashboardClipboardText(grid));
+            grid.CurrentCell = new DataGridCellInfo(rows[0], trackingColumn); await DrainDispatcherAsync();
+            Equal(rows[0], workspace.SelectedOrder);
+            var fiscalColumn = receiptGrid.Columns.Single(c => c.Header?.ToString() == "Фіскальний номер");
+            receiptGrid.SelectedCells.Clear(); receiptGrid.SelectedCells.Add(new DataGridCellInfo(receipt, fiscalColumn));
+            Equal(receipt.FiscalCode, MainWindow.BuildDashboardClipboardText(receiptGrid));
+            receiptGrid.CurrentCell = new DataGridCellInfo(receipt, fiscalColumn); await DrainDispatcherAsync();
+            Equal(receipt, main.OrdersReceiptsTab.SelectedReceipt);
+            True(!receipt.IsSelectedForOrders);
+            grid.SelectedCells.Clear(); receiptGrid.SelectedCells.Clear();
 
             await Realize(rows[0], trackingColumn);
             var trackingCell = trackingColumn.GetCellContent(rows[0]);

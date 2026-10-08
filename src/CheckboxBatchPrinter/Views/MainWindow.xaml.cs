@@ -2,6 +2,8 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
+using System.Windows.Media;
+using System.Windows.Data;
 using CheckboxBatchPrinter.ViewModels;
 
 namespace CheckboxBatchPrinter.Views;
@@ -54,6 +56,15 @@ public partial class MainWindow : Window
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (DataContext is not MainViewModel viewModel) return;
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && e.Key is Key.A or Key.C &&
+            Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase or PasswordBox) return;
+        var focusedGrid = Ancestor<DataGrid>(Keyboard.FocusedElement as DependencyObject);
+        if (focusedGrid is not null && Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && e.Key is Key.A or Key.C)
+        {
+            if (e.Key == Key.A) focusedGrid.SelectAllCells();
+            else if (BuildDashboardClipboardText(focusedGrid) is { Length: > 0 } text) Clipboard.SetText(text);
+            e.Handled = true; return;
+        }
         var command = e.Key switch
         {
             Key.A when Keyboard.Modifiers.HasFlag(ModifierKeys.Control) => viewModel.SelectAllCommand,
@@ -64,5 +75,64 @@ public partial class MainWindow : Window
         if (command?.CanExecute(null) != true) return;
         command.Execute(null);
         e.Handled = true;
+    }
+
+    private static T? Ancestor<T>(DependencyObject? element) where T : DependencyObject
+    {
+        while (element is not null)
+        {
+            if (element is T match) return match;
+            element = element is Visual ? VisualTreeHelper.GetParent(element) : LogicalTreeHelper.GetParent(element);
+        }
+        return null;
+    }
+    private void Dashboard_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not DataGrid grid || grid.CommandBindings.Cast<CommandBinding>().Any(b => b.Command == ApplicationCommands.Copy)) return;
+        grid.CommandBindings.Add(new(ApplicationCommands.Copy, DashboardCopy_Executed,
+            (s, args) => { args.CanExecute = grid.SelectedCells.Count > 0; args.Handled = true; }));
+    }
+    private void DashboardCopy_Executed(object sender, ExecutedRoutedEventArgs e)
+    {
+        if (sender is DataGrid grid && BuildDashboardClipboardText(grid) is { Length: > 0 } text) Clipboard.SetText(text);
+        e.Handled = true;
+    }
+    internal static string BuildDashboardClipboardText(DataGrid grid)
+    {
+        var cells = grid.SelectedCells.Where(c => c.IsValid && c.Column.Visibility == Visibility.Visible).ToArray();
+        var columns = cells.Select(c => c.Column).Distinct().OrderBy(c => c.DisplayIndex).ToArray();
+        var items = cells.Select(c => c.Item).Distinct().OrderBy(item => grid.Items.IndexOf(item));
+        return string.Join(Environment.NewLine, items.Select(item => string.Join("\t", columns.Select(column =>
+            cells.Any(c => ReferenceEquals(c.Item, item) && c.Column == column)
+                ? ClipboardCellText(column, item) : ""))));
+    }
+    private static string ClipboardCellText(DataGridColumn column, object item)
+    {
+        var binding = column.ClipboardContentBinding ?? (column as DataGridBoundColumn)?.Binding;
+        if (binding is null) return "";
+        var value = new TextBlock { DataContext = item };
+        BindingOperations.SetBinding(value, TextBlock.TextProperty, binding);
+        var text = value.Text;
+        BindingOperations.ClearAllBindings(value);
+        return text;
+    }
+    private void Dashboard_CurrentCellChanged(object sender, EventArgs e)
+    {
+        if (DataContext is not MainViewModel vm || sender is not DataGrid grid) return;
+        if (grid.CurrentCell.Item is MarketplaceOrderRowViewModel order && vm.Marketplace is { } workspace) workspace.SelectedOrder = order;
+        else if (grid.CurrentCell.Item is ReceiptRowViewModel receipt)
+        {
+            if (ReferenceEquals(grid, AllReceiptsGrid)) vm.AllReceiptsTab.SelectedReceipt = receipt;
+            else if (ReferenceEquals(grid, OrdersReceiptsGrid)) vm.OrdersReceiptsTab.SelectedReceipt = receipt;
+        }
+    }
+    private void Dashboard_RightClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not DataGrid grid || Ancestor<DataGridCell>(e.OriginalSource as DependencyObject) is not { } cell) return;
+        if (!cell.IsSelected)
+        {
+            grid.SelectedCells.Clear(); cell.IsSelected = true;
+            grid.CurrentCell = new DataGridCellInfo(cell);
+        }
     }
 }

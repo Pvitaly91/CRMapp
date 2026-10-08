@@ -5,6 +5,10 @@
         Icon="/CheckboxBatchPrinter;component/Resources/app-icon.ico"
         WindowStartupLocation="CenterScreen" Background="#F5F7FA" PreviewKeyDown="Window_PreviewKeyDown">
     <Window.Resources>
+        <ContextMenu x:Key="DashboardCopyMenu" x:Shared="False">
+            <MenuItem Header="Копіювати (Ctrl+C)" Command="{x:Static ApplicationCommands.Copy}"
+                      CommandTarget="{Binding PlacementTarget, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+        </ContextMenu>
         <Style x:Key="PreserveInactiveRowColor" TargetType="DataGridCell">
             <Style.Triggers>
                 <MultiTrigger>
@@ -70,7 +74,12 @@
             <Setter Property="CanUserAddRows" Value="False" />
             <Setter Property="CanUserDeleteRows" Value="False" />
             <Setter Property="IsReadOnly" Value="False" />
-            <Setter Property="SelectionMode" Value="Single" />
+            <Setter Property="SelectionMode" Value="Extended" />
+            <Setter Property="SelectionUnit" Value="CellOrRowHeader" />
+            <Setter Property="ClipboardCopyMode" Value="ExcludeHeader" />
+            <Setter Property="ContextMenu" Value="{StaticResource DashboardCopyMenu}" />
+            <EventSetter Event="Loaded" Handler="Dashboard_Loaded" />
+            <EventSetter Event="PreviewMouseRightButtonDown" Handler="Dashboard_RightClick" />
             <Setter Property="HeadersVisibility" Value="Column" />
             <Setter Property="GridLinesVisibility" Value="Horizontal" />
             <Setter Property="BorderBrush" Value="#D9DEE7" />
@@ -141,7 +150,8 @@
         <TabControl x:Name="ReceiptTabs" SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}" Margin="10,8,10,2">
             <TabItem Header="Усі чеки">
                 <DataGrid x:Name="AllReceiptsGrid" ItemsSource="{Binding AllReceiptsTab.View}" Style="{StaticResource ReceiptGridStyle}"
-                          SelectedItem="{Binding AllReceiptsTab.SelectedReceipt, Mode=TwoWay}"
+                          CurrentCellChanged="Dashboard_CurrentCellChanged"
+                          SelectedItem="{Binding AllReceiptsTab.SelectedReceipt, Mode=OneWayToSource}"
                           Sorting="DataGrid_Sorting" MouseDoubleClick="ReceiptsGrid_MouseDoubleClick" Margin="6">
                     <DataGrid.Columns>
                         <DataGridTemplateColumn Header="✓" Width="42" CanUserSort="False">
@@ -179,15 +189,12 @@
                             <WrapPanel>
                                 <TextBlock Text="Інтеграції не налаштовані.&#x0a;Усі чеки доступні на вкладці “Усі чеки”."
                                            TextWrapping="Wrap" VerticalAlignment="Center" Margin="3,0,12,0" />
-                                <Button Content="Налаштування маркетплейсів" Command="{Binding MarketplaceSettingsCommand}" />
                             </WrapPanel>
                         </Border>
                         <WrapPanel>
                             <Button Content="Оновити замовлення" Command="{Binding Marketplace.SyncCommand}" />
                             <Button Content="Розширити на 30 днів" Command="{Binding Marketplace.ExpandCommand}" />
                             <Button Content="Скасувати оновлення" Command="{Binding Marketplace.CancelCommand}" />
-                            <Button Content="Налаштування маркетплейсів" Command="{Binding MarketplaceSettingsCommand}"
-                                    Visibility="{Binding Marketplace.HasEnabledConnections, Converter={StaticResource BoolToVisibility}}" />
                             <CheckBox x:Name="ExtraOrderColumns" Content="Покупець, статус у таблиці" VerticalAlignment="Center" Margin="12,0" />
                         </WrapPanel>
                         <WrapPanel>
@@ -216,7 +223,6 @@
                                 <Button Content="Вибрати видимі для наклейок" Command="{Binding Marketplace.Labels.SelectVisibleCommand}" />
                                 <Button Content="Зняти вибір наклейок" Command="{Binding Marketplace.Labels.ClearCommand}" />
                                 <Button Content="Друк наклейок" Command="{Binding Marketplace.Labels.PrintCommand}" />
-                                <Button Content="Налаштування наклейок" Command="{Binding Marketplace.Labels.SettingsCommand}" />
                                 <Button Content="Скасувати підготовку" Command="{Binding Marketplace.Labels.CancelCommand}" />
                                 <TextBlock Text="ⓘ" Margin="6" VerticalAlignment="Center" ToolTip="{Binding Marketplace.Labels.Status}" />
                             </StackPanel>
@@ -280,14 +286,16 @@
                             </StackPanel>
                             </ScrollViewer>
                             <DataGrid x:Name="MarketplaceOrdersGrid" Grid.Row="1" ItemsSource="{Binding Marketplace.Orders}"
-                                      SelectedItem="{Binding Marketplace.SelectedOrder, Mode=TwoWay}"
+                                      SelectedItem="{Binding Marketplace.SelectedOrder, Mode=OneWayToSource}"
                                       AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
-                                      IsReadOnly="True" SelectionMode="Single" HeadersVisibility="Column"
+                                      IsReadOnly="True" SelectionMode="Extended" SelectionUnit="CellOrRowHeader" HeadersVisibility="Column"
+                                      ClipboardCopyMode="ExcludeHeader" ContextMenu="{StaticResource DashboardCopyMenu}"
+                                      Loaded="Dashboard_Loaded" CurrentCellChanged="Dashboard_CurrentCellChanged" PreviewMouseRightButtonDown="Dashboard_RightClick"
                                       GridLinesVisibility="Horizontal" BorderBrush="#D9DEE7"
                                       RowStyle="{StaticResource OrderRowStyle}">
                                 <DataGrid.CellStyle><StaticResource ResourceKey="PreserveInactiveRowColor" /></DataGrid.CellStyle>
                                 <DataGrid.Columns>
-                                    <DataGridTemplateColumn Header="№ / ✓" Width="76" CanUserSort="False">
+                                    <DataGridTemplateColumn Header="№ / ✓" Width="76" CanUserSort="False" ClipboardContentBinding="{Binding DisplayIndex}">
                                         <DataGridTemplateColumn.CellTemplate><DataTemplate>
                                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
                                                 <CheckBox IsChecked="{Binding IsSelectedForLabels, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" Focusable="False" />
@@ -303,7 +311,7 @@
                                             <Style TargetType="TextBlock"><Setter Property="ToolTip" Value="{Binding TotalDisplay}" /></Style>
                                         </DataGridTextColumn.ElementStyle>
                                     </DataGridTextColumn>
-                                    <DataGridTemplateColumn Header="Відкрити чек" Width="150">
+                                    <DataGridTemplateColumn Header="Відкрити чек" Width="150" ClipboardContentBinding="{Binding LinkedReceiptsDisplay}">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
                                                 <DockPanel Margin="2">
@@ -342,7 +350,7 @@
                                         Visibility="{Binding IsChecked, Source={x:Reference ExtraOrderColumns}, Converter={StaticResource BoolToVisibility}}" />
                                     <DataGridTextColumn Header="Статус замовлення" Binding="{Binding Status}" Width="150"
                                         Visibility="{Binding IsChecked, Source={x:Reference ExtraOrderColumns}, Converter={StaticResource BoolToVisibility}}" />
-                                    <DataGridTemplateColumn Header="ТТН" Width="160" SortMemberPath="TrackingDisplay">
+                                    <DataGridTemplateColumn Header="ТТН" Width="160" SortMemberPath="TrackingDisplay" ClipboardContentBinding="{Binding TrackingDisplay}">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
                                                 <ItemsControl ItemsSource="{Binding ShipmentLinks}">
@@ -382,7 +390,8 @@
                                            FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0" />
                             </WrapPanel>
                     <DataGrid x:Name="OrdersReceiptsGrid" Grid.Row="1" ItemsSource="{Binding OrdersReceiptsTab.View}" Style="{StaticResource ReceiptGridStyle}"
-                              SelectedItem="{Binding OrdersReceiptsTab.SelectedReceipt, Mode=TwoWay}"
+                              CurrentCellChanged="Dashboard_CurrentCellChanged"
+                              SelectedItem="{Binding OrdersReceiptsTab.SelectedReceipt, Mode=OneWayToSource}"
                               Sorting="DataGrid_Sorting" MouseDoubleClick="ReceiptsGrid_MouseDoubleClick">
                         <DataGrid.Columns>
                             <DataGridTemplateColumn Header="✓" Width="42" CanUserSort="False">
@@ -404,7 +413,7 @@
                             <DataGridTextColumn Header="Каса" Binding="{Binding CashRegister}" Width="150" IsReadOnly="True" />
                             <DataGridTextColumn Header="Друк" Binding="{Binding PrintStatusText}" Width="110" IsReadOnly="True" />
                             <DataGridTextColumn Header="Маркетплейс" Binding="{Binding Marketplace}" Width="100" IsReadOnly="True" />
-                            <DataGridTemplateColumn Header="№ замовлення" Width="125" SortMemberPath="OrderNumber">
+                            <DataGridTemplateColumn Header="№ замовлення" Width="125" SortMemberPath="OrderNumber" ClipboardContentBinding="{Binding OrderNumber}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <Button Content="{Binding OrderLinkButtonText}" Padding="4,2" ToolTip="Відкрити пов’язане замовлення або кандидатів"
