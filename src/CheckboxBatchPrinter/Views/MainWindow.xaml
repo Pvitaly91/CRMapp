@@ -5,6 +5,18 @@
         Icon="/CheckboxBatchPrinter;component/Resources/app-icon.ico"
         WindowStartupLocation="CenterScreen" Background="#F5F7FA" PreviewKeyDown="Window_PreviewKeyDown">
     <Window.Resources>
+        <Style x:Key="PreserveInactiveRowColor" TargetType="DataGridCell">
+            <Style.Triggers>
+                <MultiTrigger>
+                    <MultiTrigger.Conditions>
+                        <Condition Property="IsSelected" Value="True" />
+                        <Condition Property="Selector.IsSelectionActive" Value="False" />
+                    </MultiTrigger.Conditions>
+                    <Setter Property="Background" Value="{Binding Background, RelativeSource={RelativeSource AncestorType=DataGridRow}}" />
+                    <Setter Property="Foreground" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=DataGridRow}}" />
+                </MultiTrigger>
+            </Style.Triggers>
+        </Style>
         <Style x:Key="ReceiptRowStyle" TargetType="DataGridRow">
             <Setter Property="Background" Value="White" />
             <Style.Triggers>
@@ -63,6 +75,7 @@
             <Setter Property="GridLinesVisibility" Value="Horizontal" />
             <Setter Property="BorderBrush" Value="#D9DEE7" />
             <Setter Property="RowStyle" Value="{StaticResource ReceiptRowStyle}" />
+            <Setter Property="CellStyle" Value="{StaticResource PreserveInactiveRowColor}" />
         </Style>
     </Window.Resources>
     <DockPanel>
@@ -272,6 +285,7 @@
                                       IsReadOnly="True" SelectionMode="Single" HeadersVisibility="Column"
                                       GridLinesVisibility="Horizontal" BorderBrush="#D9DEE7"
                                       RowStyle="{StaticResource OrderRowStyle}">
+                                <DataGrid.CellStyle><StaticResource ResourceKey="PreserveInactiveRowColor" /></DataGrid.CellStyle>
                                 <DataGrid.Columns>
                                     <DataGridTemplateColumn Header="№ / ✓" Width="76" CanUserSort="False">
                                         <DataGridTemplateColumn.CellTemplate><DataTemplate>

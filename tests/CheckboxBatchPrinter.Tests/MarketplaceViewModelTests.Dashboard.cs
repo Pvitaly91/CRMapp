@@ -139,6 +139,45 @@ internal static partial class MarketplaceViewModelTests
                 await AssertIndexCell(rows[i]);
             }
 
+            // Selection must remain available for linking across grids without the
+            // inactive system-grey cells covering the order's printed palette.
+            foreach (var model in new[] { rows[2], rows[3], rows[0] })
+            {
+                var row = await Realize(model, indexColumn);
+                grid.SelectedItem = model;
+                await DrainDispatcherAsync();
+                var selectedCells = VisualChildren<DataGridCell>(row).Where(c => c.IsSelected).ToArray();
+                True(selectedCells.Length > 0, "The inactive-color assertion needs selected order cells.");
+                foreach (var cell in selectedCells)
+                {
+                    True(!System.Windows.Controls.Primitives.Selector.GetIsSelectionActive(cell));
+                    Equal(((SolidColorBrush)row.Background).Color, ((SolidColorBrush)cell.Background).Color);
+                    Equal(((SolidColorBrush)row.Foreground).Color, ((SolidColorBrush)cell.Foreground).Color);
+                }
+                Equal(model, workspace.SelectedOrder);
+            }
+            var receipt = main.Receipts.Single();
+            receipt.PrintStatus = PrintItemStatus.Done;
+            receiptGrid.SelectedItem = receipt;
+            receiptGrid.ScrollIntoView(receipt); LayoutContent(window); await DrainDispatcherAsync();
+            var receiptContainer = (DataGridRow)receiptGrid.ItemContainerGenerator.ContainerFromItem(receipt);
+            var receiptCells = VisualChildren<DataGridCell>(receiptContainer).Where(c => c.IsSelected).ToArray();
+            True(receiptCells.Length > 0, "The receipt selection must remain active logically.");
+            foreach (var cell in receiptCells)
+                Equal(Color.FromRgb(0xC7, 0xF2, 0xD4), ((SolidColorBrush)cell.Background).Color);
+            Equal(receipt, main.OrdersReceiptsTab.SelectedReceipt);
+            var tabs = (TabControl)window.FindName("ReceiptTabs");
+            tabs.SelectedIndex = 0; LayoutContent(window); await DrainDispatcherAsync();
+            var allReceipts = (DataGrid)window.FindName("AllReceiptsGrid");
+            allReceipts.SelectedItem = receipt; allReceipts.ScrollIntoView(receipt); LayoutContent(window); await DrainDispatcherAsync();
+            var allReceiptContainer = (DataGridRow)allReceipts.ItemContainerGenerator.ContainerFromItem(receipt);
+            var allReceiptCells = VisualChildren<DataGridCell>(allReceiptContainer).Where(c => c.IsSelected).ToArray();
+            True(allReceiptCells.Length > 0, "The All Receipts selection must remain available.");
+            foreach (var cell in allReceiptCells)
+                Equal(Color.FromRgb(0xC7, 0xF2, 0xD4), ((SolidColorBrush)cell.Background).Color);
+            Equal(receipt, main.AllReceiptsTab.SelectedReceipt);
+            tabs.SelectedIndex = 1; LayoutContent(window); await DrainDispatcherAsync();
+
             // Both an unlinked order and a linked order retain the independent info
             // button. Opening a receipt still receives that receipt, not the order.
             foreach (var model in new[] { rows[1], rows[0] })
