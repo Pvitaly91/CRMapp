@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Threading;
 using CheckboxBatchPrinter.Core.Models;
 using CheckboxBatchPrinter.Core.Services;
+using CheckboxBatchPrinter.Infrastructure;
 
 namespace CheckboxBatchPrinter.Views;
 
@@ -20,6 +21,7 @@ public sealed class NovaPoshtaConnectionWindow : Window
     private readonly TextBlock _periodText = new() { Margin = new Thickness(0,8,0,0), FontSize = 11, TextWrapping = TextWrapping.Wrap,
         ToolTip = "Це дата створення ТТН, не замовлення. Інші періоди й акаунти автоматично не перебираються." };
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,0,0,8) };
+    private readonly TextBlock _credentialStatus = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,4,0,8) };
     private readonly StackPanel _form = new();
     private readonly Button _cancel = new() { Content = "Скасувати перевірку", IsEnabled = false, Visibility = Visibility.Collapsed };
     private readonly Button _check = new() { Content = "Перевірити наявну накладну", Padding = new Thickness(8) };
@@ -41,6 +43,8 @@ public sealed class NovaPoshtaConnectionWindow : Window
             ToolTip = "Read-only підключення за відкритим SDK. Не створює ТТН/реєстри. Офіційний контракт ще не підтверджено. Перевіряються доступ, PDF, номер накладної та повнота місць." });
         _form.Children.Add(new TextBlock { Text = _shop?.Name ?? "Спочатку виберіть замовлення увімкненого магазину Prom у таблиці.",
             TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,10,0,3) });
+        CredentialIndicator.Apply(_credentialStatus, !string.IsNullOrWhiteSpace(_connection?.ApiKey), false, "Ключ Нової пошти");
+        _form.Children.Add(_credentialStatus);
         Add(_form, "Накладна вибраного замовлення", _shipments);
         if (order?.Key.Marketplace == MarketplaceKind.Prom)
             foreach (var shipment in ShippingCarrierNames.ForOrder(order).Where(s => s.Carrier == ShippingCarrier.NovaPoshta))
@@ -112,6 +116,7 @@ public sealed class NovaPoshtaConnectionWindow : Window
             // This dialog only reads credentials saved in the one main settings form.
             // Never write a stale account/binding snapshot back during diagnostics.
             _connection = ResolveConnection(await _store.LoadAsync(_cancellation.Token));
+            CredentialIndicator.Apply(_credentialStatus, !string.IsNullOrWhiteSpace(_connection?.ApiKey), false, "Ключ Нової пошти");
             var connection = _connection;
             if (connection is null || connection.ApiKey.Length == 0)
                 throw new InvalidOperationException("Спочатку збережіть API-ключ для цього магазину в налаштуваннях наклейок.");

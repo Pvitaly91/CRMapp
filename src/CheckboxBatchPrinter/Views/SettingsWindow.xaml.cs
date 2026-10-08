@@ -53,7 +53,7 @@ public partial class SettingsWindow : Window
     private async void TestApi_Click(object sender, RoutedEventArgs e)
     {
         if (DataContext is not SettingsViewModel viewModel) return;
-        try { await viewModel.TestApiAsync(); MessageBox.Show(this, "Підключення до Checkbox успішне.", "Діагностика", MessageBoxButton.OK, MessageBoxImage.Information); }
+        try { await viewModel.TestApiAsync(); PasswordInput.Clear(); MessageBox.Show(this, "Підключення до Checkbox успішне.", "Діагностика", MessageBoxButton.OK, MessageBoxImage.Information); }
         catch (ApiException ex) { ShowError(ex.ToUserMessage()); }
         catch (Exception ex) { ShowError(ex.Message); }
     }

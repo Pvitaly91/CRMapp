@@ -96,7 +96,7 @@ public partial class App : Application
             var pdfInspector = new WindowsLabelPdfInspector();
             var npSession = new NovaPoshtaVerifiedSession();
             var labelDialogs = new LabelDialogs(shippingSettings, marketplaceSettings, labelPrinter,
-                new NovaPoshtaDiagnostics(npClient, pdfInspector), npSession, () => marketplace.SelectedOrder?.Model);
+                new NovaPoshtaDiagnostics(npClient, pdfInspector), npSession, () => marketplace.SelectedOrder?.Model, marketplaceSecrets);
             marketplace.Labels = new ShippingLabelsViewModel(marketplace, shippingSettings, labelHistory,
                 new ConfiguredShippingLabelSource(shippingSettings,
                     new NovaPoshtaDirectLabelSource(shippingSettings, npClient, pdfInspector),

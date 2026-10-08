@@ -55,8 +55,12 @@ public sealed class SettingsViewModel : ObservableObject
     public ObservableCollection<string> Printers { get; } = [];
     public MarketplaceSettingsViewModel? Marketplace { get; }
     public ObservableCollection<PaperWidthOption> PaperWidths { get; }
-    public string Login { get => _login; set => SetProperty(ref _login, value); }
-    public string Password { get => _password; set => SetProperty(ref _password, value); }
+    public string Login { get => _login; set { if (SetProperty(ref _login, value)) NotifyCredentialStatus(); } }
+    public string Password { get => _password; set { if (SetProperty(ref _password, value)) NotifyCredentialStatus(); } }
+    private bool HasCredentialDraft => !string.IsNullOrEmpty(Password) || Login.Trim() != _originalLogin.Trim();
+    public string CredentialStatusKind => CredentialIndicator.Kind(_authentication.HasStoredCredentials, HasCredentialDraft);
+    public string CredentialStatus => CredentialIndicator.Text(_authentication.HasStoredCredentials, HasCredentialDraft, "Облікові дані Checkbox");
+    private void NotifyCredentialStatus() { OnPropertyChanged(nameof(CredentialStatus)); OnPropertyChanged(nameof(CredentialStatusKind)); }
     public string SelectedPrinter { get => _selectedPrinter; set => SetProperty(ref _selectedPrinter, value); }
     public PaperWidth PaperWidth { get => _paperWidth; set { if (SetProperty(ref _paperWidth, value)) OnPropertyChanged(nameof(IsCustomPaperWidth)); } }
     public bool IsCustomPaperWidth => PaperWidth == PaperWidth.Custom;
@@ -84,6 +88,7 @@ public sealed class SettingsViewModel : ObservableObject
         _settings = await _settingsService.LoadAsync();
         Login = _settings.Login;
         _originalLogin = _settings.Login;
+        NotifyCredentialStatus();
         SelectedPrinter = _settings.PrinterName;
         PaperWidth = _settings.PaperWidth;
         CustomPaperWidthMm = _settings.CustomPaperWidthMm;
@@ -132,6 +137,7 @@ public sealed class SettingsViewModel : ObservableObject
             }
             _originalLogin = _settings.Login;
             Password = string.Empty;
+            NotifyCredentialStatus();
             DiagnosticStatus = "Налаштування збережено";
         }
         finally { IsBusy = false; }
@@ -155,6 +161,7 @@ public sealed class SettingsViewModel : ObservableObject
             await _settingsService.SaveAsync(_settings);
             if (_backgroundSettingsSaved is not null) await _backgroundSettingsSaved(_settings, true, false);
             _originalLogin = _settings.Login;
+            Password = string.Empty; NotifyCredentialStatus();
             DiagnosticStatus = "Підключення до Checkbox успішне";
         }
         finally { IsBusy = false; }

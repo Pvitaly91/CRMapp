@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using CheckboxBatchPrinter.Core.Models;
 using CheckboxBatchPrinter.Core.Services;
 using CheckboxBatchPrinter.Services;
+using CheckboxBatchPrinter.Infrastructure;
 
 namespace CheckboxBatchPrinter.Views;
 
@@ -19,6 +20,10 @@ public sealed class LabelSettingsWindow : Window
     private readonly PasswordBox _token = new(), _npKey = new();
     private readonly Expander _advanced = new() { Header = "Розширені налаштування", IsExpanded = false, Margin = new Thickness(0,12,0,4) };
     private readonly TextBlock _npStatus = new() { TextWrapping = TextWrapping.Wrap, FontSize = 11, Margin = new Thickness(0,4,0,4) };
+    private readonly TextBlock _tokenStatus = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,4,0,4) };
+    private readonly TextBlock _sellerStatus = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0,4,0,4) };
+    private readonly IMarketplaceSecretStore? _marketplaceSecrets;
+    private int _sellerStatusGeneration;
     private readonly MarketplaceConnection[] _promStores;
     private readonly Dictionary<string, string> _npDrafts = new(StringComparer.Ordinal);
     private ShippingLabelSettings _npKnownSettings;
@@ -26,9 +31,10 @@ public sealed class LabelSettingsWindow : Window
     private bool _sellerChanged, _printChanged, _saving;
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap };
     public LabelSettingsWindow(IShippingSettingsStore store, ILabelPrinter printer, ShippingLabelSettings original, MarketplaceSettings marketplaces,
-        NovaPoshtaDiagnostics? diagnostics = null, NovaPoshtaVerifiedSession? session = null, Func<MarketplaceOrder?>? currentOrder = null)
+        NovaPoshtaDiagnostics? diagnostics = null, NovaPoshtaVerifiedSession? session = null, Func<MarketplaceOrder?>? currentOrder = null,
+        IMarketplaceSecretStore? marketplaceSecrets = null)
     {
-        _store = store; _printer = printer; _original = original; _npKnownSettings = original;
+        _store = store; _printer = printer; _original = original; _npKnownSettings = original; _marketplaceSecrets = marketplaceSecrets;
         _promStores = marketplaces.Connections.Where(c => c.Enabled && c.Marketplace == MarketplaceKind.Prom).ToArray();
         Title = "Налаштування — Друк наклейок"; Width = 660; Height = 590; MinHeight = 450; WindowStartupLocation = WindowStartupLocation.CenterOwner;
         var root = new StackPanel { Margin = new Thickness(16) };
@@ -58,12 +64,18 @@ public sealed class LabelSettingsWindow : Window
             npBasic.Children.Add(new TextBlock { Text = _promStores.SingleOrDefault()?.Name ?? "Спочатку додайте магазин Prom у налаштуваннях маркетплейсів.", TextWrapping = TextWrapping.Wrap });
         }
         Add(npBasic, "API-ключ Нової пошти", _npKey); npBasic.Children.Add(_npStatus);
+        _npKey.PasswordChanged += (_, _) => UpdateNpIndicator();
         _npKey.ToolTip = "Ключ вводиться лише локально й зберігається захищено. Порожнє поле залишає попередній ключ. Збереження не перевіряє доступ до накладної.";
         _npStores.SelectionChanged += (_, _) => { CommitNpDraft(); ShowNpStore(); };
         var selectedOrder = currentOrder?.Invoke();
         if (selectedOrder?.Key.Marketplace == MarketplaceKind.Prom) _npStores.SelectedValue = selectedOrder.Key.ConnectionId;
         if (_npStores.SelectedItem is null && _promStores.Length == 1) _npStores.SelectedIndex = 0;
         ShowNpStore();
+        npBasic.Children.Add(new TextBlock { Text = "Порожнє поле залишає попередній ключ.", FontSize = 11, Margin = new Thickness(0,2,0,4) });
+
+        root.Children.Add(_tokenStatus); root.Children.Add(_sellerStatus);
+        _token.PasswordChanged += (_, _) => UpdateTokenIndicator();
+        UpdateTokenIndicator();
 
         var advanced = new StackPanel { Margin = new Thickness(8) }; _advanced.Content = advanced; root.Children.Add(_advanced);
         _landscape.IsChecked = original.Print.Landscape; advanced.Children.Add(_landscape);
@@ -72,7 +84,8 @@ public sealed class LabelSettingsWindow : Window
         Add(advanced, "Нова пошта через Rozetka Seller (не потрібно для Prom із власним NP-ключем)", _seller);
         _seller.DisplayMemberPath = nameof(MarketplaceConnection.Name); _seller.SelectedValuePath = nameof(MarketplaceConnection.Id);
         _seller.ItemsSource = marketplaces.Connections.Where(c => c.Enabled && c.Marketplace == MarketplaceKind.Rozetka).ToArray(); _seller.SelectedValue = original.NovaPoshtaSellerConnectionId;
-        _seller.SelectionChanged += (_, _) => _sellerChanged = true;
+        _seller.SelectionChanged += (_, _) => { _sellerChanged = true; _ = UpdateSellerIndicatorAsync(); };
+        _ = UpdateSellerIndicatorAsync();
         async void OpenNp(object sender, RoutedEventArgs e)
         {
             if (_saving) return;
@@ -155,8 +168,32 @@ public sealed class LabelSettingsWindow : Window
         _npStoreId = _npStores.SelectedValue as string;
         _npKey.Password = _npStoreId is not null && _npDrafts.TryGetValue(_npStoreId, out var draft) ? draft : "";
         _npKey.IsEnabled = _npStoreId is not null;
-        _npStatus.Text = _npStoreId is null ? "Виберіть магазин, для якого зберегти ключ." :
-            NovaPoshtaKeySettings.HasSavedKey(_npKnownSettings, _npStoreId) ? "Ключ збережено. Порожнє поле — залишити попередній." : "Введіть ключ і натисніть «Зберегти». Інших налаштувань акаунта не потрібно.";
+        UpdateNpIndicator();
+    }
+    private void UpdateNpIndicator()
+    {
+        CredentialIndicator.Apply(_npStatus, NovaPoshtaKeySettings.HasSavedKey(_npKnownSettings, _npStoreId), _npKey.Password.Trim().Length > 0, "Ключ Нової пошти");
+        if (_npStoreId is null) { _npStatus.Text = "Оберіть магазин Prom для налаштування ключа"; _npStatus.Tag = "Unknown"; }
+    }
+    private void UpdateTokenIndicator() => CredentialIndicator.Apply(_tokenStatus,
+        !string.IsNullOrWhiteSpace(_original.RozetkaDeliveryToken), !string.IsNullOrWhiteSpace(_token.Password), "Токен Rozetka Delivery");
+    private async Task UpdateSellerIndicatorAsync()
+    {
+        var generation = ++_sellerStatusGeneration;
+        CredentialIndicator.Apply(_sellerStatus, false, false, "Підключення Rozetka Seller");
+        var id = _seller.SelectedValue as string;
+        if (string.IsNullOrEmpty(id)) { CredentialIndicator.Apply(_sellerStatus, false, false, "Підключення Rozetka Seller"); return; }
+        if (_marketplaceSecrets is null) { _sellerStatus.Text = "Rozetka Seller: стан даних доступний у налаштуваннях маркетплейсу"; return; }
+        _sellerStatus.Tag = "Unknown";
+        _sellerStatus.Text = "Rozetka Seller: перевіряю збережені дані…";
+        try
+        {
+            var credentials = await _marketplaceSecrets.LoadAsync(id);
+            if (generation != _sellerStatusGeneration) return;
+            CredentialIndicator.Apply(_sellerStatus, !string.IsNullOrWhiteSpace(credentials?.Login) && !string.IsNullOrEmpty(credentials?.Password),
+                _sellerChanged && id != _original.NovaPoshtaSellerConnectionId, "Облікові дані Rozetka Seller");
+        }
+        catch (Exception) { if (generation == _sellerStatusGeneration) _sellerStatus.Text = "Rozetka Seller: не вдалося прочитати стан даних"; }
     }
     private ShippingLabelSettings ApplyNpDrafts(ShippingLabelSettings latest)
     {

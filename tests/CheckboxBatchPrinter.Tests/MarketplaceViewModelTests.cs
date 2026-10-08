@@ -62,6 +62,8 @@ internal static partial class MarketplaceViewModelTests
         ("STA changing tabs during confirmation and backend preserves one frozen job", () => StaAsync(SwitchDuringPrintAsync)),
         ("STA real Rozetka adapter fiscal URL auto-fills row without manual link and does not gate base print", () => StaAsync(FiscalAutomaticUiAsync)),
         ("STA all marketplace orders load without Checkbox credentials or receipt rows", () => StaAsync(OrdersWithoutCheckboxAsync)),
+        ("STA credential indicators show saved drafts and missing data per marketplace without exposing secrets", () => StaAsync(MarketplaceCredentialStatusAsync)),
+        ("STA Checkbox credential indicator uses stored presence rather than the blank password box", () => StaAsync(CheckboxCredentialStatusAsync)),
         ("STA no-Checkbox order refresh uses changed calendar dates and rejects incomplete ranges", () => StaAsync(OrderCalendarWithoutCheckboxAsync)),
         ("STA marketplace order filters search and full order keys are independent of receipt tabs", () => StaAsync(IndependentOrderPanelAsync)),
         ("STA identical Prom connections show one cached order while preserving legacy manual links after F5 and restart", () => StaAsync(DuplicateCachedManualAsync)),
@@ -139,6 +141,7 @@ internal static partial class MarketplaceViewModelTests
             {
                 await XamlSmokeAsync();
                 await OrdersDashboardAsync();
+                await CredentialIndicatorsXamlAsync();
                 Console.WriteLine("XAML assertions and binding cleanup completed.");
                 await DrainDispatcherAsync();
                 Console.WriteLine("XAML final dispatcher drain completed.");

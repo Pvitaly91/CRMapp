@@ -17,6 +17,9 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
     private bool _canEdit;
     private int _historyDays = 30, _cacheDays = 30;
     private readonly Dictionary<string, MarketplaceCredentials> _pending = [];
+    private readonly Dictionary<string, bool?> _savedPresence = [];
+    private readonly HashSet<string> _presenceUnavailable = [];
+    public Task CredentialStatusRefresh { get; private set; } = Task.CompletedTask;
 
     public MarketplaceSettingsViewModel(IMarketplaceSettingsStore settings, IMarketplaceSecretStore secrets, MarketplaceSyncService sync)
     {
@@ -41,13 +44,39 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
             CredentialsCleared?.Invoke(this, EventArgs.Empty);
             OnPropertyChanged(nameof(IsProm)); OnPropertyChanged(nameof(IsRozetka));
             ((AsyncRelayCommand)TestCommand).RaiseCanExecuteChanged();
+            CredentialStatusRefresh = RefreshCredentialStatusAsync(value);
+            NotifyCredentialStatus();
         }
     }
     public bool IsProm => Selected?.Marketplace == MarketplaceKind.Prom;
     public bool IsRozetka => Selected?.Marketplace == MarketplaceKind.Rozetka;
-    public string Token { get => _token; set => SetProperty(ref _token, value); }
-    public string Login { get => _login; set => SetProperty(ref _login, value); }
-    public string Password { get => _password; set => SetProperty(ref _password, value); }
+    public string Token { get => _token; set { if (SetProperty(ref _token, value)) NotifyCredentialStatus(); } }
+    public string Login { get => _login; set { if (SetProperty(ref _login, value)) NotifyCredentialStatus(); } }
+    public string Password { get => _password; set { if (SetProperty(ref _password, value)) NotifyCredentialStatus(); } }
+    private bool HasCredentialDraft => Selected is not null && (IsProm ? !string.IsNullOrWhiteSpace(Token) ||
+        _pending.TryGetValue(Selected.Id, out var prom) && !string.IsNullOrWhiteSpace(prom.Token) :
+        !string.IsNullOrEmpty(Login) || !string.IsNullOrEmpty(Password) || _pending.ContainsKey(Selected.Id));
+    public string CredentialStatusKind => HasCredentialDraft ? "Draft" : Selected is null ||
+        !_savedPresence.TryGetValue(Selected.Id, out var saved) || saved is null ? "Unknown" : saved.Value ? "Saved" : "Missing";
+    public string CredentialStatus => Selected is null ? "Оберіть підключення" : HasCredentialDraft
+        ? CredentialIndicator.Text(false, true, "Ключ") : _presenceUnavailable.Contains(Selected.Id)
+            ? "Не вдалося прочитати стан збережених даних" : CredentialStatusKind == "Unknown"
+                ? "Перевіряю наявність збережених даних…" : CredentialIndicator.Text(CredentialStatusKind == "Saved", false, IsProm ? "Токен Prom" : "Облікові дані Rozetka");
+    private void NotifyCredentialStatus() { OnPropertyChanged(nameof(CredentialStatus)); OnPropertyChanged(nameof(CredentialStatusKind)); }
+    private async Task RefreshCredentialStatusAsync(MarketplaceConnection? connection)
+    {
+        if (connection is null) return;
+        _savedPresence[connection.Id] = null; _presenceUnavailable.Remove(connection.Id); NotifyCredentialStatus();
+        try
+        {
+            var credentials = await _secrets.LoadAsync(connection.Id);
+            _savedPresence[connection.Id] = connection.Marketplace == MarketplaceKind.Prom
+                ? !string.IsNullOrWhiteSpace(credentials?.Token)
+                : !string.IsNullOrWhiteSpace(credentials?.Login) && !string.IsNullOrEmpty(credentials?.Password);
+        }
+        catch (Exception) { _presenceUnavailable.Add(connection.Id); }
+        NotifyCredentialStatus();
+    }
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
     public bool IsBusy
     {
@@ -82,6 +111,7 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
             foreach (var connection in settings.Connections) Connections.Add(connection);
             HistoryDays = settings.HistoryDays; CacheDays = settings.CacheDays;
             Selected = Connections.FirstOrDefault();
+            await CredentialStatusRefresh;
             settingsLoaded = true;
             if (!Connections.Any(connection => connection.Enabled))
             {
@@ -144,10 +174,15 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
         foreach (var connection in Connections)
         {
             if (string.IsNullOrWhiteSpace(connection.Name)) throw new InvalidOperationException("Вкажіть назву магазину.");
-            if (_pending.ContainsKey(connection.Id)) await _secrets.SaveAsync(connection.Id, await ResolveAsync(connection));
+            if (_pending.ContainsKey(connection.Id))
+            {
+                await _secrets.SaveAsync(connection.Id, await ResolveAsync(connection));
+                await RefreshCredentialStatusAsync(connection);
+            }
         }
         await _settings.SaveAsync(new() { Connections = Connections.ToList(), HistoryDays = HistoryDays, CacheDays = CacheDays });
         _pending.Clear(); Token = Login = Password = ""; CredentialsCleared?.Invoke(this, EventArgs.Empty);
+        NotifyCredentialStatus();
         return credentialsSaved;
     }
     private async Task TestAsync()

@@ -44,6 +44,7 @@ internal static class SimpleShippingSettingsTests
         ("STA simple label settings save the explicitly selected Prom shop only", () => MarketplaceViewModelTests.StaAsync(SelectedShopUi)),
         ("STA NP verify follows selected order shop and rejects a programmatic mismatched click without saving", () => MarketplaceViewModelTests.StaAsync(VerificationShopUi)),
         ("STA simple label settings keep typed keys separate while switching shops", () => MarketplaceViewModelTests.StaAsync(DraftsUi)),
+        ("STA shipping credential indicators distinguish saved tokens drafts and shops without exposing keys", () => MarketplaceViewModelTests.StaAsync(CredentialIndicatorsUi)),
         ("STA simple label settings closing without save writes no typed key", () => MarketplaceViewModelTests.StaAsync(CancelUi)),
         ("STA simple label settings blank key preserves latest credentials and collapsed print options", () => MarketplaceViewModelTests.StaAsync(PreserveUi)),
         ("STA simple NP key can be saved before selecting a label printer", () => MarketplaceViewModelTests.StaAsync(NoPrinterUi))
@@ -324,6 +325,36 @@ internal static class SimpleShippingSettingsTests
             Check(store.Value.NovaPoshtaConnections.Count == 2, "Separate shop drafts unexpectedly shared one account.");
         }
         finally { window.Close(); }
+    }
+    private static Task CredentialIndicatorsUi()
+    {
+        var store = new MemoryStore(Bound); var sellerSecrets = new IndicatorSellerSecrets();
+        var window = new LabelSettingsWindow(store, new Printer(), store.Value, Market(multiple: true), marketplaceSecrets: sellerSecrets);
+        try
+        {
+            var shops = Field<ComboBox>(window, "_npStores"); var key = Field<PasswordBox>(window, "_npKey");
+            var status = Field<TextBlock>(window, "_npStatus"); var tokenStatus = Field<TextBlock>(window, "_tokenStatus");
+            Check(Field<TextBlock>(window, "_sellerStatus").Tag?.ToString() == "Saved", "Saved Seller credentials are not marked.");
+            shops.SelectedValue = ShopA; Check(status.Tag?.ToString() == "Saved" && key.Password.Length == 0, "Stored NP key is not visibly marked.");
+            Check(tokenStatus.Tag?.ToString() == "Saved" && tokenStatus.Text.Contains("Rozetka Delivery"), "Stored RD token is not marked while advanced settings are collapsed.");
+            key.Password = NewKey; Check(status.Tag?.ToString() == "Draft", "Typed NP key was mislabeled as saved.");
+            shops.SelectedValue = ShopB; Check(status.Tag?.ToString() == "Missing", "Unbound shop inherited another shop's indicator.");
+            shops.SelectedValue = ShopA; Check(status.Tag?.ToString() == "Draft", "NP draft indicator did not survive a shop switch.");
+            Field<PasswordBox>(window, "_token").Password = "synthetic_new_rd_token";
+            Check(tokenStatus.Tag?.ToString() == "Draft", "New RD token was mislabeled as saved.");
+            var text = string.Join(" ", Nodes((DependencyObject)window.Content).OfType<TextBlock>().Select(t => t.Text));
+            Check(!text.Contains(OldKey) && !text.Contains(NewKey) && !text.Contains(store.Value.RozetkaDeliveryToken), "A credential indicator exposed secret bytes.");
+            Check(store.Saves == 0, "Opening status indicators wrote settings.");
+        }
+        finally { window.Close(); }
+        return Task.CompletedTask;
+    }
+    private sealed class IndicatorSellerSecrets : IMarketplaceSecretStore
+    {
+        public Task<MarketplaceCredentials?> LoadAsync(string id, CancellationToken ct = default) =>
+            Task.FromResult<MarketplaceCredentials?>(new(Login: "synthetic_seller_login", Password: "synthetic_private_seller_password"));
+        public Task SaveAsync(string id, MarketplaceCredentials credentials, CancellationToken ct = default) =>
+            throw new Exception("Reading Seller status wrote credentials.");
     }
     private static Task CancelUi()
     {

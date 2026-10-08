@@ -22,8 +22,10 @@
                     <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Login, UpdateSourceTrigger=PropertyChanged}" />
                     <TextBlock Grid.Row="2" Text="Пароль касира" VerticalAlignment="Center" />
                     <PasswordBox x:Name="PasswordInput" Grid.Row="2" Grid.Column="1" PasswordChanged="PasswordInput_PasswordChanged" Margin="3" Padding="6,4" />
-                    <TextBlock Grid.Row="3" Grid.Column="1" Text="Потрібні дані касира Checkbox, не обов’язково дані входу до кабінету. Залиште пароль порожнім, щоб не змінювати збережений."
-                               Foreground="#667085" FontSize="11" TextWrapping="Wrap" Margin="5,0,0,8" />
+                    <StackPanel Grid.Row="3" Grid.Column="1">
+                        <TextBlock x:Name="CheckboxCredentialIndicator" Text="{Binding CredentialStatus}" Tag="{Binding CredentialStatusKind}" Style="{StaticResource CredentialIndicatorStyle}" />
+                        <TextBlock Text="Потрібні дані касира Checkbox. Порожній пароль залишає збережений." Foreground="#667085" FontSize="11" TextWrapping="Wrap" Margin="5,0,0,8" />
+                    </StackPanel>
                     <Button Grid.Row="4" Grid.Column="1" Content="Перевірити підключення" HorizontalAlignment="Left" Click="TestApi_Click" />
                 </Grid>
             </TabItem>
@@ -74,6 +76,7 @@
                             <Button Content="Додати Rozetka" Command="{Binding AddRozetkaCommand}" />
                         </WrapPanel>
                         <ComboBox ItemsSource="{Binding Connections}" SelectedItem="{Binding Selected}" DisplayMemberPath="Name" />
+                        <TextBlock x:Name="MarketplaceCredentialIndicator" Text="{Binding CredentialStatus}" Tag="{Binding CredentialStatusKind}" Style="{StaticResource CredentialIndicatorStyle}" />
                         <CheckBox Content="Увімкнути підключення" IsChecked="{Binding Selected.Enabled}" Margin="6,8" />
                         <TextBlock Text="Назва підключення / магазину" Margin="6,3" />
                         <TextBox Text="{Binding Selected.Name, UpdateSourceTrigger=PropertyChanged}" />

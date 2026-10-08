@@ -7,7 +7,8 @@ using CheckboxBatchPrinter.Views;
 
 namespace CheckboxBatchPrinter.Services;
 public sealed class LabelDialogs(IShippingSettingsStore settings, IMarketplaceSettingsStore marketplaces, ILabelPrinter printer,
-    NovaPoshtaDiagnostics? diagnostics = null, NovaPoshtaVerifiedSession? session = null, Func<MarketplaceOrder?>? currentOrder = null) : ILabelDialogs
+    NovaPoshtaDiagnostics? diagnostics = null, NovaPoshtaVerifiedSession? session = null, Func<MarketplaceOrder?>? currentOrder = null,
+    IMarketplaceSecretStore? marketplaceSecrets = null) : ILabelDialogs
 {
     public MarketplaceOrder? ChoosePreviewShipment(MarketplaceOrder order)
     {
@@ -30,7 +31,7 @@ public sealed class LabelDialogs(IShippingSettingsStore settings, IMarketplaceSe
     }
     public bool Preview(LabelPrintBatch batch, LabelPrinterGeometry geometry, IReadOnlyList<LabelPrintAttempt> previous, bool allowPrint) =>
         new LabelPreviewWindow(batch, geometry, previous, allowPrint) { Owner = Application.Current.MainWindow }.ShowDialog() == true;
-    public async Task SettingsAsync() => new LabelSettingsWindow(settings, printer, await settings.LoadAsync(), await marketplaces.LoadAsync(), diagnostics, session, currentOrder)
+    public async Task SettingsAsync() => new LabelSettingsWindow(settings, printer, await settings.LoadAsync(), await marketplaces.LoadAsync(), diagnostics, session, currentOrder, marketplaceSecrets)
         { Owner = Application.Current.MainWindow }.ShowDialog();
     public void Error(string message) => MessageBox.Show(Application.Current.MainWindow, message, "Наклейки", MessageBoxButton.OK, MessageBoxImage.Warning);
 }
