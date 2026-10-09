@@ -15,6 +15,8 @@ public static class NovaPoshtaReadOnlyContract
 {
     public const string EntryPoint = "https://api.novaposhta.ua/v2.0/json/";
     public const int MaximumPages = 10;
+    // Whole-account dashboard enumeration has a separate bound; a single-label lookup stays at ten pages.
+    public const int MaximumListPages = 1000;
     public static bool ValidKey(string value) => Regex.IsMatch(value, @"\A[A-Za-z0-9_-]{1,128}\z");
     public static void ValidateBody(HttpRequestMessage request)
     {
@@ -31,7 +33,7 @@ public static class NovaPoshtaReadOnlyContract
             var props = root.GetProperty("methodProperties");
             ExactKeys(props, ["DateTimeFrom", "DateTimeTo", "GetFullList", "Page"]);
             if (props.GetProperty("GetFullList").ValueKind != JsonValueKind.False ||
-                !int.TryParse(props.GetProperty("Page").GetString(), NumberStyles.None, CultureInfo.InvariantCulture, out var page) || page is < 1 or > MaximumPages ||
+                !int.TryParse(props.GetProperty("Page").GetString(), NumberStyles.None, CultureInfo.InvariantCulture, out var page) || page is < 1 or > MaximumListPages ||
                 !DateOnly.TryParseExact(props.GetProperty("DateTimeFrom").GetString(), "dd.MM.yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var from) ||
                 !DateOnly.TryParseExact(props.GetProperty("DateTimeTo").GetString(), "dd.MM.yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var to)) throw new InvalidOperationException();
             new NovaPoshtaSearchPeriod(from, to).Validate();

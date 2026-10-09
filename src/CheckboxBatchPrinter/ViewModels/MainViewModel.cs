@@ -48,7 +48,8 @@ public sealed class MainViewModel : ObservableObject
         IPrintService printService,
         IUiDialogService dialogs,
         IAppLogger logger,
-        MarketplaceWorkspaceViewModel? marketplace = null, IReceiptSnapshotStore? receiptSnapshots = null)
+        MarketplaceWorkspaceViewModel? marketplace = null, IReceiptSnapshotStore? receiptSnapshots = null,
+        WaybillsViewModel? waybills = null)
     {
         _receiptService = receiptService;
         _imageService = imageService;
@@ -59,7 +60,12 @@ public sealed class MainViewModel : ObservableObject
         _dialogs = dialogs;
         _logger = logger;
         Marketplace = marketplace;
+        Waybills = waybills;
         _receiptSnapshots = receiptSnapshots;
+        if (Waybills is not null) Waybills.PropertyChanged += (_, e) =>
+        {
+            if (IsWaybillsTab && e.PropertyName == nameof(Waybills.SearchText)) OnPropertyChanged(nameof(SearchText));
+        };
 
         ReceiptTypes = new ObservableCollection<ReceiptTypeOption>(
             new[] { new ReceiptTypeOption(string.Empty, "Усі типи") }
@@ -68,18 +74,18 @@ public sealed class MainViewModel : ObservableObject
         OrdersReceiptsTab = new(Receipts, ReceiptTypes[0], usesOrders: true, Marketplace);
         if (Marketplace is not null) Marketplace.MatchesChanged += (_, _) => OrdersReceiptsTab.View.Refresh();
 
-        RefreshCommand = new AsyncRelayCommand(_ => RefreshAsync(), _ => !IsBusy);
+        RefreshCommand = new AsyncRelayCommand(_ => RefreshActiveAsync(), _ => !IsBusy);
         TodayCommand = new AsyncRelayCommand(_ => ShowTodayAsync(), _ => !IsBusy);
         ClearDateCommand = new RelayCommand(parameter =>
         {
             if (string.Equals(parameter as string, "from", StringComparison.Ordinal)) DateFrom = null;
             if (string.Equals(parameter as string, "to", StringComparison.Ordinal)) DateTo = null;
         });
-        SelectAllCommand = new RelayCommand(_ => SelectVisible(true), _ => Receipts.Count > 0 && !IsBusy);
-        ClearSelectionCommand = new RelayCommand(_ => ClearSelection(), _ => SelectedCount > 0 && !IsBusy);
-        PrintSelectedCommand = new AsyncRelayCommand(_ => PrintSelectedAsync(), _ => VisibleSelectedCount > 0 && !IsBusy);
-        RetryFailedCommand = new AsyncRelayCommand(_ => RetryFailedAsync(), _ => FailedCount > 0 && !IsBusy);
-        PreviewCommand = new AsyncRelayCommand(PreviewAsync, _ => !IsBusy);
+        SelectAllCommand = new RelayCommand(_ => SelectVisible(true), _ => IsReceiptTab && Receipts.Count > 0 && !IsBusy);
+        ClearSelectionCommand = new RelayCommand(_ => ClearSelection(), _ => IsReceiptTab && SelectedCount > 0 && !IsBusy);
+        PrintSelectedCommand = new AsyncRelayCommand(_ => PrintSelectedAsync(), _ => IsReceiptTab && VisibleSelectedCount > 0 && !IsBusy);
+        RetryFailedCommand = new AsyncRelayCommand(_ => RetryFailedAsync(), _ => IsReceiptTab && FailedCount > 0 && !IsBusy);
+        PreviewCommand = new AsyncRelayCommand(PreviewAsync, _ => IsReceiptTab && !IsBusy);
         SettingsCommand = new AsyncRelayCommand(_ => OpenSettingsAsync(), _ => !IsBusy);
         MarketplaceSettingsCommand = new AsyncRelayCommand(_ => OpenSettingsAsync(marketplace: true), _ => !IsBusy);
         foreach (var tab in new[] { AllReceiptsTab, OrdersReceiptsTab })
@@ -109,13 +115,18 @@ public sealed class MainViewModel : ObservableObject
         get => _selectedTabIndex;
         set
         {
-            if (value is not (0 or 1) || !SetProperty(ref _selectedTabIndex, value)) return;
+            if (value is not (0 or 1 or 2) || !SetProperty(ref _selectedTabIndex, value)) return;
+            OnPropertyChanged(nameof(IsWaybillsTab));
+            OnPropertyChanged(nameof(IsReceiptTab));
             OnPropertyChanged(nameof(ActiveTab));
             OnPropertyChanged(nameof(ReceiptsView));
             OnPropertyChanged(nameof(SearchText));
             OnPropertyChanged(nameof(SelectedType));
             OnSelectionChanged(this, EventArgs.Empty);
             Marketplace?.SetActive(value == 1);
+            Waybills?.SetActive(value == 2);
+            if (value == 2) _dateLoadCancellation?.Cancel();
+            else ApplyDisplayDates();
             if (value == 1) _ = PrepareOrdersAsync();
         }
     }
@@ -127,6 +138,10 @@ public sealed class MainViewModel : ObservableObject
     }
     public ObservableCollection<ReceiptTypeOption> ReceiptTypes { get; }
     public MarketplaceWorkspaceViewModel? Marketplace { get; }
+    public WaybillsViewModel? Waybills { get; }
+    public bool IsWaybillsTab => SelectedTabIndex == 2;
+    public bool IsReceiptTab => !IsWaybillsTab;
+    public Task RefreshActiveAsync() => IsWaybillsTab && Waybills is not null ? Waybills.RefreshAsync() : RefreshAsync();
 
     public ICommand RefreshCommand { get; }
     public ICommand TodayCommand { get; }
@@ -156,8 +171,9 @@ public sealed class MainViewModel : ObservableObject
         AllReceiptsTab.SetDisplayDates(from, to);
         OrdersReceiptsTab.SetDisplayDates(from, to);
         Marketplace?.SetDisplayDates(from, to);
+        Waybills?.SetDisplayDates(from, to);
         UpdateOrderDatesWithoutReceipts();
-        if (CoordinatorManaged && from is { } firstDate && to is { } lastDate && lastDate >= firstDate &&
+        if (IsReceiptTab && CoordinatorManaged && from is { } firstDate && to is { } lastDate && lastDate >= firstDate &&
             !_receiptCoverage.Any(r => r.From <= firstDate && r.To >= lastDate) &&
             !_historicalLoads.Contains((firstDate, lastDate)))
         {
@@ -173,7 +189,8 @@ public sealed class MainViewModel : ObservableObject
         try
         {
             await Task.Delay(350, token);
-            if (IsBusy) return;
+            if (IsBusy || IsWaybillsTab || DateFrom is not { } currentFrom || DateTo is not { } currentTo ||
+                DateOnly.FromDateTime(currentFrom) != from || DateOnly.FromDateTime(currentTo) != to) return;
             await RefreshAsync();
             if (!token.IsCancellationRequested) _historicalLoads.Add((from, to));
         }
@@ -183,8 +200,8 @@ public sealed class MainViewModel : ObservableObject
         DateFrom is { } from ? DateOnly.FromDateTime(from) : null, DateTo is { } to ? DateOnly.FromDateTime(to) : null);
     public string SearchText
     {
-        get => ActiveTab.SearchText;
-        set => ActiveTab.SearchText = value;
+        get => IsWaybillsTab && Waybills is not null ? Waybills.SearchText : ActiveTab.SearchText;
+        set { if (IsWaybillsTab && Waybills is not null) Waybills.SearchText = value; else ActiveTab.SearchText = value; }
     }
     public ReceiptTypeOption? SelectedType
     {
@@ -305,6 +322,7 @@ public sealed class MainViewModel : ObservableObject
     }
     public void CancelPendingOperations()
     {
+        Waybills?.SetActive(false);
         _dateLoadCancellation?.Cancel();
         _operationCancellation?.Cancel();
     }
@@ -421,8 +439,8 @@ public sealed class MainViewModel : ObservableObject
         DateTo = today;
         _followToday = true;
         SearchText = string.Empty;
-        SelectedType = ReceiptTypes[0];
-        await RefreshAsync();
+        if (IsReceiptTab) SelectedType = ReceiptTypes[0];
+        await RefreshActiveAsync();
     }
 
     private void SelectVisible(bool selected)
@@ -608,6 +626,7 @@ public sealed class MainViewModel : ObservableObject
     private async Task OpenSettingsAsync(bool marketplace = false)
     {
         var changed = await _dialogs.OpenSettingsAsync(marketplace);
+        Waybills?.Invalidate();
         if (changed && _authentication.HasStoredCredentials) StatusText = "Налаштування збережено";
         // Testing Checkbox credentials persists them even if the dialog is then cancelled.
         if (Marketplace is not null)

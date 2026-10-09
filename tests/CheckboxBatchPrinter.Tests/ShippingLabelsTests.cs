@@ -25,6 +25,7 @@ internal static class ShippingLabelsTests
         ("RD rejects wrong identity, missing connection, forbidden and HTML documents", DeliveryErrors),
         ("NP reads document Ref and official Zebra through verified Seller API", SellerApi),
         ("shipping HTTP rejects every create/edit/registry route and redirects", ReadOnlyRoutes),
+        ("shipping HTTP allows only bounded explicit account-wide RD list queries", DeliveryListRoutes),
         ("mixed label preparation preserves order, seats and deduplicates identical pages", MixedPreparation),
         ("missing label credentials skip only unconfigured shipments and keep ready pages", () => Sta(MissingCredentialsPreparation)),
         ("invalid or unavailable label blocks complete batch; no partial print", BrokenBatch),
@@ -143,6 +144,33 @@ internal static class ShippingLabelsTests
         using var client = new HttpClient(new Handler(_ => new(HttpStatusCode.Redirect) { Headers = { Location = new("https://evil.test/") } }));
         try { await new ShippingLabelHttp(client).SendAsync(() => new(HttpMethod.Get, "https://rz-delivery.rozetka.ua/api/track/00123"), "application/json", default); throw new Exception("Redirect allowed."); }
         catch (ShippingLabelException ex) { Check(ex.Kind == LabelFailureKind.AccessDenied, "Redirect not guarded."); }
+    }
+    private static Task DeliveryListRoutes()
+    {
+        const string query = "page=1&limit=100&sort=DESC&created_date_start=2026-10-01&created_date_end=2026-10-09&is_archived=false&is_deleted=false&partner_type=rz-delivery&partner_type=rozetka-marketplace";
+        const string route = "https://rz-delivery.rozetka.ua/api/track?";
+        foreach (var archived in new[] { "false", "true" })
+        foreach (var deleted in new[] { "false", "true" })
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, route + query.Replace("is_archived=false", "is_archived=" + archived).Replace("is_deleted=false", "is_deleted=" + deleted));
+            ShippingLabelHttp.Validate(request);
+        }
+        foreach (var invalid in new[]
+        {
+            query.Replace("page=1", "page=1001"), query.Replace("limit=100", "limit=101"), query + "&page=2", query + "&token=synthetic",
+            query.Replace("created_date_start=2026-10-01", "created_date_start=2026-10-10"), query.Replace("created_date_end=2026-10-09", "created_date_end=2026-02-30"),
+            query.Replace("&partner_type=rozetka-marketplace", ""), query.Replace("rozetka-marketplace", "rz-delivery"), query.Replace("is_deleted=false", "is_deleted=unknown")
+        })
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, route + invalid);
+            try { ShippingLabelHttp.Validate(request); throw new Exception("Unsafe or incomplete RD list query accepted."); } catch (InvalidOperationException) { }
+        }
+        foreach (var method in new[] { HttpMethod.Post, HttpMethod.Patch, HttpMethod.Delete })
+        {
+            using var request = new HttpRequestMessage(method, route + query);
+            try { ShippingLabelHttp.Validate(request); throw new Exception("RD list route accepted a write method."); } catch (InvalidOperationException) { }
+        }
+        return Task.CompletedTask;
     }
     internal sealed class Source : IShippingLabelSource
     {

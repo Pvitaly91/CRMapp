@@ -142,6 +142,7 @@ internal static partial class MarketplaceViewModelTests
                 await XamlSmokeAsync();
                 await OrdersDashboardAsync();
                 await CredentialIndicatorsXamlAsync();
+                await WaybillsDashboardAsync();
                 Console.WriteLine("XAML assertions and binding cleanup completed.");
                 await DrainDispatcherAsync();
                 Console.WriteLine("XAML final dispatcher drain completed.");
@@ -2080,9 +2081,10 @@ internal static partial class MarketplaceViewModelTests
             var ordersGrid = (DataGrid)mainWindow.FindName("OrdersReceiptsGrid");
             var marketplaceOrdersGrid = (DataGrid)mainWindow.FindName("MarketplaceOrdersGrid");
             True(tabs is not null && allGrid is not null && ordersGrid is not null && marketplaceOrdersGrid is not null);
-            Equal(2, tabs!.Items.Count); Equal(0, tabs.SelectedIndex); Equal(0, main.SelectedTabIndex);
+            Equal(3, tabs!.Items.Count); Equal(0, tabs.SelectedIndex); Equal(0, main.SelectedTabIndex);
             Equal("Усі чеки", ((TabItem)tabs.Items[0]).Header?.ToString());
             Equal("Чеки та замовлення", ((TabItem)tabs.Items[1]).Header?.ToString());
+            Equal("Усі накладні", ((TabItem)tabs.Items[2]).Header?.ToString());
             True(ReferenceEquals(main.AllReceiptsTab.View, allGrid!.ItemsSource));
             True(ReferenceEquals(main.OrdersReceiptsTab.View, ordersGrid!.ItemsSource));
             True(ReferenceEquals(workspace.Orders, marketplaceOrdersGrid!.ItemsSource));
@@ -2539,13 +2541,13 @@ internal static partial class MarketplaceViewModelTests
             History.Records[ReceiptThree] = new(account, ReceiptThree, "mock-printer", DateTimeOffset.UtcNow);
         }
         public (MainViewModel Main, MarketplaceWorkspaceViewModel Workspace) Create(bool autoLinkEnabled = false,
-            IAutomaticMatchCacheStore? automaticCache = null)
+            IAutomaticMatchCacheStore? automaticCache = null, WaybillsViewModel? waybills = null)
         {
             var sync = new MarketplaceSyncService([Source, Rozetka], Settings, Cache);
             // Existing scenarios explicitly use manual refresh mode; separate activation scenarios cover the production default.
             var workspace = new MarketplaceWorkspaceViewModel(Settings, sync, Links, Details, Dialogs, autoLinkEnabled: autoLinkEnabled, automaticCache: automaticCache);
             var main = new MainViewModel(ReceiptSource, Images, Settings, Authentication, History,
-                Printer, Dialogs, new Logger(), workspace) { DateFrom = new(2026, 9, 23), DateTo = new(2026, 9, 23) };
+                Printer, Dialogs, new Logger(), workspace, waybills: waybills) { DateFrom = new(2026, 9, 23), DateTo = new(2026, 9, 23) };
             return (main, workspace);
         }
     }

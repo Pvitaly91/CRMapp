@@ -1,4 +1,5 @@
 using System.Net;
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
@@ -26,13 +27,40 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
             "my.novaposhta.ua" => request.Method == HttpMethod.Get && uri.Query.Length == 0 && Regex.IsMatch(uri.AbsolutePath,
                 @"\A/orders/printMarking100x100/(?:orders(?:\[\]|%5[Bb]%5[Dd])/[0-9]{14}|orders/[0-9]{14}(?:,[0-9]{14}){1,99})/type/pdf/zebra/zebra/apiKey/[A-Za-z0-9_-]{1,128}\z"),
             "rz-delivery.rozetka.ua" => request.Method == HttpMethod.Get &&
-                (uri.AbsolutePath == "/api/track/label" || Regex.IsMatch(uri.AbsolutePath, @"^/api/track/[0-9A-Za-z-]+$")),
+                (uri.AbsolutePath == "/api/track" && ValidRozetkaDeliveryListQuery(uri) ||
+                 uri.AbsolutePath == "/api/track/label" || Regex.IsMatch(uri.AbsolutePath, @"^/api/track/[0-9A-Za-z-]+$")),
             "api-seller.rozetka.com.ua" => request.Method == HttpMethod.Post && uri.AbsolutePath == "/sites" ||
                 request.Method == HttpMethod.Get && uri.AbsolutePath is "/ttns/ttn-list" or "/ttns/ttn-print/zebra",
             _ => false
         };
         if (!allowed) throw new InvalidOperationException("Дозволено лише читання наявних накладних та їхніх копій.");
         if (uri.Host == "api.novaposhta.ua") NovaPoshtaReadOnlyContract.ValidateBody(request);
+    }
+    private static bool ValidRozetkaDeliveryListQuery(Uri uri)
+    {
+        // The official OpenAPI list is account-scoped and read-only. Require explicit filters so
+        // its defaults cannot silently omit archived documents or marketplace-created tracks.
+        if (uri.Query.Length is < 1 or > 1024) return false;
+        var parameters = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var segment in uri.Query[1..].Split('&'))
+        {
+            var pair = segment.Split('=', 2);
+            if (pair.Length != 2) return false;
+            var name = Uri.UnescapeDataString(pair[0]); var value = Uri.UnescapeDataString(pair[1]);
+            if (!parameters.TryGetValue(name, out var values)) parameters[name] = values = [];
+            values.Add(value);
+        }
+        string[] singleKeys = ["page", "limit", "sort", "created_date_start", "created_date_end", "is_archived", "is_deleted"];
+        if (parameters.Count != singleKeys.Length + 1 || singleKeys.Any(k => !parameters.TryGetValue(k, out var values) || values.Count != 1) ||
+            !parameters.TryGetValue("partner_type", out var types) || types.Count != 2 ||
+            !types.Contains("rz-delivery", StringComparer.Ordinal) || !types.Contains("rozetka-marketplace", StringComparer.Ordinal)) return false;
+        if (!int.TryParse(parameters["page"][0], NumberStyles.None, CultureInfo.InvariantCulture, out var page) || page is < 1 or > 1000 ||
+            !int.TryParse(parameters["limit"][0], NumberStyles.None, CultureInfo.InvariantCulture, out var limit) || limit is < 1 or > 100 ||
+            parameters["sort"][0] is not ("ASC" or "DESC") ||
+            parameters["is_archived"][0] is not ("true" or "false") || parameters["is_deleted"][0] is not ("true" or "false") ||
+            !DateOnly.TryParseExact(parameters["created_date_start"][0], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var from) ||
+            !DateOnly.TryParseExact(parameters["created_date_end"][0], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var to)) return false;
+        return from <= to;
     }
     public async Task<byte[]> SendAsync(Func<HttpRequestMessage> factory, string expectedType, CancellationToken cancellationToken)
     {

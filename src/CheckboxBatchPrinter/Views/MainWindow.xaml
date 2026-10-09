@@ -37,6 +37,18 @@
                 <DataTrigger Binding="{Binding PrintStatus}" Value="Error"><Setter Property="ToolTip" Value="{Binding PrintError}" /></DataTrigger>
             </Style.Triggers>
         </Style>
+        <Style x:Key="WaybillRowStyle" TargetType="DataGridRow">
+            <Setter Property="Background" Value="#EDF5FF" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding CarrierName}" Value="Rozetka Delivery">
+                    <Setter Property="Background" Value="#EFFAF2" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsDeleted}" Value="True">
+                    <Setter Property="Foreground" Value="#667085" />
+                    <Setter Property="ToolTip" Value="Накладну видалено в сервісі доставки" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
         <Style x:Key="OrderRowStyle" TargetType="DataGridRow">
             <Setter Property="Background" Value="White" />
             <Setter Property="ToolTip" Value="{Binding Marketplace}" />
@@ -95,34 +107,42 @@
                 <WrapPanel>
                     <TextBlock Text="Дата від" VerticalAlignment="Center" Margin="3" />
                     <DatePicker Width="145" SelectedDate="{Binding DateFrom, UpdateSourceTrigger=PropertyChanged}"
-                                ToolTip="Спільний фільтр чеків і замовлень за датою (Київ). Діє одразу на завантажені дані; для нового періоду оновіть списки." />
+                                ToolTip="Період чеків, замовлень і накладних (Київ)." />
                     <Button Content="×" Command="{Binding ClearDateCommand}" CommandParameter="from"
                             ToolTip="Скинути дату від" MinWidth="28" Padding="5,2" />
                     <TextBlock Text="Дата до" VerticalAlignment="Center" Margin="8,3,3,3" />
                     <DatePicker Width="145" SelectedDate="{Binding DateTo, UpdateSourceTrigger=PropertyChanged}"
-                                ToolTip="Спільний фільтр чеків і замовлень за датою (Київ). Скинута дата не обмежує цю межу завантажених даних." />
+                                ToolTip="Період за датою (Київ). Для завантаження накладних виберіть обидві дати." />
                     <Button Content="×" Command="{Binding ClearDateCommand}" CommandParameter="to"
                             ToolTip="Скинути дату до" MinWidth="28" Padding="5,2" />
                     <Button Content="Сьогодні" Command="{Binding TodayCommand}" />
-                    <Button Content="Оновити чеки" Command="{Binding RefreshCommand}" ToolTip="F5 — оновити лише чеки Checkbox" />
+                    <Button Content="Оновити чеки" Command="{Binding RefreshCommand}" ToolTip="F5 — оновити поточну вкладку"
+                            Visibility="{Binding IsReceiptTab, Converter={StaticResource BoolToVisibility}}" />
+                    <Button Content="Оновити накладні" Command="{Binding Waybills.RefreshCommand}"
+                            Visibility="{Binding IsWaybillsTab, Converter={StaticResource BoolToVisibility}}" />
                 </WrapPanel>
                 <Button Grid.Column="1" Content="Налаштування" Command="{Binding SettingsCommand}" VerticalAlignment="Top" />
                 <WrapPanel Grid.Row="1" Grid.ColumnSpan="2" Margin="0,5,0,0">
                     <TextBlock Text="Пошук:" VerticalAlignment="Center" Margin="3" />
                     <TextBox x:Name="ReceiptSearchInput" Width="330" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
-                             ToolTip="Пошук у поточній вкладці. На «Усі чеки» — лише дані чека; на «Чеки та замовлення» — також дані замовлення та ТТН." />
-                    <ComboBox Width="180" ItemsSource="{Binding ReceiptTypes}" SelectedItem="{Binding SelectedType}" />
+                             ToolTip="Пошук у поточній вкладці за номером та даними документа." />
+                    <ComboBox Width="180" ItemsSource="{Binding ReceiptTypes}" SelectedItem="{Binding SelectedType}"
+                              Visibility="{Binding IsReceiptTab, Converter={StaticResource BoolToVisibility}}" />
                     <Button x:Name="TodayReceiptsButton" Content="Чеки за сьогодні" Command="{Binding TodayCommand}"
+                            Visibility="{Binding IsReceiptTab, Converter={StaticResource BoolToVisibility}}"
                             ToolTip="Показати чеки за сьогодні (Київ): скинути пошук і тип та одразу оновити список" />
                     <Button x:Name="SelectAllChecksButton" Content="Виділити всі" Command="{Binding SelectAllCommand}"
+                            Visibility="{Binding IsReceiptTab, Converter={StaticResource BoolToVisibility}}"
                             ToolTip="Позначити всі чеки у поточному відфільтрованому списку активної вкладки" />
                     <Button x:Name="ClearAllChecksButton" Content="Зняти всі" Command="{Binding ClearSelectionCommand}"
+                            Visibility="{Binding IsReceiptTab, Converter={StaticResource BoolToVisibility}}"
                             ToolTip="Зняти всі галочки активної вкладки, включно з прихованими фільтром" />
                 </WrapPanel>
             </Grid>
         </Border>
 
-        <Border DockPanel.Dock="Bottom" Background="White" BorderBrush="#D9DEE7" BorderThickness="0,1,0,0" Padding="10">
+        <Border x:Name="ReceiptPrintFooter" DockPanel.Dock="Bottom" Background="White" BorderBrush="#D9DEE7" BorderThickness="0,1,0,0" Padding="10"
+                Visibility="{Binding IsReceiptTab, Converter={StaticResource BoolToVisibility}}">
             <Grid>
                 <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
@@ -144,8 +164,10 @@
             </Grid>
         </Border>
 
-        <TextBlock DockPanel.Dock="Bottom" Text="{Binding StatusText}" Margin="14,4,14,8" Foreground="#48566A" />
-        <TextBlock DockPanel.Dock="Bottom" Text="{Binding BackgroundStatus}" Margin="14,3" Foreground="#667085" />
+        <TextBlock DockPanel.Dock="Bottom" Text="{Binding StatusText}" Margin="14,4,14,8" Foreground="#48566A"
+                   Visibility="{Binding IsReceiptTab, Converter={StaticResource BoolToVisibility}}" />
+        <TextBlock DockPanel.Dock="Bottom" Text="{Binding BackgroundStatus}" Margin="14,3" Foreground="#667085"
+                   Visibility="{Binding IsReceiptTab, Converter={StaticResource BoolToVisibility}}" />
 
         <TabControl x:Name="ReceiptTabs" SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}" Margin="10,8,10,2">
             <TabItem Header="Усі чеки">
@@ -440,6 +462,38 @@
                     </DataGrid>
                         </Grid>
                     </Grid>
+                </DockPanel>
+            </TabItem>
+            <TabItem Header="Усі накладні">
+                <DockPanel Margin="6">
+                    <WrapPanel DockPanel.Dock="Top" Margin="2,2,2,6">
+                        <TextBlock Text="Перевізник:" VerticalAlignment="Center" Margin="3" />
+                        <ComboBox Width="185" ItemsSource="{Binding Waybills.Carriers}" DisplayMemberPath="DisplayName" SelectedItem="{Binding Waybills.SelectedCarrier}" />
+                        <Button Content="Скасувати завантаження" Command="{Binding Waybills.CancelCommand}" />
+                        <ProgressBar Width="110" Height="14" IsIndeterminate="True" Margin="10,0" VerticalAlignment="Center"
+                                     Visibility="{Binding Waybills.IsBusy, Converter={StaticResource BoolToVisibility}}" />
+                    </WrapPanel>
+                    <StackPanel DockPanel.Dock="Bottom" Margin="4,6">
+                        <TextBlock Text="{Binding Waybills.CountText}" Foreground="#48566A" />
+                        <ScrollViewer MaxHeight="110" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0">
+                            <TextBlock Text="{Binding Waybills.Status}" Foreground="#667085" TextWrapping="Wrap" />
+                        </ScrollViewer>
+                    </StackPanel>
+                    <DataGrid x:Name="AllWaybillsGrid" ItemsSource="{Binding Waybills.View}" Style="{StaticResource ReceiptGridStyle}"
+                              IsReadOnly="True" RowStyle="{StaticResource WaybillRowStyle}" Sorting="DataGrid_Sorting">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="№" Binding="{Binding DisplayIndex}" Width="45" CanUserSort="False" />
+                            <DataGridTextColumn Header="ТТН" Binding="{Binding TrackingNumber}" Width="170" />
+                            <DataGridTextColumn Header="Дата" Binding="{Binding CreatedLocal, StringFormat=dd.MM.yyyy HH:mm}" Width="140" SortMemberPath="CreatedLocal" />
+                            <DataGridTextColumn Header="Перевізник" Binding="{Binding CarrierName}" Width="145" />
+                            <DataGridTextColumn Header="Акаунт" Binding="{Binding ConnectionName}" Width="170" />
+                            <DataGridTextColumn Header="Статус" Binding="{Binding Status}" Width="200" />
+                            <DataGridTextColumn Header="Отримувач" Binding="{Binding Recipient}" Width="200" />
+                            <DataGridTextColumn Header="Місто / відділення" Binding="{Binding City}" Width="180" />
+                            <DataGridTextColumn Header="Оголошена вартість" Binding="{Binding DeclaredValue, StringFormat=N2}" Width="145" />
+                            <DataGridTextColumn Header="Місць" Binding="{Binding Places}" Width="65" />
+                        </DataGrid.Columns>
+                    </DataGrid>
                 </DockPanel>
             </TabItem>
         </TabControl>

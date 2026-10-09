@@ -123,7 +123,8 @@ public partial class App : Application
                     ? "Автозапуск вказує на старий шлях EXE. Натисніть «Зберегти», щоб оновити його." : "");
             _logger.Info("app.viewmodel.create");
             var viewModel = new MainViewModel(receiptService, imageService, settingsService, authentication,
-                printHistoryStore, printService, dialogs, _logger, marketplace, receiptSnapshots);
+                printHistoryStore, printService, dialogs, _logger, marketplace, receiptSnapshots,
+                new WaybillsViewModel(new WaybillService(shippingTransport, shippingSettings)));
             _viewModel = viewModel;
             viewModel.CoordinatorManaged = true;
             marketplace.CoordinatorManaged = true;
@@ -213,6 +214,7 @@ public partial class App : Application
         NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
         _coordinator?.Stop();
         _viewModel?.CancelPendingOperations();
+        _viewModel?.Waybills?.Dispose();
         _marketplaceViewModel?.CancelPendingOperations();
         _tray?.Dispose();
         _singleInstance?.Dispose();

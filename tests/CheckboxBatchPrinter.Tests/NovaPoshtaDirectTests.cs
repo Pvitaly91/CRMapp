@@ -244,7 +244,7 @@ internal static class NovaPoshtaDirectTests
     private static Task MutationGuards()
     {
         foreach (var body in new[] { Body("save"), Body("update"), Body("delete"), Body("saveScanSheet"), Body("getDocument"), Body(extra: ",\"IntDocNumber\":\""+Ttn+"\""),
-            Body(extra: ",\"Page\":\"2\""), Body().Replace("\"Page\":\"1\"", "\"Page\":\"11\""), Body().Replace("25.09.2026", "01.09.2026"), Body().Replace("false", "true"), Body()+Connection.ApiKey })
+            Body(extra: ",\"Page\":\"2\""), Body().Replace("\"Page\":\"1\"", "\"Page\":\"1001\""), Body().Replace("25.09.2026", "01.09.2026"), Body().Replace("false", "true"), Body()+Connection.ApiKey })
         {
             using var r = new HttpRequestMessage(HttpMethod.Post, NovaPoshtaReadOnlyContract.EntryPoint) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
             try { ShippingLabelHttp.Validate(r); throw new Exception("Unallowed NP payload accepted."); }
