@@ -7,6 +7,7 @@ using System.Windows.Media;
 using CheckboxBatchPrinter.Core.Models;
 using CheckboxBatchPrinter.ViewModels;
 using CheckboxBatchPrinter.Views;
+using CheckboxBatchPrinter.Controls;
 
 namespace CheckboxBatchPrinter.Tests;
 
@@ -130,7 +131,7 @@ internal static partial class MarketplaceViewModelTests
             async Task AssertIndexCell(MarketplaceOrderRowViewModel model)
             {
                 await Realize(model, indexColumn);
-                var text = VisualChildren<TextBlock>(indexColumn.GetCellContent(model))
+                var text = VisualChildren<DashboardTextBox>(indexColumn.GetCellContent(model))
                     .Single(t => Equals(t.Tag, "OrderRowIndex"));
                 Equal(model.DisplayIndex.ToString(), text.Text);
                 Equal(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().ToList().IndexOf(model) + 1, model.DisplayIndex);
@@ -240,9 +241,9 @@ internal static partial class MarketplaceViewModelTests
 
             await Realize(rows[0], trackingColumn);
             var trackingCell = trackingColumn.GetCellContent(rows[0]);
-            var trackingLink = VisualChildren<TextBlock>(trackingCell).SelectMany(t => t.Inlines.OfType<Hyperlink>()).Single();
+            var trackingLink = VisualChildren<DashboardTextBox>(trackingCell).Single();
             True(ReferenceEquals(workspace.Labels.PreviewShipmentCommand, trackingLink.Command));
-            True(trackingLink.Inlines.OfType<Run>().Single().Text == rows[0].ShipmentLinks.Single().TrackingNumber);
+            True(trackingLink.Text == rows[0].ShipmentLinks.Single().TrackingNumber);
             await ExecuteAsync(trackingLink.Command!, parameter: trackingLink.CommandParameter);
             Equal(1, labelDialogs.Previews); Equal(0, labelDialogs.Choices); Equal(0, labelPrinter.Calls); Equal(0, labelHistory.Attempts.Count);
             True(labelDialogs.PreviewedBatch!.Pages.All(p => p.Shipment.TrackingNumber == rows[0].ShipmentLinks.Single().TrackingNumber));

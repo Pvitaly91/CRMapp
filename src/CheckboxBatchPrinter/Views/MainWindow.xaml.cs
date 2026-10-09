@@ -29,6 +29,7 @@ public partial class MainWindow : Window
 
     private void ReceiptsGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
+        if (Ancestor<System.Windows.Controls.Primitives.TextBoxBase>(e.OriginalSource as DependencyObject) is not null) return;
         if (DataContext is MainViewModel viewModel && sender is DataGrid { SelectedItem: ReceiptRowViewModel row }
             && viewModel.PreviewCommand.CanExecute(row))
             viewModel.PreviewCommand.Execute(row);
@@ -90,10 +91,15 @@ public partial class MainWindow : Window
     {
         if (sender is not DataGrid grid || grid.CommandBindings.Cast<CommandBinding>().Any(b => b.Command == ApplicationCommands.Copy)) return;
         grid.CommandBindings.Add(new(ApplicationCommands.Copy, DashboardCopy_Executed,
-            (s, args) => { args.CanExecute = grid.SelectedCells.Count > 0; args.Handled = true; }));
+            (s, args) =>
+            {
+                if (Ancestor<System.Windows.Controls.Primitives.TextBoxBase>(args.OriginalSource as DependencyObject) is not null) return;
+                args.CanExecute = grid.SelectedCells.Count > 0; args.Handled = true;
+            }));
     }
     private void DashboardCopy_Executed(object sender, ExecutedRoutedEventArgs e)
     {
+        if (Ancestor<System.Windows.Controls.Primitives.TextBoxBase>(e.OriginalSource as DependencyObject) is not null) return;
         if (sender is DataGrid grid && BuildDashboardClipboardText(grid) is { Length: > 0 } text) Clipboard.SetText(text);
         e.Handled = true;
     }
@@ -128,6 +134,7 @@ public partial class MainWindow : Window
     }
     private void Dashboard_RightClick(object sender, MouseButtonEventArgs e)
     {
+        if (Ancestor<System.Windows.Controls.Primitives.TextBoxBase>(e.OriginalSource as DependencyObject) is not null) return;
         if (sender is not DataGrid grid || Ancestor<DataGridCell>(e.OriginalSource as DependencyObject) is not { } cell) return;
         if (!cell.IsSelected)
         {

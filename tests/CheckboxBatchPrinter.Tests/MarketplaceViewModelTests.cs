@@ -143,6 +143,7 @@ internal static partial class MarketplaceViewModelTests
                 await OrdersDashboardAsync();
                 await CredentialIndicatorsXamlAsync();
                 await WaybillsDashboardAsync();
+                await DashboardTextSelectionAsync();
                 Console.WriteLine("XAML assertions and binding cleanup completed.");
                 await DrainDispatcherAsync();
                 Console.WriteLine("XAML final dispatcher drain completed.");
@@ -2191,7 +2192,7 @@ internal static partial class MarketplaceViewModelTests
             True(ReferenceEquals(displayedOrder, workspace.SelectedOrder));
             marketplaceOrdersGrid.ScrollIntoView(displayedOrder); marketplaceOrdersGrid.UpdateLayout();
             var marketplaceOrderRow = (DataGridRow)marketplaceOrdersGrid.ItemContainerGenerator.ContainerFromItem(displayedOrder);
-            True(VisualChildren<TextBlock>(marketplaceOrderRow).Any(text => text.Text == "ORDER-41"), "The real orders grid must render the unlinked cached order number.");
+            True(VisualChildren<CheckboxBatchPrinter.Controls.DashboardTextBox>(marketplaceOrderRow).Any(text => text.Text == "ORDER-41"), "The real orders grid must render the unlinked cached order number.");
             Equal(0, main.SelectedCount); True(!main.PrintSelectedCommand.CanExecute(null));
             ordersGrid.SelectedItem = first;
             _xamlCheckpoint = "drain orders selection";
@@ -2246,10 +2247,10 @@ internal static partial class MarketplaceViewModelTests
             Equal("Автозв’язок: унікальна сума", amountRow.LinkStatus);
             var numberColumn = ordersGrid.Columns.Single(c => c.Header?.ToString() == "№ замовлення");
             ordersGrid.ScrollIntoView(amountRow, numberColumn); ordersGrid.UpdateLayout();
-            var showOrder = VisualChildren<Button>(numberColumn.GetCellContent(amountRow)).Single();
-            Equal("ORDER-41", showOrder.Content?.ToString());
+            var showOrder = VisualChildren<CheckboxBatchPrinter.Controls.DashboardTextBox>(numberColumn.GetCellContent(amountRow)).Single();
+            Equal("ORDER-41", showOrder.Text);
             True(ReferenceEquals(workspace.ShowOrderCommand, showOrder.Command));
-            showOrder.Command.Execute(showOrder.CommandParameter);
+            showOrder.Command!.Execute(showOrder.CommandParameter);
             True(workspace.DetailsExpanded && ReferenceEquals(amountRow, workspace.SelectedReceipt));
             True(workspace.DetailsText.Contains("не фіскальне підтвердження"));
             workspace.DetailsExpanded = false;
@@ -2277,7 +2278,7 @@ internal static partial class MarketplaceViewModelTests
             Equal(ProductComparison.Contradiction, cableRow.OrderMatch.Products);
             var receiptLinkColumn = ordersGrid.Columns.Single(c => c.Header?.ToString() == "Зв’язок");
             ordersGrid.ScrollIntoView(cableRow, receiptLinkColumn); ordersGrid.UpdateLayout();
-            var receiptLinkText = ((TextBlock)receiptLinkColumn.GetCellContent(cableRow)).Text;
+            var receiptLinkText = ((CheckboxBatchPrinter.Controls.DashboardTextBox)receiptLinkColumn.GetCellContent(cableRow)).Text;
             Equal(cableRow.LinkStatus, receiptLinkText); Equal("Сума збігається, товари суперечать", receiptLinkText);
             var orderLinkColumn = marketplaceOrdersGrid.Columns.Single(c => c.Header?.ToString() == "Відкрити чек");
             foreach (var cableOrder in workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Where(o => o.Key == translatedOrder.Key || o.Key == shortOrder.Key))
