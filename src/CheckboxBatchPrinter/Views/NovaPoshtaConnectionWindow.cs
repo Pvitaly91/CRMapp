@@ -111,7 +111,7 @@ public sealed class NovaPoshtaConnectionWindow : Window
         try
         {
             if (_shipments.SelectedItem is not ComboBoxItem { Tag: ShipmentReference shipment } || _order is null ||
-                shipment.Order.ConnectionId != _shop?.Id) throw new InvalidOperationException("Виберіть замовлення Prom із ТТН у таблиці.");
+                shipment.Order?.ConnectionId != _shop?.Id) throw new InvalidOperationException("Виберіть замовлення Prom із ТТН у таблиці.");
             _cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(5)); _form.IsEnabled = false; _cancel.IsEnabled = true; _cancel.Visibility = Visibility.Visible; UpdateCooldown();
             // This dialog only reads credentials saved in the one main settings form.
             // Never write a stale account/binding snapshot back during diagnostics.

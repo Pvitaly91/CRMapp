@@ -189,10 +189,11 @@ public sealed class OfficialShippingLabelSource(ShippingLabelHttp http, IShippin
     }
     private async Task<ShippingLabelDocument> ReadNovaPoshtaViaSellerAsync(ShipmentReference shipment, ShippingLabelSettings config, CancellationToken ct)
     {
+        var order = shipment.Order ?? throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "Для Seller-джерела потрібне замовлення; друкуйте незалежну накладну зі вкладки «Усі накладні».");
         // Verified official Seller API alternative. A direct NP endpoint is deliberately not guessed.
         var connections = await marketplaceSettings.LoadAsync(ct);
         var connectionId = config.NovaPoshtaSellerConnectionId.Length > 0 ? config.NovaPoshtaSellerConnectionId
-            : shipment.Order.Marketplace == MarketplaceKind.Rozetka ? shipment.Order.ConnectionId : "";
+            : order.Marketplace == MarketplaceKind.Rozetka ? order.ConnectionId : "";
         if (!connections.Connections.Any(c => c.Id == connectionId && c.Enabled && c.Marketplace == MarketplaceKind.Rozetka))
             throw new ShippingLabelException(LabelFailureKind.ConnectionRequired,
                 "Потрібне підключення Rozetka Seller з доступом до цієї ТТН Нової пошти. Прямий NP API ще не підключено: його актуальний контракт потребує перевірки.")

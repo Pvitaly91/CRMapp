@@ -144,6 +144,7 @@ internal static partial class MarketplaceViewModelTests
                 await CredentialIndicatorsXamlAsync();
                 await WaybillsDashboardAsync();
                 await DashboardTextSelectionAsync();
+                await WaybillPrintingDashboardAsync();
                 Console.WriteLine("XAML assertions and binding cleanup completed.");
                 await DrainDispatcherAsync();
                 Console.WriteLine("XAML final dispatcher drain completed.");

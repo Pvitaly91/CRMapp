@@ -124,7 +124,9 @@ public partial class App : Application
             _logger.Info("app.viewmodel.create");
             var viewModel = new MainViewModel(receiptService, imageService, settingsService, authentication,
                 printHistoryStore, printService, dialogs, _logger, marketplace, receiptSnapshots,
-                new WaybillsViewModel(new WaybillService(shippingTransport, shippingSettings)));
+                new WaybillsViewModel(new WaybillService(shippingTransport, shippingSettings),
+                    new WaybillLabelPreparation(shippingSettings, shippingTransport, npClient, pdfInspector, new WindowsShippingLabelRenderer()),
+                    shippingSettings, labelHistory, labelPrinter, labelDialogs), shippingSettings);
             _viewModel = viewModel;
             viewModel.CoordinatorManaged = true;
             marketplace.CoordinatorManaged = true;
@@ -254,7 +256,7 @@ public partial class App : Application
         }
         else
         {
-            if (_viewModel?.IsPrinting == true && MessageBox.Show(MainWindow,
+            if ((_viewModel?.IsPrinting == true || _viewModel?.Waybills?.IsPrintingBusy == true || _marketplaceViewModel?.Labels?.IsBusy == true) && MessageBox.Show(MainWindow,
                     "Триває друк. Завершити програму зараз? Результат передачі може бути невизначеним.",
                     "CRMapp", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
             { e.Cancel = true; return; }
@@ -272,7 +274,7 @@ public partial class App : Application
 
     private async Task ExitFromTrayAsync()
     {
-        if (_viewModel?.IsPrinting == true && MessageBox.Show(MainWindow,
+        if ((_viewModel?.IsPrinting == true || _viewModel?.Waybills?.IsPrintingBusy == true || _marketplaceViewModel?.Labels?.IsBusy == true) && MessageBox.Show(MainWindow,
                 "Триває друк. Завершити програму зараз? Результат передачі може бути невизначеним.",
                 "CRMapp", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
         _exiting = true;

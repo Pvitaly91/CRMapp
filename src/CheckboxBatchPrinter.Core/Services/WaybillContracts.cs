@@ -6,3 +6,10 @@ public interface IWaybillService
 {
     Task<WaybillFetchResult> FetchAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default);
 }
+
+public interface IWaybillLabelPreparation
+{
+    Task<PreparedWaybillBatch> PrepareAsync(IReadOnlyList<WaybillPrintRequest> documents, LabelPrintSettings settings,
+        LabelPrinterGeometry geometry, CancellationToken cancellationToken = default);
+    Task ValidateAsync(PreparedWaybillBatch batch, CancellationToken cancellationToken = default);
+}

@@ -17,7 +17,9 @@ public sealed class LabelPreviewWindow : Window
         var root = new DockPanel { Margin = new Thickness(12), Background = Brushes.White };
         var header = new StackPanel(); DockPanel.SetDock(header, Dock.Top);
         header.Children.Add(new TextBlock { Text = $"Принтер: {batch.Settings.PrinterName}\nНосій драйвера: {batch.Settings.WidthMm:0.##} × {batch.Settings.HeightMm:0.##} мм · {geometry.DpiX:0} × {geometry.DpiY:0} DPI · масштаб {batch.Settings.ScalePercent:0.##}% · копій {batch.Settings.Copies}\nGDI-рамка: {geometry.WidthMm:0.##} × {geometry.HeightMm:0.##} мм; область друку: {geometry.PrintableWidthMm:0.##} × {geometry.PrintableHeightMm:0.##} мм", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6) });
-        header.Children.Add(new TextBlock { Text = $"Замовлень: {(batch.SelectedOrderCount > 0 ? batch.SelectedOrderCount : batch.Pages.Select(p => p.Shipment.Order).Distinct().Count())} · ТТН: {batch.Pages.Select(p => (p.Shipment.Carrier, p.Shipment.TrackingNumber)).Distinct().Count()} · етикеток: {batch.Pages.Count} · сторінок з копіями: {batch.Pages.Count * batch.Settings.Copies}", FontWeight = FontWeights.SemiBold });
+        var count = batch.IsWaybillBatch ? $"Накладних: {batch.SelectedWaybillCount}" :
+            $"Замовлень: {(batch.SelectedOrderCount > 0 ? batch.SelectedOrderCount : batch.Pages.Select(p => p.Shipment.Order).OfType<OrderKey>().Distinct().Count())}";
+        header.Children.Add(new TextBlock { Text = $"{count} · ТТН: {batch.Pages.Select(p => (p.Shipment.Carrier, p.ConnectionId, p.Shipment.TrackingNumber)).Distinct().Count()} · етикеток: {batch.Pages.Count} · сторінок з копіями: {batch.Pages.Count * batch.Settings.Copies}", FontWeight = FontWeights.SemiBold });
         header.Children.Add(new TextBlock { Text = "Одна етикетка — одна сторінка. Один Windows job. Фізичний вихід не гарантується статусом черги.", Margin = new Thickness(0, 6, 0, 8) });
         if (batch.SkippedShipments.Count > 0)
         {
@@ -26,7 +28,7 @@ public sealed class LabelPreviewWindow : Window
             header.Children.Add(new Expander { Header = "Які наклейки пропущено", IsExpanded = batch.SkippedShipments.Count <= 3,
                 Content = new ScrollViewer { MaxHeight = 110, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                     Content = new TextBlock { Text = string.Join("\n", batch.SkippedShipments.Select(s =>
-                        $"Замовлення №{s.Shipment.OrderNumber} · ТТН {s.Shipment.TrackingNumber}: {s.Reason}")), TextWrapping = TextWrapping.Wrap } } });
+                        $"{(s.Shipment.Order is null ? "" : $"Замовлення №{s.Shipment.OrderNumber} · ")}ТТН {s.Shipment.TrackingNumber}: {s.Reason}")), TextWrapping = TextWrapping.Wrap } } });
         }
         if (batch.Pages.Any(p => p.Source.StartsWith("NovaPoshta.Direct.", StringComparison.Ordinal)))
             header.Children.Add(new TextBlock { Text = "Нова пошта: отримано PDF вибраних ТТН. Перегляньте етикетки й підтвердьте друк пакета.",
@@ -49,7 +51,9 @@ public sealed class LabelPreviewWindow : Window
         var pages = new StackPanel();
         foreach (var page in batch.Pages)
         {
-            pages.Children.Add(new TextBlock { Text = $"{page.Shipment.Order.Marketplace} · {ShippingCarrierNames.Display(page.Shipment.Carrier)} · замовлення №{page.Shipment.OrderNumber} · ТТН {page.Shipment.TrackingNumber} · сторінка/частина {page.PageNumber} · PDF {page.WidthMm:0.##} × {page.HeightMm:0.##} мм", Margin = new Thickness(0, 12, 0, 5), TextWrapping = TextWrapping.Wrap });
+            var related = page.Shipment.Order is { } order ? $"{order.Marketplace} · замовлення №{page.Shipment.OrderNumber} · " :
+                string.IsNullOrWhiteSpace(page.Shipment.OrderNumber) ? "" : $"Пов’язані замовлення: {page.Shipment.OrderNumber} · ";
+            pages.Children.Add(new TextBlock { Text = $"{ShippingCarrierNames.Display(page.Shipment.Carrier)} · {related}ТТН {page.Shipment.TrackingNumber} · сторінка/частина {page.PageNumber} · PDF {page.WidthMm:0.##} × {page.HeightMm:0.##} мм", Margin = new Thickness(0, 12, 0, 5), TextWrapping = TextWrapping.Wrap });
             pages.Children.Add(BuildPreviewPage(page, batch.Settings, geometry));
         }
         root.Children.Add(new ScrollViewer { Content = pages, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto });

@@ -410,7 +410,7 @@ internal static class NovaPoshtaDirectTests
     private static async Task Broken() => await MixedCore(true);
     private static async Task MixedCore(bool broken)
     {
-        var stores = new Stores(); stores.Config = stores.Config with { NovaPoshtaConnections = [Connection], NovaPoshtaStoreBindings = [new(Shipment().Order.ConnectionId,Connection.Id)] };
+        var stores = new Stores(); stores.Config = stores.Config with { NovaPoshtaConnections = [Connection], NovaPoshtaStoreBindings = [new(Shipment().Order!.ConnectionId,Connection.Id)] };
         var npGets = 0;
         var handler = new Handler((request, _) =>
         {
@@ -455,7 +455,7 @@ internal static class NovaPoshtaDirectTests
             await history.SaveAsync(new("attempt","job","printer",DateTimeOffset.UtcNow,LabelSubmissionState.SubmissionUnknown,[new(ShippingCarrier.NovaPoshta,Connection.Id,Ttn,Ref,1,"fingerprint")]));
             var before = await File.ReadAllBytesAsync(historyPath);
             // No label/receipt printer, Seller or Checkbox required for saving diagnostic access.
-            await store.SaveAsync(new() { NovaPoshtaConnections = [Connection], NovaPoshtaStoreBindings = [new(Shipment().Order.ConnectionId,Connection.Id)] });
+            await store.SaveAsync(new() { NovaPoshtaConnections = [Connection], NovaPoshtaStoreBindings = [new(Shipment().Order!.ConnectionId,Connection.Id)] });
             var first = await new DpapiShippingSettingsStore(path).LoadAsync();
             await store.SaveAsync(first with { NovaPoshtaConnections = [Connection with { ApiKey = "rotated_key" }] });
             var restored = await new DpapiShippingSettingsStore(path).LoadAsync();
@@ -515,7 +515,7 @@ internal static class NovaPoshtaDirectTests
     }
     private static async Task SettingsUi()
     {
-        var promId = Shipment().Order.ConnectionId;
+        var promId = Shipment().Order!.ConnectionId;
         var initial = new ShippingLabelSettings { NovaPoshtaConnections = [Connection], NovaPoshtaStoreBindings = [new(promId, Connection.Id)] };
         var store = new DiagnosticStore(initial);
         var marketplaces = new MarketplaceSettings { Connections = [new() { Id = promId, Name = "Synthetic Prom", Enabled = true, Marketplace = MarketplaceKind.Prom }] };
@@ -556,7 +556,7 @@ internal static class NovaPoshtaDirectTests
     }
     private static async Task LatestDiagnosticSettingsUi()
     {
-        var promId = Shipment().Order.ConnectionId;
+        var promId = Shipment().Order!.ConnectionId;
         const string otherShop = "10000000000000000000000000000004";
         var other = new NovaPoshtaConnection("10000000000000000000000000000005", "Other shop NP", "synthetic_other_shop_key");
         var replacement = new NovaPoshtaConnection("10000000000000000000000000000006", "Current selected NP", "synthetic_latest_selected_key");
@@ -629,7 +629,7 @@ internal static class NovaPoshtaDirectTests
     }
     private static async Task ManualUiCancellation()
     {
-        var stores = new Stores(); var promId = Shipment().Order.ConnectionId;
+        var stores = new Stores(); var promId = Shipment().Order!.ConnectionId;
         stores.Config = stores.Config with { NovaPoshtaConnections = [Connection], NovaPoshtaStoreBindings = [new(promId,Connection.Id)] };
         stores.Market.Connections.Add(new() {Id=promId,Name="Synthetic Prom",Enabled=true,Marketplace=MarketplaceKind.Prom});
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

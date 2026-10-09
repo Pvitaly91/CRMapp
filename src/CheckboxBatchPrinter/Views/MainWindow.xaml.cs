@@ -131,6 +131,8 @@ public partial class MainWindow : Window
             if (ReferenceEquals(grid, AllReceiptsGrid)) vm.AllReceiptsTab.SelectedReceipt = receipt;
             else if (ReferenceEquals(grid, OrdersReceiptsGrid)) vm.OrdersReceiptsTab.SelectedReceipt = receipt;
         }
+        else if (grid.CurrentCell.Item is WaybillRowViewModel waybill && vm.Waybills is { } waybills)
+            waybills.SelectedRow = waybill;
     }
     private void Dashboard_RightClick(object sender, MouseButtonEventArgs e)
     {

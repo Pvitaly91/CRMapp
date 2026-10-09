@@ -97,7 +97,7 @@ public sealed class ShippingLabelsViewModel : ObservableObject
             var settings = (await _settings.LoadAsync(_cancel.Token)).Print with { };
             var geometry = _printer.Inspect(settings);
             var batch = await _preparation.PrepareAsync(orders, settings, geometry, _cancel.Token);
-            printableOrders.UnionWith(batch.SkippedShipments.Count == 0 ? orders.Select(o => o.Key) : batch.Pages.Select(p => p.Shipment.Order));
+            printableOrders.UnionWith(batch.SkippedShipments.Count == 0 ? orders.Select(o => o.Key) : batch.Pages.Select(p => p.Shipment.Order).OfType<OrderKey>());
             foreach (var row in rows)
             {
                 var omitted = batch.SkippedShipments.Where(s => s.Shipment.Order == row.Key).ToArray();

@@ -115,7 +115,8 @@ public sealed class WaybillService(ShippingLabelHttp http, IShippingSettingsStor
                     if (expectedTotal is { } total && seenDocuments.Count != total) throw Invalid();
                     complete = true; break;
                 }
-                var records = data.EnumerateArray().Select(item => ParseNovaPoshta(item, connection.Id, name)).ToArray();
+                var records = data.EnumerateArray().Select(item => ParseNovaPoshta(item, connection.Id, name) with
+                { CredentialFingerprint = WaybillAccountProof.Create(ShippingCarrier.NovaPoshta, connection.Id, connection.ApiKey) }).ToArray();
                 GuardPage(records, seenPages);
                 if (records.Any(record => !seenDocuments.Add(record.DocumentId))) throw Invalid();
                 foreach (var record in records) AddRecord(rows, record, from, to);
@@ -161,7 +162,8 @@ public sealed class WaybillService(ShippingLabelHttp http, IShippingSettingsStor
                     (total == 0 ? pages is > 1 : pages != (total + DeliveryPageSize - 1) / DeliveryPageSize) ||
                     expectedTotal is { } previousTotal && previousTotal != total || expectedPages is { } previousPages && previousPages != pages) throw Invalid();
                 expectedTotal = total; expectedPages = pages;
-                var records = data.EnumerateArray().Select(item => ParseDelivery(item, config.RozetkaDeliveryConnectionId)).ToArray();
+                var records = data.EnumerateArray().Select(item => ParseDelivery(item, config.RozetkaDeliveryConnectionId) with
+                { CredentialFingerprint = WaybillAccountProof.Create(ShippingCarrier.RozetkaDelivery, config.RozetkaDeliveryConnectionId, config.RozetkaDeliveryToken) }).ToArray();
                 if (records.Length > 0) GuardPage(records, seenPages);
                 if (records.Any(record => !seenDocuments.Add(record.DocumentId))) throw Invalid();
                 readCount += records.Length;

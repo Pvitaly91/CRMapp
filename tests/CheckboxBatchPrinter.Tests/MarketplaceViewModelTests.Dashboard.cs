@@ -78,7 +78,7 @@ internal static partial class MarketplaceViewModelTests
                 var shipment = ShippingCarrierNames.ForOrder(rows[i].Model).Single();
                 rows[i].ApplyLabelHistory([new("synthetic-dashboard-" + i, "job", "synthetic-printer", DateTimeOffset.UtcNow,
                     LabelSubmissionState.Submitted,
-                    [new(shipment.Carrier, shipment.Order.ConnectionId, shipment.TrackingNumber, "synthetic-doc", 1, "synthetic-hash")], 42)]);
+                    [new(shipment.Carrier, shipment.Order!.ConnectionId, shipment.TrackingNumber, "synthetic-doc", 1, "synthetic-hash")], 42)]);
             }
             await DrainDispatcherAsync();
             AssertDashboardIndices(workspace);

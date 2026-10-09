@@ -12,8 +12,12 @@ public sealed class ShippingLabelException(LabelFailureKind kind, string message
 }
 
 // None of these identities is an order/receipt ID inferred by basket matching.
-public sealed record ShipmentReference(OrderKey Order, string OrderNumber, ShippingCarrier Carrier,
-    string TrackingNumber, string ShipmentId = "", string Source = "", int ExpectedPlaces = 0);
+public sealed record ShipmentReference(OrderKey? Order, string OrderNumber, ShippingCarrier Carrier,
+    string TrackingNumber, string ShipmentId = "", string Source = "", int ExpectedPlaces = 0)
+{
+    // Independent carrier documents have no marketplace order identity.
+    public string CarrierConnectionId { get; init; } = "";
+}
 public sealed record ShippingLabelDocument(ShipmentReference Shipment, string ConnectionId, string DocumentId,
     byte[] Pdf, string Fingerprint, DateTimeOffset RetrievedAtUtc, int ExpectedPages = 0)
 {
@@ -28,6 +32,8 @@ public sealed record ShippingLabelPage(ShipmentReference Shipment, string Docume
 public sealed record LabelPrintBatch(string Id, IReadOnlyList<ShippingLabelPage> Pages, LabelPrintSettings Settings)
 {
     public int SelectedOrderCount { get; init; }
+    public int SelectedWaybillCount { get; init; }
+    public bool IsWaybillBatch { get; init; }
     public double RasterDpiX { get; init; }
     public double RasterDpiY { get; init; }
     public IReadOnlyList<LabelSkippedShipment> SkippedShipments { get; init; } = [];

@@ -76,6 +76,24 @@
                     <Setter Property="Foreground" Value="#667085" />
                     <Setter Property="ToolTip" Value="Накладну видалено в сервісі доставки" />
                 </DataTrigger>
+                <DataTrigger Binding="{Binding HasPrintedLabel}" Value="True">
+                    <Setter Property="FontWeight" Value="SemiBold" />
+                    <Setter Property="ToolTip" Value="{Binding PrintStatusText}" />
+                </DataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding CarrierName}" Value="Нова пошта" />
+                        <Condition Binding="{Binding HasPrintedLabel}" Value="True" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Background" Value="#BFDAFA" />
+                </MultiDataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding CarrierName}" Value="Rozetka Delivery" />
+                        <Condition Binding="{Binding HasPrintedLabel}" Value="True" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Background" Value="#BCE8C9" />
+                </MultiDataTrigger>
             </Style.Triggers>
         </Style>
         <Style x:Key="OrderRowStyle" TargetType="DataGridRow">
@@ -190,6 +208,30 @@
                     <Button Content="Друк вибраних видимих" Command="{Binding PrintSelectedCommand}" FontWeight="Bold"
                             Background="#1769AA" Foreground="White" ToolTip="Ctrl+P — друк вибраних видимих в активній вкладці" Padding="18,7" />
                 </StackPanel>
+            </Grid>
+        </Border>
+
+        <Border x:Name="WaybillPrintFooter" DockPanel.Dock="Bottom" Background="White" BorderBrush="#D9DEE7" BorderThickness="0,1,0,0" Padding="10"
+                Visibility="{Binding IsWaybillsTab, Converter={StaticResource BoolToVisibility}}">
+            <Grid>
+                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <WrapPanel Grid.ColumnSpan="2">
+                    <Button Content="Виділити всі" Command="{Binding Waybills.SelectVisibleCommand}" />
+                    <Button Content="Зняти всі" Command="{Binding Waybills.ClearSelectionCommand}" />
+                    <TextBlock Text="{Binding Waybills.SelectionText}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="12,0" />
+                    <Button Content="Перегляд" Command="{Binding Waybills.PreviewCommand}" />
+                </WrapPanel>
+                <StackPanel Grid.Row="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <ProgressBar Width="110" Height="14" IsIndeterminate="True" Visibility="{Binding Waybills.IsPrintingBusy, Converter={StaticResource BoolToVisibility}}" />
+                    <TextBlock Text="{Binding Waybills.PrintStatus}" Margin="10,0" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="640" />
+                </StackPanel>
+                <WrapPanel Grid.Row="1" Grid.Column="1">
+                    <Button Content="Скасувати підготовку" Command="{Binding Waybills.CancelPrintCommand}" />
+                    <Button Content="Повторити невдалі" Command="{Binding Waybills.RetryFailedCommand}" />
+                    <Button Content="Друк вибраних видимих" Command="{Binding Waybills.PrintSelectedCommand}" FontWeight="Bold"
+                            Background="#1769AA" Foreground="White" ToolTip="Ctrl+P — друк позначених видимих накладних" Padding="18,7" />
+                </WrapPanel>
             </Grid>
         </Border>
 
@@ -509,11 +551,41 @@
                         </ScrollViewer>
                     </StackPanel>
                     <DataGrid x:Name="AllWaybillsGrid" ItemsSource="{Binding Waybills.View}" Style="{StaticResource ReceiptGridStyle}"
+                              SelectedItem="{Binding Waybills.SelectedRow, Mode=OneWayToSource}" CurrentCellChanged="Dashboard_CurrentCellChanged"
                               IsReadOnly="True" RowStyle="{StaticResource WaybillRowStyle}" Sorting="DataGrid_Sorting">
                         <DataGrid.Columns>
-                            <controls:DashboardTextColumn Header="№" Binding="{Binding DisplayIndex}" Width="45" CanUserSort="False" />
-                            <controls:DashboardTextColumn Header="ТТН" Binding="{Binding TrackingNumber}" Width="170" />
+                            <DataGridTemplateColumn Header="№ / ✓" Width="76" CanUserSort="False" ClipboardContentBinding="{Binding DisplayIndex}">
+                                <DataGridTemplateColumn.CellTemplate><DataTemplate>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                  IsEnabled="{Binding CanSelect}" VerticalAlignment="Center" Focusable="False" />
+                                        <controls:DashboardTextBox Style="{StaticResource DashboardTextStyle}" Text="{Binding DisplayIndex, Mode=OneWay}"
+                                                                  MinWidth="26" TextAlignment="Right" Margin="6,0,0,0" />
+                                    </StackPanel>
+                                </DataTemplate></DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="ТТН" Width="170" SortMemberPath="TrackingNumber" ClipboardContentBinding="{Binding TrackingNumber}">
+                                <DataGridTemplateColumn.CellTemplate><DataTemplate>
+                                    <controls:DashboardTextBox Style="{StaticResource DashboardLinkTextStyle}" Text="{Binding TrackingNumber, Mode=OneWay}"
+                                        Command="{Binding DataContext.Waybills.PreviewCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                        CommandParameter="{Binding}" ToolTip="Виділіть текст мишкою; клік відкриває перегляд накладної" />
+                                </DataTemplate></DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <controls:DashboardTextColumn Header="Дата" Binding="{Binding CreatedLocal, StringFormat=dd.MM.yyyy HH:mm}" Width="140" SortMemberPath="CreatedLocal" />
+                            <controls:DashboardTextColumn Header="Пов’язані замовлення" Binding="{Binding AssociatedOrders}" Width="210">
+                                <controls:DashboardTextColumn.ElementStyle>
+                                    <Style TargetType="controls:DashboardTextBox" BasedOn="{StaticResource DashboardTextStyle}">
+                                        <Setter Property="ToolTip" Value="За точним номером ТТН серед завантажених замовлень" />
+                                    </Style>
+                                </controls:DashboardTextColumn.ElementStyle>
+                            </controls:DashboardTextColumn>
+                            <controls:DashboardTextColumn Header="Друк" Binding="{Binding PrintStatusText}" Width="175" />
+                            <DataGridTemplateColumn Header="" Width="90" CanUserSort="False">
+                                <DataGridTemplateColumn.CellTemplate><DataTemplate>
+                                    <Button Content="Перегляд" Padding="6,2"
+                                        Command="{Binding DataContext.Waybills.PreviewCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" />
+                                </DataTemplate></DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <controls:DashboardTextColumn Header="Перевізник" Binding="{Binding CarrierName}" Width="145" />
                             <controls:DashboardTextColumn Header="Акаунт" Binding="{Binding ConnectionName}" Width="170" />
                             <controls:DashboardTextColumn Header="Статус" Binding="{Binding Status}" Width="200" />

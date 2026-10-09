@@ -274,13 +274,14 @@ public sealed class NovaPoshtaDirectLabelSource(IShippingSettingsStore settings,
     {
         cancellationToken.ThrowIfCancellationRequested();
         var config = await settings.LoadAsync(cancellationToken);
-        var binding = config.NovaPoshtaStoreBindings.SingleOrDefault(b => b.MarketplaceConnectionId == shipment.Order.ConnectionId);
+        var order = shipment.Order ?? throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "Для цього джерела потрібне замовлення. Незалежні накладні друкуються з вкладки «Усі накладні».");
+        var binding = config.NovaPoshtaStoreBindings.SingleOrDefault(b => b.MarketplaceConnectionId == order.ConnectionId);
         var connection = config.NovaPoshtaConnections.SingleOrDefault(c => c.Id == binding?.NovaPoshtaConnectionId)
             ?? throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Збережіть API-ключ Нової пошти для цього магазину Prom у налаштуваннях наклейок.") { MissingCredentials = true };
         if (string.IsNullOrWhiteSpace(connection.ApiKey)) throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Очікує локального введення ключа Нової пошти.") { MissingCredentials = true };
         var group = _selectedShipments.Append(shipment).Where(s => s.Carrier == ShippingCarrier.NovaPoshta &&
-            s.Order.Marketplace == MarketplaceKind.Prom && config.NovaPoshtaStoreBindings.Any(b =>
-                b.MarketplaceConnectionId == s.Order.ConnectionId && b.NovaPoshtaConnectionId == connection.Id)).Distinct().ToArray();
+            s.Order is { Marketplace: MarketplaceKind.Prom } selectedOrder && config.NovaPoshtaStoreBindings.Any(b =>
+                b.MarketplaceConnectionId == selectedOrder.ConnectionId && b.NovaPoshtaConnectionId == connection.Id)).Distinct().ToArray();
         if (!group.Contains(shipment)) throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Накладна не належить вибраному магазину Prom.");
         var numbers = string.Join(",", group.Select(s => s.TrackingNumber).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
         var cacheKey = (connection.Id, NovaPoshtaRequestPolicy.KeyFingerprint(connection.ApiKey), numbers);
@@ -312,9 +313,11 @@ public sealed class ConfiguredShippingLabelSource(IShippingSettingsStore setting
     public async Task<ShippingLabelDocument> GetAsync(ShipmentReference shipment, CancellationToken cancellationToken = default)
     {
         var config = await settings.LoadAsync(cancellationToken);
-        if (shipment.Carrier == ShippingCarrier.NovaPoshta && shipment.Order.Marketplace == MarketplaceKind.Prom)
+        if (shipment.Carrier == ShippingCarrier.NovaPoshta && shipment.Order is null)
+            throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "Незалежні накладні Нової пошти друкуються з вкладки «Усі накладні».");
+        if (shipment.Carrier == ShippingCarrier.NovaPoshta && shipment.Order is { Marketplace: MarketplaceKind.Prom } order)
         {
-            if (config.NovaPoshtaStoreBindings.Any(b => b.MarketplaceConnectionId == shipment.Order.ConnectionId))
+            if (config.NovaPoshtaStoreBindings.Any(b => b.MarketplaceConnectionId == order.ConnectionId))
                 return await direct.GetAsync(shipment, cancellationToken);
             if (config.NovaPoshtaSellerConnectionId.Length == 0)
                 throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Для магазину Prom збережіть API-ключ Нової пошти у налаштуваннях наклейок. Rozetka Seller не потрібний; акаунти не перебираються.") { MissingCredentials = true };
