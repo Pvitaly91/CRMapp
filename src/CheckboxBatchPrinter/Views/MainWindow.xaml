@@ -284,19 +284,20 @@
                                            TextWrapping="Wrap" VerticalAlignment="Center" Margin="3,0,12,0" />
                             </WrapPanel>
                         </Border>
-                        <WrapPanel>
+                        <ScrollViewer x:Name="OrdersWorkspaceToolbarScroll" HorizontalScrollBarVisibility="Auto"
+                                      VerticalScrollBarVisibility="Disabled">
+                        <StackPanel x:Name="OrdersWorkspaceToolbar" Orientation="Horizontal">
                             <Button Content="Оновити замовлення" Command="{Binding Marketplace.SyncCommand}" />
-                            <Button Content="Розширити на 30 днів" Command="{Binding Marketplace.ExpandCommand}" />
                             <Button Content="Скасувати оновлення" Command="{Binding Marketplace.CancelCommand}" />
+                            <Button Content="Друк наклейок" Command="{Binding Marketplace.Labels.PrintCommand}" />
+                            <TextBlock Text="ⓘ" Margin="6" VerticalAlignment="Center" ToolTip="{Binding Marketplace.Labels.Status}" />
                             <CheckBox x:Name="ExtraOrderColumns" Content="Покупець, статус у таблиці" VerticalAlignment="Center" Margin="12,0" />
                             <CheckBox x:Name="ShowCanceledOrdersCheck" Content="Показувати скасовані" VerticalAlignment="Center" Margin="8,0"
                                       IsChecked="{Binding Marketplace.ShowCanceledOrders, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                       ToolTip="За замовчуванням скасовані замовлення приховані. Увімкніть, щоб переглянути їх у таблиці." />
-                        </WrapPanel>
-                        <WrapPanel>
-                        <CheckBox x:Name="AutomaticOrderLinks" Content="Автоматично зіставляти за сумою, товарами й оплатою"
+                        <CheckBox x:Name="AutomaticOrderLinks" Content="Автоприв’язка"
                                   IsChecked="{Binding Marketplace.AutoLinkEnabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                  Margin="3,6,9,3" VerticalAlignment="Center"
+                                  Margin="12,0,6,0" VerticalAlignment="Center"
                                   ToolTip="Одна календарна дата (Київ) і загальна сума; далі повні очищені назви та кількості всіх товарів. Спецсимволи прибираються лише для порівняння: літери, цифри й порядок слів зберігаються, цифрові частини не склеюються. Неповні дані не виключають кандидата. Оплата розрізняє лише однакові повні кошики. Ймовірний зв’язок не є фіскальним підтвердженням." />
                         <Button x:Name="MarketplaceInfoButton" Content="ⓘ" Width="30" Padding="3" FontSize="16"
                                 AutomationProperties.Name="Стан оновлення та пояснення прив’язок"
@@ -313,13 +314,7 @@
                                 </ToolTip>
                             </Button.ToolTip>
                         </Button>
-                        </WrapPanel>
-                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-                            <StackPanel Orientation="Horizontal">
-                                <Button Content="Друк наклейок" Command="{Binding Marketplace.Labels.PrintCommand}" />
-                                <Button Content="Скасувати підготовку" Command="{Binding Marketplace.Labels.CancelCommand}" />
-                                <TextBlock Text="ⓘ" Margin="6" VerticalAlignment="Center" ToolTip="{Binding Marketplace.Labels.Status}" />
-                            </StackPanel>
+                        </StackPanel>
                         </ScrollViewer>
                     </StackPanel>
 
