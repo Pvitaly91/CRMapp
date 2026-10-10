@@ -24,11 +24,13 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
     public string Status => Model.Status;
     private bool _selectedForLabels;
     private bool _hasPrintedLabel;
+    private bool _hasLabelSubmission;
     private string _labelStatus = "Не завантажено", _labelPrintStatus = "Не передано";
     public bool IsSelectedForLabels { get => _selectedForLabels; set => SetProperty(ref _selectedForLabels, value); }
     public string LabelStatus { get => _labelStatus; set => SetProperty(ref _labelStatus, value); }
     public string LabelPrintStatus { get => _labelPrintStatus; set => SetProperty(ref _labelPrintStatus, value); }
     public bool HasPrintedLabel { get => _hasPrintedLabel; private set => SetProperty(ref _hasPrintedLabel, value); }
+    public bool HasLabelSubmission { get => _hasLabelSubmission; private set => SetProperty(ref _hasLabelSubmission, value); }
     public string DeliveryDisplay => !Model.Shipments.Any(s => !string.IsNullOrWhiteSpace(s.TrackingNumber)) ? "Накладну не створено" :
         string.Join(", ", Model.Shipments.Select(s => ShippingCarrierNames.Display(ShippingCarrierNames.FromDocumentedDeliveryField(s.Carrier))).Distinct());
     public string LinkStatus { get; private set; } = "Без прив’язаного чека";
@@ -43,6 +45,7 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
         var shipments = ShippingCarrierNames.ForOrder(Model);
         var attempts = history.Where(a => a.Pages.Any(p => shipments.Any(s =>
             s.Carrier == p.Carrier && s.TrackingNumber == p.TrackingNumber))).ToArray();
+        HasLabelSubmission = attempts.Any(a => a.State is LabelSubmissionState.Submitted or LabelSubmissionState.SubmissionUnknown);
         HasPrintedLabel = shipments.Count > 0 && shipments.All(s => attempts.Any(a => a.State == LabelSubmissionState.Submitted &&
             a.Pages.Any(p => s.Carrier == p.Carrier && s.TrackingNumber == p.TrackingNumber)));
         var latest = attempts.MaxBy(a => a.TimeUtc);
@@ -58,7 +61,7 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
     public void Update(MarketplaceOrder order, IReadOnlyList<ReceiptRowViewModel> receipts, IReadOnlyList<ReceiptOrderDecision> decisions)
     {
         if (!ShippingCarrierNames.ForOrder(Model).SequenceEqual(ShippingCarrierNames.ForOrder(order)))
-        { LabelStatus = "Не завантажено"; LabelPrintStatus = "Не передано"; HasPrintedLabel = false; }
+        { LabelStatus = "Не завантажено"; LabelPrintStatus = "Не передано"; HasPrintedLabel = false; HasLabelSubmission = false; }
         Model = order;
         var linked = receipts.Where(r => r.OrderMatch?.Order?.Key == Key).ToArray();
         LinkedReceipts = linked;

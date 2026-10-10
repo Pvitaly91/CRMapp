@@ -36,6 +36,7 @@ public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
         SelectVisibleCommand = new RelayCommand(_ => { foreach (var row in Visible()) row.IsSelectedForLabels = row.Model.Shipments.Any(s => s.TrackingNumber.Length > 0); }, _ => CanOperate);
         ClearCommand = new RelayCommand(_ => { foreach (var row in _workspace.AllOrderRows) row.IsSelectedForLabels = false; }, _ => CanOperate);
         ToggleHeaderSelectionCommand = new RelayCommand(_ => ToggleHeaderSelection(), _ => CanToggleHeaderSelection);
+        SelectPrintCandidatesCommand = new AsyncRelayCommand(_ => SelectPrintCandidatesAsync(), _ => CanSelectPrintCandidates);
         PrintCommand = new AsyncRelayCommand(_ => RunAsync(null, true), _ => CanOperate);
         PreviewCommand = new AsyncRelayCommand(p => RunAsync(p as MarketplaceOrderRowViewModel, false), _ => CanOperate);
         PreviewShipmentCommand = new AsyncRelayCommand(p => p is OrderShipmentLink link
@@ -56,13 +57,15 @@ public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
     private void RaiseBusyCommands()
     {
         foreach (var c in new[] { SelectVisibleCommand, ClearCommand, CancelCommand }) ((RelayCommand)c).RaiseCanExecuteChanged();
-        foreach (var c in new[] { PrintCommand, PreviewCommand, PreviewShipmentCommand, SettingsCommand }) ((AsyncRelayCommand)c).RaiseCanExecuteChanged();
+        foreach (var c in new[] { PrintCommand, PreviewCommand, PreviewShipmentCommand, SettingsCommand, SelectPrintCandidatesCommand }) ((AsyncRelayCommand)c).RaiseCanExecuteChanged();
         UpdateHeaderSelection();
     }
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
     public ICommand SelectVisibleCommand { get; }
     public ICommand ClearCommand { get; }
     public ICommand ToggleHeaderSelectionCommand { get; }
+    public ICommand SelectPrintCandidatesCommand { get; }
+    public bool CanSelectPrintCandidates => CanOperate && !_workspace.IsBusy && Visible().Length > 0;
     public bool CanToggleHeaderSelection => CanOperate && !_workspace.IsBusy &&
         (Visible().Any(CanSelectForLabels) || _workspace.AllOrderRows.Any(r => r.IsSelectedForLabels));
     public bool? HeaderSelectionState
@@ -82,6 +85,29 @@ public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
     private MarketplaceOrderRowViewModel[] Visible() => _workspace.Orders.Cast<MarketplaceOrderRowViewModel>().ToArray();
     private static bool CanSelectForLabels(MarketplaceOrderRowViewModel row) =>
         row.Model.Shipments.Any(s => !string.IsNullOrWhiteSpace(s.TrackingNumber));
+    private static bool IsPrintCandidate(MarketplaceOrderRowViewModel row) =>
+        !row.Model.IsCanceled && !row.HasLabelSubmission && (row.LinkedReceipts.Count > 0 || row.HasConfirmedLink);
+    private async Task SelectPrintCandidatesAsync()
+    {
+        if (!CanSelectPrintCandidates) return;
+        IsBusy = true;
+        try
+        {
+            var history = await _history.LoadAsync();
+            if (_disposed || _workspace.IsBusy || _workspace.IsWorkspaceRefreshing) return;
+            _changingHeaderSelection = true;
+            try
+            {
+                foreach (var row in _workspace.AllOrderRows) row.ApplyLabelHistory(history);
+                var visible = Visible();
+                foreach (var row in visible) row.IsSelectedForLabels = IsPrintCandidate(row);
+                Status = $"Вибрано видимих замовлень для друку: {visible.Count(r => r.IsSelectedForLabels)}.";
+            }
+            finally { _changingHeaderSelection = false; }
+        }
+        catch (Exception) { Status = "Не вдалося прочитати історію наклейок; вибір замовлень не змінено."; }
+        finally { IsBusy = false; }
+    }
     private void ToggleHeaderSelection()
     {
         if (!CanToggleHeaderSelection) return;
@@ -114,7 +140,9 @@ public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
     }
     private void OrderRowChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(MarketplaceOrderRowViewModel.IsSelectedForLabels) or nameof(MarketplaceOrderRowViewModel.Model))
+        if (e.PropertyName is nameof(MarketplaceOrderRowViewModel.IsSelectedForLabels) or nameof(MarketplaceOrderRowViewModel.Model)
+            or nameof(MarketplaceOrderRowViewModel.LinkedReceipts) or nameof(MarketplaceOrderRowViewModel.HasConfirmedLink)
+            or nameof(MarketplaceOrderRowViewModel.HasLabelSubmission))
             UpdateHeaderSelection();
     }
     private void WorkspaceChanged(object? sender, PropertyChangedEventArgs e)
@@ -127,7 +155,9 @@ public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
         if (_changingHeaderSelection) return;
         OnPropertyChanged(nameof(HeaderSelectionState));
         OnPropertyChanged(nameof(CanToggleHeaderSelection));
+        OnPropertyChanged(nameof(CanSelectPrintCandidates));
         ((RelayCommand)ToggleHeaderSelectionCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)SelectPrintCandidatesCommand).RaiseCanExecuteChanged();
     }
     public void Dispose()
     {

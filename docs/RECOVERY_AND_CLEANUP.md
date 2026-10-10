@@ -1,6 +1,6 @@
 # Відновлення CRMapp із GitHub
 
-Основний локальний репозиторій — `D:\DEV\CPP\checkbox`. Актуальний код знаходиться в гілці [`codex/checkbox-marketplace-orders`](https://github.com/Pvitaly91/CRMapp/tree/codex/checkbox-marketplace-orders), а не в старій `main`. Версія програми — 1.0.38; ревізія встановленого EXE — `56d0af1800d378dbee417d22f079eaee60765b4d`.
+Основний локальний репозиторій — `D:\DEV\CPP\checkbox`. Актуальний код знаходиться в гілці [`codex/checkbox-marketplace-orders`](https://github.com/Pvitaly91/CRMapp/tree/codex/checkbox-marketplace-orders), а не в старій `main`. Версія програми — 1.0.39. Ревізія та контрольні суми поточного пакета вказані в його `build-info.json` і `SHA256SUMS.txt`.
 
 ## Чиста копія та збірка
 
@@ -14,7 +14,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build-Production.p
 
 Скрипт запускає тести обох каналів, пакує однофайловий Production EXE, перевіряє запуск його окремої копії та створює `build-info.json`, `SHA256SUMS.txt` і ZIP. CRMapp на цьому ПК потрібно закрити через трей → «Вийти» перед перевіркою пакування. Готовий пакет — у `artifacts\production\<version>-<перші 12 символів SHA>`. Для запуску EXE потрібен .NET Desktop Runtime 8 x64; у пакеті є `Ensure-DesktopRuntime.ps1`.
 
-Для точного набору джерел установленої версії після клонування можна виконати `git checkout 56d0af1800d378dbee417d22f079eaee60765b4d` і той самий скрипт пакування.
+Для конкретного набору джерел після клонування можна виконати `git checkout <commit-із-build-info.json>` і той самий скрипт пакування.
 
 ## Оновлення встановленої програми
 

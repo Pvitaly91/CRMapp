@@ -19,6 +19,9 @@ public partial class MainWindow : Window
         BindHeaderToggle(OrdersReceiptsHeaderToggle, "OrdersReceiptsTab");
         BindHeaderToggle(OrdersHeaderToggle, "Marketplace.Labels");
         BindHeaderToggle(WaybillsHeaderToggle, "Waybills");
+        BindPrintCandidates(AllReceiptsPrintCandidatesButton, "AllReceiptsTab");
+        BindPrintCandidates(OrdersReceiptsPrintCandidatesButton, "OrdersReceiptsTab");
+        BindPrintCandidates(OrdersPrintCandidatesButton, "Marketplace.Labels");
         Title = Infrastructure.AppEnvironment.WindowTitle;
         Loaded += OnLoaded;
     }
@@ -34,6 +37,15 @@ public partial class MainWindow : Window
             new Binding(path + "CanToggleHeaderSelection") { Source = this, Mode = BindingMode.OneWay, FallbackValue = false, TargetNullValue = false });
         toggle.SetBinding(System.Windows.Controls.Primitives.ButtonBase.CommandProperty,
             new Binding(path + "ToggleHeaderSelectionCommand") { Source = this, Mode = BindingMode.OneWay });
+    }
+
+    private void BindPrintCandidates(Button button, string ownerPath)
+    {
+        var path = "DataContext." + ownerPath + ".";
+        button.SetBinding(IsEnabledProperty,
+            new Binding(path + "CanSelectPrintCandidates") { Source = this, Mode = BindingMode.OneWay, FallbackValue = false, TargetNullValue = false });
+        button.SetBinding(System.Windows.Controls.Primitives.ButtonBase.CommandProperty,
+            new Binding(path + "SelectPrintCandidatesCommand") { Source = this, Mode = BindingMode.OneWay });
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)

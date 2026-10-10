@@ -3,6 +3,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Windows.Data;
 using System.Windows.Input;
+using CheckboxBatchPrinter.Core.Models;
 using CheckboxBatchPrinter.Core.Services;
 using CheckboxBatchPrinter.Infrastructure;
 
@@ -28,6 +29,7 @@ public sealed class ReceiptTabViewModel : ObservableObject, IDisposable
         _marketplace = marketplace;
         _selectedType = initialType;
         ToggleHeaderSelectionCommand = new RelayCommand(_ => ToggleHeaderSelection(), _ => CanToggleHeaderSelection);
+        SelectPrintCandidatesCommand = new RelayCommand(_ => SelectPrintCandidates(), _ => CanSelectPrintCandidates);
         // Never use GetDefaultView here: WPF would share filters/current-item/sorting.
         View = new ListCollectionView(rows) { Filter = MatchesFilter };
         View.SortDescriptions.Add(new(nameof(ReceiptRowViewModel.LocalDate), ListSortDirection.Descending));
@@ -40,6 +42,7 @@ public sealed class ReceiptTabViewModel : ObservableObject, IDisposable
     public bool UsesOrders { get; }
     public ICollectionView View { get; }
     public ICommand ToggleHeaderSelectionCommand { get; }
+    public ICommand SelectPrintCandidatesCommand { get; }
     public bool IsHeaderSelectionBusy
     {
         get => _headerSelectionBusy;
@@ -47,6 +50,8 @@ public sealed class ReceiptTabViewModel : ObservableObject, IDisposable
     }
     public bool CanToggleHeaderSelection => !_disposed && !IsHeaderSelectionBusy &&
         (View.Cast<ReceiptRowViewModel>().Any() || _rows.Any(IsMarked));
+    public bool CanSelectPrintCandidates => !_disposed && !IsHeaderSelectionBusy &&
+        View.Cast<ReceiptRowViewModel>().Any();
     public bool? HeaderSelectionState
     {
         get
@@ -100,6 +105,20 @@ public sealed class ReceiptTabViewModel : ObservableObject, IDisposable
         }
         finally { _changingHeaderSelection = false; UpdateHeaderSelection(); }
     }
+    private void SelectPrintCandidates()
+    {
+        if (!CanSelectPrintCandidates) return;
+        var visible = View.Cast<ReceiptRowViewModel>().ToArray();
+        _changingHeaderSelection = true;
+        try
+        {
+            foreach (var row in visible)
+                SetMarked(row, row.OrderMatch?.Order is { IsCanceled: false } &&
+                    row.PrintStatus is PrintItemStatus.Waiting or PrintItemStatus.Error &&
+                    string.Equals(row.Model.Status, "DONE", StringComparison.OrdinalIgnoreCase));
+        }
+        finally { _changingHeaderSelection = false; UpdateHeaderSelection(); }
+    }
     private void RowsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         ObserveRows();
@@ -109,18 +128,35 @@ public sealed class ReceiptTabViewModel : ObservableObject, IDisposable
     {
         var current = _rows.ToHashSet();
         foreach (var row in _observedRows.Except(current).ToArray())
-        { row.SelectionChanged -= RowSelectionChanged; _observedRows.Remove(row); }
+        {
+            row.SelectionChanged -= RowSelectionChanged;
+            row.PropertyChanged -= RowPropertyChanged;
+            _observedRows.Remove(row);
+        }
         foreach (var row in current.Except(_observedRows).ToArray())
-        { row.SelectionChanged += RowSelectionChanged; _observedRows.Add(row); }
+        {
+            row.SelectionChanged += RowSelectionChanged;
+            row.PropertyChanged += RowPropertyChanged;
+            _observedRows.Add(row);
+        }
     }
     private void RowSelectionChanged(object? sender, EventArgs e) => UpdateHeaderSelection();
+    private void RowPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (string.IsNullOrEmpty(e.PropertyName) || e.PropertyName is nameof(ReceiptRowViewModel.PrintStatus)
+            or nameof(ReceiptRowViewModel.OrderMatch) or nameof(ReceiptRowViewModel.Model)
+            or nameof(ReceiptRowViewModel.Status))
+            UpdateHeaderSelection();
+    }
     private void ViewChanged(object? sender, NotifyCollectionChangedEventArgs e) => UpdateHeaderSelection();
     private void UpdateHeaderSelection()
     {
         if (_changingHeaderSelection) return;
         OnPropertyChanged(nameof(HeaderSelectionState));
         OnPropertyChanged(nameof(CanToggleHeaderSelection));
+        OnPropertyChanged(nameof(CanSelectPrintCandidates));
         ((RelayCommand)ToggleHeaderSelectionCommand).RaiseCanExecuteChanged();
+        ((RelayCommand)SelectPrintCandidatesCommand).RaiseCanExecuteChanged();
     }
     public void Dispose()
     {
@@ -128,7 +164,11 @@ public sealed class ReceiptTabViewModel : ObservableObject, IDisposable
         _disposed = true;
         _rows.CollectionChanged -= RowsChanged;
         ((INotifyCollectionChanged)View).CollectionChanged -= ViewChanged;
-        foreach (var row in _observedRows) row.SelectionChanged -= RowSelectionChanged;
+        foreach (var row in _observedRows)
+        {
+            row.SelectionChanged -= RowSelectionChanged;
+            row.PropertyChanged -= RowPropertyChanged;
+        }
         _observedRows.Clear();
         UpdateHeaderSelection();
     }

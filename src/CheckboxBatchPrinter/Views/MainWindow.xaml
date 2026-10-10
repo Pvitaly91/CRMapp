@@ -6,6 +6,32 @@
         Icon="/CheckboxBatchPrinter;component/Resources/app-icon.ico"
         WindowStartupLocation="CenterScreen" Background="#F5F7FA" PreviewKeyDown="Window_PreviewKeyDown">
     <Window.Resources>
+        <DataTemplate x:Key="PrintCandidatesIcon">
+            <Viewbox Width="14" Height="14" IsHitTestVisible="False">
+                <Canvas Width="20" Height="20">
+                    <Path Data="M2,3 L18,3 L12,10 L12,15 L8,17 L8,10 Z" Fill="#E8F3FF"
+                          Stroke="#1769AA" StrokeThickness="1.6" StrokeLineJoin="Round" />
+                    <Path Data="M11,14 L14,17 L19,11" Stroke="White" StrokeThickness="4"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+                    <Path Data="M11,14 L14,17 L19,11" Stroke="#17803D" StrokeThickness="2"
+                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+                </Canvas>
+            </Viewbox>
+        </DataTemplate>
+        <Style x:Key="PrintCandidatesButtonStyle" TargetType="Button">
+            <Setter Property="Content" Value="Вибрати" />
+            <Setter Property="ContentTemplate" Value="{StaticResource PrintCandidatesIcon}" />
+            <Setter Property="Width" Value="20" />
+            <Setter Property="Height" Value="20" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="4,0,0,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="ToolTipService.ShowOnDisabled" Value="True" />
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45" /></Trigger>
+            </Style.Triggers>
+        </Style>
         <ContextMenu x:Key="DashboardTextCopyMenu" x:Shared="False">
             <MenuItem Header="Копіювати (Ctrl+C)" Command="{x:Static ApplicationCommands.Copy}"
                       CommandTarget="{Binding PlacementTarget, RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
@@ -257,11 +283,16 @@
                           SelectedItem="{Binding AllReceiptsTab.SelectedReceipt, Mode=OneWayToSource}"
                           Sorting="DataGrid_Sorting" MouseDoubleClick="ReceiptsGrid_MouseDoubleClick" Margin="6">
                     <DataGrid.Columns>
-                        <DataGridTemplateColumn Width="42" CanUserSort="False">
+                        <DataGridTemplateColumn Width="66" CanUserSort="False">
                             <DataGridTemplateColumn.Header>
-                                <CheckBox x:Name="AllReceiptsHeaderToggle" IsThreeState="True" HorizontalAlignment="Center"
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                <CheckBox x:Name="AllReceiptsHeaderToggle" IsThreeState="True" VerticalAlignment="Center"
                                     AutomationProperties.Name="Вибрати або зняти всі чеки"
                                     ToolTip="Позначити видимі чеки; повторне натискання знімає всі галочки цієї таблиці" />
+                                <Button x:Name="AllReceiptsPrintCandidatesButton" Style="{StaticResource PrintCandidatesButtonStyle}"
+                                        AutomationProperties.Name="Вибрати чеки — кандидати для друку"
+                                        ToolTip="Позначити видимі ненадруковані чеки з пов’язаним нескасованим замовленням. Решту видимих галочок зняти; приховані зберегти." />
+                                </StackPanel>
                             </DataGridTemplateColumn.Header>
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
@@ -402,6 +433,9 @@
                                                     AutomationProperties.Name="Вибрати або зняти всі замовлення для наклейок"
                                                     ToolTip="Позначити видимі замовлення з ТТН; повторне натискання знімає всі галочки наклейок" />
                                                 <TextBlock Text="№" Margin="6,0,0,0" VerticalAlignment="Center" />
+                                                <Button x:Name="OrdersPrintCandidatesButton" Style="{StaticResource PrintCandidatesButtonStyle}"
+                                                        AutomationProperties.Name="Вибрати замовлення — кандидати для друку наклейок"
+                                                        ToolTip="Позначити видимі нескасовані замовлення з пов’язаним чеком, наклейки яких ще не передавалися на друк. Решту видимих галочок зняти; приховані зберегти." />
                                             </StackPanel>
                                         </DataGridTemplateColumn.Header>
                                         <DataGridTemplateColumn.CellTemplate><DataTemplate>
@@ -501,11 +535,16 @@
                               SelectedItem="{Binding OrdersReceiptsTab.SelectedReceipt, Mode=OneWayToSource}"
                               Sorting="DataGrid_Sorting" MouseDoubleClick="ReceiptsGrid_MouseDoubleClick">
                         <DataGrid.Columns>
-                            <DataGridTemplateColumn Width="42" CanUserSort="False">
+                            <DataGridTemplateColumn Width="66" CanUserSort="False">
                                 <DataGridTemplateColumn.Header>
-                                    <CheckBox x:Name="OrdersReceiptsHeaderToggle" IsThreeState="True" HorizontalAlignment="Center"
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <CheckBox x:Name="OrdersReceiptsHeaderToggle" IsThreeState="True" VerticalAlignment="Center"
                                         AutomationProperties.Name="Вибрати або зняти всі чеки замовлень"
                                         ToolTip="Позначити видимі чеки; повторне натискання знімає всі галочки цієї таблиці" />
+                                    <Button x:Name="OrdersReceiptsPrintCandidatesButton" Style="{StaticResource PrintCandidatesButtonStyle}"
+                                            AutomationProperties.Name="Вибрати чеки замовлень — кандидати для друку"
+                                            ToolTip="Позначити видимі ненадруковані чеки з пов’язаним нескасованим замовленням. Решту видимих галочок зняти; приховані зберегти." />
+                                    </StackPanel>
                                 </DataGridTemplateColumn.Header>
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
