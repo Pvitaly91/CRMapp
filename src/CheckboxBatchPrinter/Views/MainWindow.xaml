@@ -26,6 +26,9 @@
             <Setter Property="HorizontalScrollBarVisibility" Value="Hidden" />
             <Setter Property="VerticalScrollBarVisibility" Value="Hidden" />
         </Style>
+        <Style x:Key="DashboardAmountTextStyle" TargetType="controls:DashboardTextBox" BasedOn="{StaticResource DashboardTextStyle}">
+            <Setter Property="FontWeight" Value="Bold" />
+        </Style>
         <Style x:Key="DashboardLinkTextStyle" TargetType="controls:DashboardTextBox" BasedOn="{StaticResource DashboardTextStyle}">
             <Setter Property="Foreground" Value="#0066CC" />
             <Style.Triggers>
@@ -257,10 +260,11 @@
                         </DataGridTemplateColumn>
                         <controls:DashboardTextColumn Header="Дата" Binding="{Binding LocalDate, StringFormat=dd.MM.yyyy}" Width="100" IsReadOnly="True" SortMemberPath="LocalDate" />
                         <controls:DashboardTextColumn Header="Час" Binding="{Binding LocalTime}" Width="80" IsReadOnly="True" />
-                        <controls:DashboardTextColumn Header="Тип чека" Binding="{Binding Type}" Width="135" IsReadOnly="True" />
+                        <controls:DashboardTextColumn Header="Сума" Binding="{Binding Total, StringFormat=N2}" Width="95" IsReadOnly="True"
+                                                      ElementStyle="{StaticResource DashboardAmountTextStyle}" />
                         <controls:DashboardTextColumn Header="Фіскальний номер" Binding="{Binding FiscalCode}" Width="160" IsReadOnly="True" />
                         <controls:DashboardTextColumn Header="Номер чека" Binding="{Binding Serial}" Width="105" IsReadOnly="True" />
-                        <controls:DashboardTextColumn Header="Сума" Binding="{Binding Total, StringFormat=N2}" Width="95" IsReadOnly="True" />
+                        <controls:DashboardTextColumn Header="Тип чека" Binding="{Binding Type}" Width="135" IsReadOnly="True" />
                         <controls:DashboardTextColumn Header="Оплата" Binding="{Binding Payment}" Width="155" IsReadOnly="True" />
                         <controls:DashboardTextColumn Header="Статус" Binding="{Binding Status}" Width="105" IsReadOnly="True" />
                         <controls:DashboardTextColumn Header="Каса" Binding="{Binding CashRegister}" Width="130" IsReadOnly="True" />
@@ -406,7 +410,7 @@
                                     <controls:DashboardTextColumn Header="Дата" Binding="{Binding CreatedAt, StringFormat=dd.MM.yyyy HH:mm}" Width="130" />
                                     <controls:DashboardTextColumn Header="Сума / валюта" Binding="{Binding TotalDisplay}" Width="115">
                                         <controls:DashboardTextColumn.ElementStyle>
-                                            <Style TargetType="controls:DashboardTextBox" BasedOn="{StaticResource DashboardTextStyle}"><Setter Property="ToolTip" Value="{Binding TotalDisplay}" /></Style>
+                                            <Style TargetType="controls:DashboardTextBox" BasedOn="{StaticResource DashboardAmountTextStyle}"><Setter Property="ToolTip" Value="{Binding TotalDisplay}" /></Style>
                                         </controls:DashboardTextColumn.ElementStyle>
                                     </controls:DashboardTextColumn>
                                     <DataGridTemplateColumn Header="Відкрити чек" Width="150" ClipboardContentBinding="{Binding LinkedReceiptsDisplay}">
@@ -505,10 +509,11 @@
                             </DataGridTemplateColumn>
                             <controls:DashboardTextColumn Header="Дата" Binding="{Binding LocalDate, StringFormat=dd.MM.yyyy}" Width="100" IsReadOnly="True" SortMemberPath="LocalDate" />
                             <controls:DashboardTextColumn Header="Час" Binding="{Binding LocalTime}" Width="80" IsReadOnly="True" />
-                            <controls:DashboardTextColumn Header="Тип чека" Binding="{Binding Type}" Width="150" IsReadOnly="True" />
+                            <controls:DashboardTextColumn Header="Сума" Binding="{Binding Total, StringFormat=N2}" Width="95" IsReadOnly="True"
+                                                          ElementStyle="{StaticResource DashboardAmountTextStyle}" />
                             <controls:DashboardTextColumn Header="Фіскальний номер" Binding="{Binding FiscalCode}" Width="170" IsReadOnly="True" />
                             <controls:DashboardTextColumn Header="Номер чека" Binding="{Binding Serial}" Width="105" IsReadOnly="True" />
-                            <controls:DashboardTextColumn Header="Сума" Binding="{Binding Total, StringFormat=N2}" Width="95" IsReadOnly="True" />
+                            <controls:DashboardTextColumn Header="Тип чека" Binding="{Binding Type}" Width="150" IsReadOnly="True" />
                             <controls:DashboardTextColumn Header="Оплата" Binding="{Binding Payment}" Width="160" IsReadOnly="True" />
                             <controls:DashboardTextColumn Header="Статус" Binding="{Binding Status}" Width="105" IsReadOnly="True" />
                             <controls:DashboardTextColumn Header="Каса" Binding="{Binding CashRegister}" Width="150" IsReadOnly="True" />
