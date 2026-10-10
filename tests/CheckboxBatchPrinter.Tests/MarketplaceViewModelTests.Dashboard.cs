@@ -65,6 +65,12 @@ internal static partial class MarketplaceViewModelTests
             True(receiptGrid.Columns.Any(c => c.Header?.ToString() == "Маркетплейс"),
                 "Compact orders columns must not remove the receipt table's marketplace column.");
             var indexColumn = grid.Columns[0];
+            var canceledToggle = (CheckBox)window.FindName("ShowCanceledOrdersCheck");
+            True(!workspace.ShowCanceledOrders && canceledToggle.IsChecked == false);
+            ClickCheckBox(canceledToggle); await DrainDispatcherAsync();
+            True(workspace.ShowCanceledOrders && canceledToggle.IsChecked == true);
+            ClickCheckBox(canceledToggle); await DrainDispatcherAsync();
+            True(!workspace.ShowCanceledOrders && canceledToggle.IsChecked == false);
             var receiptColumn = grid.Columns.Single(c => c.Header?.ToString() == "Відкрити чек");
             var trackingColumn = grid.Columns.Single(c => c.Header?.ToString() == "ТТН");
             workspace.Orders.SortDescriptions.Clear();

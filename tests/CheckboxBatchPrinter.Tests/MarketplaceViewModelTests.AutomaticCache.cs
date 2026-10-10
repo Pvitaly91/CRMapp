@@ -170,6 +170,10 @@ internal static partial class MarketplaceViewModelTests
         var (main, workspace) = fixture.Create(automaticCache: cache);
         await main.RefreshAsync(); await OpenOrdersAsync(main, workspace);
         Equal(1, workspace.AllOrderRows.Count); Equal(0, fixture.Details.Calls);
+        Equal(0, workspace.Orders.Cast<object>().Count());
+        workspace.ShowCanceledOrders = true;
+        Equal(canceled.Key, workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single().Key);
+        workspace.ShowCanceledOrders = false;
         True(!workspace.AllOrderRows.Single().HasSuggestedLink);
         True(main.Receipts.Single().OrderMatch!.Candidates.All(o => o.Key != canceled.Key));
 
@@ -183,11 +187,18 @@ internal static partial class MarketplaceViewModelTests
         var row = main.Receipts.Single();
         Equal(active.Key, row.OrderMatch!.Order!.Key); True(!row.OrderMatch.Ambiguous);
         Equal(2, workspace.AllOrderRows.Count); Equal(1, fixture.Details.Calls);
+        Equal(active.Key, workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single().Key);
+        workspace.ShowCanceledOrders = true;
+        Equal(2, workspace.Orders.Cast<object>().Count());
+        Equal(active.Key, row.OrderMatch!.Order!.Key);
+        workspace.ShowCanceledOrders = false;
         True(!workspace.AllOrderRows.Single(o => o.Key == canceled.Key).HasSuggestedLink);
         True(workspace.AllOrderRows.Single(o => o.Key == active.Key).HasSuggestedLink);
         var (restarted, restored) = fixture.Create(automaticCache: cache);
         await restarted.RefreshAsync(); await OpenOrdersAsync(restarted, restored);
         Equal(active.Key, restarted.Receipts.Single().OrderMatch!.Order!.Key);
+        True(!restored.ShowCanceledOrders);
+        Equal(active.Key, restored.Orders.Cast<MarketplaceOrderRowViewModel>().Single().Key);
         Equal(1, fixture.Details.Calls); Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
     }
 

@@ -289,6 +289,9 @@
                             <Button Content="Розширити на 30 днів" Command="{Binding Marketplace.ExpandCommand}" />
                             <Button Content="Скасувати оновлення" Command="{Binding Marketplace.CancelCommand}" />
                             <CheckBox x:Name="ExtraOrderColumns" Content="Покупець, статус у таблиці" VerticalAlignment="Center" Margin="12,0" />
+                            <CheckBox x:Name="ShowCanceledOrdersCheck" Content="Показувати скасовані" VerticalAlignment="Center" Margin="8,0"
+                                      IsChecked="{Binding Marketplace.ShowCanceledOrders, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                      ToolTip="За замовчуванням скасовані замовлення приховані. Увімкніть, щоб переглянути їх у таблиці." />
                         </WrapPanel>
                         <WrapPanel>
                         <CheckBox x:Name="AutomaticOrderLinks" Content="Автоматично зіставляти за сумою, товарами й оплатою"

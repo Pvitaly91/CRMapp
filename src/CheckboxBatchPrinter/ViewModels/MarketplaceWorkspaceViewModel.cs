@@ -35,6 +35,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     private bool _updatingOrderRows;
     private MarketplaceOrderRowViewModel? _selectedOrder;
     private string _orderSearch = "", _orderFilter = "Усі";
+    private bool _showCanceledOrders;
     private const string SetupHint = "Інтеграції не налаштовані.\nУсі чеки доступні на вкладці “Усі чеки”.";
     private string _account = "", _status = SetupHint, _filter = "Усі";
     private bool _busy, _attaching, _configurationLoaded, _canApply, _coverageComplete;
@@ -100,12 +101,18 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     public IReadOnlyList<string> OrderFilters { get; } = ["Усі", "Prom", "Rozetka", "Без чека", "Є чек", "Ймовірний зв’язок"];
     public string OrderSearch { get => _orderSearch; set { if (SetProperty(ref _orderSearch, value ?? "")) RefreshOrdersView(); } }
     public string OrderFilter { get => _orderFilter; set { if (SetProperty(ref _orderFilter, value)) RefreshOrdersView(); } }
+    public bool ShowCanceledOrders
+    {
+        get => _showCanceledOrders;
+        set { if (SetProperty(ref _showCanceledOrders, value)) RefreshOrdersView(); }
+    }
     public MarketplaceOrderRowViewModel? SelectedOrder
     {
         get => _selectedOrder;
         set { if (SetProperty(ref _selectedOrder, value)) RaiseCommands(); }
     }
     public string OrderListSummary => $"Замовлень: {Orders.Cast<object>().Count()} із {_orderRows.Count}. " +
+        (ShowCanceledOrders ? "Скасовані показані. " : "Скасовані приховані. ") +
         "Спільний календар фільтрує чеки й замовлення за датою Києва. Прихований архів залишається в кеші та перевірці зв’язків.";
     public IReadOnlyList<string> Filters { get; } = ["Усі", "Prom", "Rozetka", "Без зв’язку", "Потрібна перевірка"];
     public string Filter { get => _filter; set { if (SetProperty(ref _filter, value)) MatchesChanged?.Invoke(this, EventArgs.Empty); } }
@@ -547,6 +554,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     private bool MatchesOrderFilter(object value)
     {
         if (value is not MarketplaceOrderRowViewModel row) return false;
+        if (!ShowCanceledOrders && row.Model.IsCanceled) return false;
         if (_displayFrom.HasValue || _displayTo.HasValue)
         {
             if (row.Model.CreatedAt is not { } created) return false;
