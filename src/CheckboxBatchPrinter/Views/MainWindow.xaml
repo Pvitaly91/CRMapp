@@ -126,6 +126,11 @@
                     </MultiDataTrigger.Conditions>
                     <Setter Property="Background" Value="#BCE8C9" />
                 </MultiDataTrigger>
+                <DataTrigger Binding="{Binding Model.IsCanceled}" Value="True">
+                    <Setter Property="Background" Value="#FDE8E7" />
+                    <Setter Property="Foreground" Value="#8A2020" />
+                    <Setter Property="ToolTip" Value="{Binding Status}" />
+                </DataTrigger>
             </Style.Triggers>
         </Style>
         <Style x:Key="ReceiptGridStyle" TargetType="DataGrid">
