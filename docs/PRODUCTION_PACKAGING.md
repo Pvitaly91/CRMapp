@@ -2,17 +2,15 @@
 
 ## Джерело та межі
 
-Початковий commit: `d9d92f798cc0050e2202b3481607e2b33ab434ec`, development-гілка `codex/checkbox-marketplace-orders`.
-Початкова копія: `D:\DEV\CPP\checkbox\artifacts\short-feed-auth-source` (чиста).
-Її `origin` — локальний `D:\Portable Soft\POS\CRMapp`; GitHub: https://github.com/Pvitaly91/CRMapp.
-Пакування розробляється в окремому **git worktree**, `D:\DEV\CPP\checkbox\production-worktree`, гілка `codex/production-framework-dependent`. Це спільний Git-репозиторій, не незалежна копія. Основна копія залишається на development-гілці.
+Робочий репозиторій: `D:\DEV\CPP\checkbox`, гілка `codex/checkbox-marketplace-orders`.
+`origin`: `https://github.com/Pvitaly91/CRMapp.git`. Свіжу копію можна клонувати в будь-яку папку; скрипти визначають корінь відносно свого розташування й не потребують колишніх локальних копій або worktree. Повний порядок відновлення: [RECOVERY_AND_CLEANUP.md](RECOVERY_AND_CLEANUP.md).
 
 TargetFramework збережено: `net8.0-windows`, WPF. Наявний `win-x64.pubxml` і `build.ps1` не змінено.
 Новий `Production-FDD.pubxml` вимикає self-contained/trimming/AOT/R2R, вмикає single-file/apphost і embedded PDB. Усі ці параметри обмежені новим профілем. `AppChannel` явно записується в assembly metadata; default — Development, production-профіль/скрипт — Production. `AppEnvironment` є єдиним місцем вибору кореня даних. Наявні сховища отримують дочірні шляхи від цього кореня: settings, credential, Logs, Cache, printed-receipts і всі Marketplaces-файли. Окремого журналу спроб у цьому HEAD немає; пакування не додає нової логіки друку.
 
 ## Наступний реліз
 
-Після перевірки та коміту змін у production worktree:
+Після перевірки та коміту змін у робочому репозиторії:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build-Production.ps1
