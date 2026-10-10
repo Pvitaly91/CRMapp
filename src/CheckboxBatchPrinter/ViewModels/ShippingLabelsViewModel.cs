@@ -33,30 +33,37 @@ public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
         ILabelPrinter printer, ILabelDialogs dialogs)
     {
         _workspace = workspace; _settings = settings; _history = history; _preparation = new(source, renderer); _printer = printer; _dialogs = dialogs;
-        SelectVisibleCommand = new RelayCommand(_ => { foreach (var row in Visible()) row.IsSelectedForLabels = row.Model.Shipments.Any(s => s.TrackingNumber.Length > 0); }, _ => !IsBusy);
-        ClearCommand = new RelayCommand(_ => { foreach (var row in _workspace.AllOrderRows) row.IsSelectedForLabels = false; }, _ => !IsBusy);
+        SelectVisibleCommand = new RelayCommand(_ => { foreach (var row in Visible()) row.IsSelectedForLabels = row.Model.Shipments.Any(s => s.TrackingNumber.Length > 0); }, _ => CanOperate);
+        ClearCommand = new RelayCommand(_ => { foreach (var row in _workspace.AllOrderRows) row.IsSelectedForLabels = false; }, _ => CanOperate);
         ToggleHeaderSelectionCommand = new RelayCommand(_ => ToggleHeaderSelection(), _ => CanToggleHeaderSelection);
-        PrintCommand = new AsyncRelayCommand(_ => RunAsync(null, true), _ => !IsBusy);
-        PreviewCommand = new AsyncRelayCommand(p => RunAsync(p as MarketplaceOrderRowViewModel, false), _ => !IsBusy);
+        PrintCommand = new AsyncRelayCommand(_ => RunAsync(null, true), _ => CanOperate);
+        PreviewCommand = new AsyncRelayCommand(p => RunAsync(p as MarketplaceOrderRowViewModel, false), _ => CanOperate);
         PreviewShipmentCommand = new AsyncRelayCommand(p => p is OrderShipmentLink link
-            ? RunAsync(link.Row, false, link.Shipment) : Task.CompletedTask, _ => !IsBusy);
+            ? RunAsync(link.Row, false, link.Shipment) : Task.CompletedTask, _ => CanOperate);
         SettingsCommand = new AsyncRelayCommand(async _ =>
         {
             try { await _dialogs.SettingsAsync(); }
             catch (Exception) { _dialogs.Error("Не вдалося відкрити налаштування наклейок. Перевірте доступність принтера та локальних даних."); }
-        }, _ => !IsBusy);
+        }, _ => CanOperate);
         CancelCommand = new RelayCommand(_ => _cancel?.Cancel(), _ => IsBusy);
         ((INotifyCollectionChanged)_workspace.Orders).CollectionChanged += OrdersViewChanged;
         ((INotifyCollectionChanged)_workspace.AllOrderRows).CollectionChanged += OrderRowsChanged;
         _workspace.PropertyChanged += WorkspaceChanged;
         ObserveRows();
     }
-    public bool IsBusy { get => _busy; private set { SetProperty(ref _busy, value); foreach (var c in new[] { SelectVisibleCommand, ClearCommand, CancelCommand }) ((RelayCommand)c).RaiseCanExecuteChanged(); foreach (var c in new[] { PrintCommand, PreviewCommand, PreviewShipmentCommand, SettingsCommand }) ((AsyncRelayCommand)c).RaiseCanExecuteChanged(); UpdateHeaderSelection(); } }
+    public bool IsBusy { get => _busy; private set { SetProperty(ref _busy, value); RaiseBusyCommands(); } }
+    private bool CanOperate => !_disposed && !IsBusy && !_workspace.IsWorkspaceRefreshing;
+    private void RaiseBusyCommands()
+    {
+        foreach (var c in new[] { SelectVisibleCommand, ClearCommand, CancelCommand }) ((RelayCommand)c).RaiseCanExecuteChanged();
+        foreach (var c in new[] { PrintCommand, PreviewCommand, PreviewShipmentCommand, SettingsCommand }) ((AsyncRelayCommand)c).RaiseCanExecuteChanged();
+        UpdateHeaderSelection();
+    }
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
     public ICommand SelectVisibleCommand { get; }
     public ICommand ClearCommand { get; }
     public ICommand ToggleHeaderSelectionCommand { get; }
-    public bool CanToggleHeaderSelection => !_disposed && !IsBusy && !_workspace.IsBusy &&
+    public bool CanToggleHeaderSelection => CanOperate && !_workspace.IsBusy &&
         (Visible().Any(CanSelectForLabels) || _workspace.AllOrderRows.Any(r => r.IsSelectedForLabels));
     public bool? HeaderSelectionState
     {
@@ -113,6 +120,7 @@ public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
     private void WorkspaceChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(MarketplaceWorkspaceViewModel.IsBusy)) UpdateHeaderSelection();
+        if (e.PropertyName == nameof(MarketplaceWorkspaceViewModel.IsWorkspaceRefreshing)) RaiseBusyCommands();
     }
     private void UpdateHeaderSelection()
     {
@@ -147,7 +155,7 @@ public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
 
     private async Task RunAsync(MarketplaceOrderRowViewModel? previewRow, bool print, OrderShipment? selectedShipment)
     {
-        if (IsBusy) return;
+        if (!CanOperate) return;
         var rows = previewRow is null ? Visible().Where(r => r.IsSelectedForLabels).ToArray() : new[] { previewRow };
         if (rows.Length == 0) { _dialogs.Error("Позначте видимі замовлення для наклейок (окремі галочки ліворуч)."); return; }
         // MarketplaceOrder is immutable; clone shipment list before any await. Live view/filter changes do not touch this snapshot.

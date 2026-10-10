@@ -2112,6 +2112,12 @@ internal static partial class MarketplaceViewModelTests
             var todayReceipts = (Button)mainWindow.FindName("TodayReceiptsButton");
             True(ReferenceEquals(selectAll.Command, main.AllReceiptsTab.ToggleHeaderSelectionCommand));
             True(ReferenceEquals(todayReceipts.Command, main.TodayCommand));
+            var refreshAll = (Button)mainWindow.FindName("RefreshAllButton");
+            True(ReferenceEquals(refreshAll.Command, main.RefreshAllCommand));
+            Equal("Оновити все", refreshAll.Content?.ToString());
+            True(mainWindow.FindName("MatchProductsButton") is null);
+            True(!VisualChildren<Button>((FrameworkElement)mainWindow.Content).Any(button =>
+                button.Content?.ToString() is "Оновити чеки" or "Оновити замовлення" or "Оновити автоприв’язки"));
             ClickCheckBox(selectAll); await DrainDispatcherAsync();
             Equal(3, main.VisibleSelectedCount);
             Equal<bool?>(true, selectAll.IsChecked);
@@ -2167,11 +2173,9 @@ internal static partial class MarketplaceViewModelTests
             Equal(ScrollBarVisibility.Auto, toolbarScroll.HorizontalScrollBarVisibility);
             var centers = orderToolbar.Children.Cast<FrameworkElement>()
                 .Select(child => child.TranslatePoint(new Point(0, child.ActualHeight / 2), orderToolbar).Y).ToArray();
-            True(centers.Max() - centers.Min() < 1, "Order search, filter and both buttons must share one row.");
+            True(centers.Max() - centers.Min() < 1, "Order search, filter and link button must share one row.");
             True(toolbarScroll.ScrollableWidth < 1, "The compact toolbar must fit the default half-width pane.");
-            var refreshLinks = (Button)mainWindow.FindName("MatchProductsButton");
-            Equal("Оновити автоприв’язки", refreshLinks.Content as string);
-            True(ReferenceEquals(workspace.AutoMatchCommand, refreshLinks.Command));
+            True(mainWindow.FindName("MatchProductsButton") is null);
             var split = (Grid)mainWindow.FindName("OrdersSplitLayout");
             var leftPane = (Grid)mainWindow.FindName("MarketplaceOrdersPane");
             var rightPane = (Grid)mainWindow.FindName("CheckboxReceiptsPane");
@@ -2669,14 +2673,19 @@ internal static partial class MarketplaceViewModelTests
     {
         public int Calls;
         public bool FilterDates;
+        public bool Fail;
+        public TaskCompletionSource<bool>? Gate;
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public DateOnly LastFrom, LastTo;
         public IReadOnlyList<ReceiptRecord> Rows = [Receipt(ReceiptTwo, 2, 10000), Receipt(ReceiptOne, 1, 10000), Receipt(ReceiptThree, 3, 99900)];
-        public Task<IReadOnlyList<ReceiptRecord>> GetReceiptsAsync(DateOnly from, DateOnly to, CancellationToken ct = default)
+        public async Task<IReadOnlyList<ReceiptRecord>> GetReceiptsAsync(DateOnly from, DateOnly to, CancellationToken ct = default)
         {
-            Calls++; LastFrom = from; LastTo = to;
-            return Task.FromResult<IReadOnlyList<ReceiptRecord>>(FilterDates ? Rows.Where(r => r.DisplayDate is { } date &&
+            Calls++; LastFrom = from; LastTo = to; Entered.TrySetResult();
+            if (Gate is not null) await Gate.Task.WaitAsync(ct);
+            if (Fail) throw new IOException("Synthetic receipt service unavailable.");
+            return FilterDates ? Rows.Where(r => r.DisplayDate is { } date &&
                 DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(date, DateRangeBuilder.KyivZone).DateTime) >= from &&
-                DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(date, DateRangeBuilder.KyivZone).DateTime) <= to).ToArray() : Rows);
+                DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(date, DateRangeBuilder.KyivZone).DateTime) <= to).ToArray() : Rows;
         }
     }
     private sealed class Images : IReceiptImageService

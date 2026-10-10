@@ -87,7 +87,7 @@ public partial class MainWindow : Window
         {
             Key.A when Keyboard.Modifiers.HasFlag(ModifierKeys.Control) => viewModel.SelectAllCommand,
             Key.P when Keyboard.Modifiers.HasFlag(ModifierKeys.Control) => viewModel.PrintSelectedCommand,
-            Key.F5 => viewModel.RefreshCommand,
+            Key.F5 => viewModel.RefreshAllCommand,
             _ => null
         };
         if (command?.CanExecute(null) != true) return;

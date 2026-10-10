@@ -8,7 +8,7 @@ using CheckboxBatchPrinter.Services;
 
 namespace CheckboxBatchPrinter.ViewModels;
 
-public sealed class MainViewModel : ObservableObject
+public sealed partial class MainViewModel : ObservableObject
 {
     private readonly IReceiptService _receiptService;
     private readonly IReceiptImageService _imageService;
@@ -67,6 +67,7 @@ public sealed class MainViewModel : ObservableObject
         _receiptSnapshots = receiptSnapshots;
         if (Waybills is not null) Waybills.PropertyChanged += (_, e) =>
         {
+            if (e.PropertyName == nameof(Waybills.IsPrintingBusy)) RaiseCommands();
             if (IsWaybillsTab && e.PropertyName == nameof(Waybills.SearchText)) OnPropertyChanged(nameof(SearchText));
             if (IsWaybillsTab && e.PropertyName is nameof(Waybills.SelectionText) or nameof(Waybills.IsPrintingBusy) or nameof(Waybills.SelectedRow))
                 OnSelectionChanged(this, EventArgs.Empty);
@@ -92,6 +93,9 @@ public sealed class MainViewModel : ObservableObject
         };
 
         RefreshCommand = new AsyncRelayCommand(_ => RefreshActiveAsync(), _ => !IsBusy);
+        RefreshAllCommand = new AsyncRelayCommand(_ => RefreshAllAsync(), _ => CanRefreshAll);
+        CancelRefreshAllCommand = new RelayCommand(_ => CancelGlobalRefresh(),
+            _ => IsRefreshingAll && _refreshAllCancellation?.IsCancellationRequested == false);
         TodayCommand = new AsyncRelayCommand(_ => ShowTodayAsync(), _ => !IsBusy);
         ClearDateCommand = new RelayCommand(parameter =>
         {
@@ -111,6 +115,11 @@ public sealed class MainViewModel : ObservableObject
             p => !IsBusy && (IsWaybillsTab ? Waybills?.PreviewCommand.CanExecute(p) == true : true));
         SettingsCommand = new AsyncRelayCommand(_ => OpenSettingsAsync(), _ => !IsBusy);
         MarketplaceSettingsCommand = new AsyncRelayCommand(_ => OpenSettingsAsync(marketplace: true), _ => !IsBusy);
+        if (Marketplace is not null) Marketplace.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(Marketplace.Labels)) ObserveRefreshLabels();
+        };
+        ObserveRefreshLabels();
         foreach (var tab in new[] { AllReceiptsTab, OrdersReceiptsTab })
         {
             tab.View.CollectionChanged += (_, _) => OnSelectionChanged(this, EventArgs.Empty);
@@ -197,8 +206,8 @@ public sealed class MainViewModel : ObservableObject
     public ICommand SettingsCommand { get; }
     public ICommand MarketplaceSettingsCommand { get; }
 
-    public DateTime? DateFrom { get => _dateFrom; set { if (SetProperty(ref _dateFrom, value)) { _followToday = false; ApplyDisplayDates(); } } }
-    public DateTime? DateTo { get => _dateTo; set { if (SetProperty(ref _dateTo, value)) { _followToday = false; ApplyDisplayDates(); } } }
+    public DateTime? DateFrom { get => _dateFrom; set { if (SetProperty(ref _dateFrom, value)) { CancelGlobalRefreshForDateChange(); _followToday = false; ApplyDisplayDates(); } } }
+    public DateTime? DateTo { get => _dateTo; set { if (SetProperty(ref _dateTo, value)) { CancelGlobalRefreshForDateChange(); _followToday = false; ApplyDisplayDates(); } } }
     public void AdvanceTodayIfFollowing(DateTime today)
     {
         if (!_followToday || DateFrom?.Date == today.Date && DateTo?.Date == today.Date) return;
@@ -256,13 +265,12 @@ public sealed class MainViewModel : ObservableObject
     public string BackgroundStatus { get => _backgroundStatus; set => SetProperty(ref _backgroundStatus, value); }
     public bool IsBusy
     {
-        get => _isBusy;
+        get => _isBusy || IsRefreshingAll;
         private set
         {
-            if (!SetProperty(ref _isBusy, value)) return;
-            AllReceiptsTab.IsHeaderSelectionBusy = value;
-            OrdersReceiptsTab.IsHeaderSelectionBusy = value;
-            RaiseCommands();
+            if (_isBusy == value) return;
+            _isBusy = value;
+            NotifyBusyChanged();
         }
     }
     public bool IsPrinting { get; private set; }
@@ -303,6 +311,10 @@ public sealed class MainViewModel : ObservableObject
     public Task BackgroundRefreshAsync(DateOnly from, DateOnly to, CancellationToken token = default,
         bool persistSnapshot = true)
     {
+        // The explicit refresh owns receipt freshness for its selected period.
+        // A timer loading another period must not certify that operation's old rows.
+        if (persistSnapshot && IsRefreshingAll)
+            return Task.FromException(new BackgroundSourceSkippedException("Триває оновлення всіх даних"));
         lock (_receiptFlightGate)
         {
             if (_receiptFlight is { IsCompleted: false } && _receiptFlightRange == (from, to)) return _receiptFlight;
@@ -334,7 +346,7 @@ public sealed class MainViewModel : ObservableObject
         await _receiptRefreshGate.WaitAsync(token);
         try
         {
-            if (persistSnapshot && Marketplace is not null) Marketplace.ReceiptCoverageFresh = false;
+            if (Marketplace is not null) Marketplace.ReceiptCoverageFresh = false;
             var settings = await _settingsService.LoadAsync(token);
             var account = PrintAccountContext.Create(settings);
             var items = await _receiptService.GetReceiptsAsync(from, to, token);
@@ -343,7 +355,7 @@ public sealed class MainViewModel : ObservableObject
             if (PrintAccountContext.Create(await _settingsService.LoadAsync(token)) != account) return;
             var printed = await _printHistoryStore.LoadAsync(account, token);
             ApplyReceipts(items, printed, account, from, to, background: persistSnapshot);
-            if (persistSnapshot && Marketplace is not null) Marketplace.ReceiptCoverageFresh = true;
+            if (Marketplace is not null) Marketplace.ReceiptCoverageFresh = true;
             if (persistSnapshot && _receiptSnapshots is not null)
             {
                 try
@@ -367,6 +379,7 @@ public sealed class MainViewModel : ObservableObject
     }
     public void CancelPendingOperations()
     {
+        CancelGlobalRefresh();
         _waybillAssociationVersion++;
         Waybills?.SetActive(false);
         _dateLoadCancellation?.Cancel();
@@ -429,7 +442,9 @@ public sealed class MainViewModel : ObservableObject
         Marketplace?.UpdateReceiptScope(Receipts.ToArray(), account, from, to, background, verifiedCoverage);
     }
 
-    public async Task RefreshAsync()
+    public Task RefreshAsync() => RefreshReceiptsAsync(prepareOrders: true);
+
+    private async Task RefreshReceiptsAsync(bool prepareOrders)
     {
         if (DateFrom is null || DateTo is null)
         {
@@ -444,7 +459,8 @@ public sealed class MainViewModel : ObservableObject
 
         _operationCancellation?.Cancel();
         _operationCancellation?.Dispose();
-        _operationCancellation = new CancellationTokenSource();
+        _operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            _refreshAllCancellation?.Token ?? CancellationToken.None);
         IsBusy = true;
         StatusText = "Завантаження чеків…";
         ProgressText = string.Empty;
@@ -455,26 +471,27 @@ public sealed class MainViewModel : ObservableObject
         {
             var settings = await _settingsService.LoadAsync(_operationCancellation.Token);
             var accountContext = PrintAccountContext.Create(settings);
-            await BackgroundRefreshAsync(from, to, _operationCancellation.Token, persistSnapshot: false);
+            await BackgroundRefreshAsync(from, to, _operationCancellation.Token, persistSnapshot: false)
+                .WaitAsync(_operationCancellation.Token);
             refreshed = true;
         }
         catch (OperationCanceledException) { StatusText = "Операцію скасовано"; }
         catch (ApiException exception)
         {
             StatusText = "Помилка Checkbox API";
-            _dialogs.ShowError(exception.ToUserMessage());
+            if (!IsRefreshingAll) _dialogs.ShowError(exception.ToUserMessage());
         }
         catch (Exception exception)
         {
             _logger.Error("receipts.refresh", exception);
             StatusText = "Не вдалося завантажити чеки";
-            _dialogs.ShowError($"Не вдалося завантажити чеки. {exception.Message}");
+            if (!IsRefreshingAll) _dialogs.ShowError($"Не вдалося завантажити чеки. {exception.Message}");
         }
         finally { IsBusy = false; }
         if (refreshed && Marketplace is not null && _loadedAccountContext is not null)
         {
             Marketplace.SelectedReceipt = OrdersReceiptsTab.SelectedReceipt;
-            if (SelectedTabIndex == 1) _ = PrepareOrdersAsync();
+            if (prepareOrders && SelectedTabIndex == 1) _ = PrepareOrdersAsync();
         }
     }
 
@@ -714,7 +731,7 @@ public sealed class MainViewModel : ObservableObject
 
     private void RaiseCommands()
     {
-        foreach (var command in new ICommand[] { RefreshCommand, TodayCommand, SelectAllCommand, ClearSelectionCommand, PrintSelectedCommand, RetryFailedCommand, PreviewCommand, SettingsCommand, MarketplaceSettingsCommand })
+        foreach (var command in new ICommand[] { RefreshCommand, RefreshAllCommand, CancelRefreshAllCommand, TodayCommand, SelectAllCommand, ClearSelectionCommand, PrintSelectedCommand, RetryFailedCommand, PreviewCommand, SettingsCommand, MarketplaceSettingsCommand })
         {
             if (command is RelayCommand relay) relay.RaiseCanExecuteChanged();
             if (command is AsyncRelayCommand asyncRelay) asyncRelay.RaiseCanExecuteChanged();

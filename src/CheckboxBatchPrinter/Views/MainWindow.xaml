@@ -171,10 +171,21 @@
                     <Button Content="×" Command="{Binding ClearDateCommand}" CommandParameter="to"
                             ToolTip="Скинути дату до" MinWidth="28" Padding="5,2" />
                     <Button Content="Сьогодні" Command="{Binding TodayCommand}" />
-                    <Button Content="Оновити чеки" Command="{Binding RefreshCommand}" ToolTip="F5 — оновити поточну вкладку"
-                            Visibility="{Binding IsReceiptTab, Converter={StaticResource BoolToVisibility}}" />
-                    <Button Content="Оновити накладні" Command="{Binding Waybills.RefreshCommand}"
-                            Visibility="{Binding IsWaybillsTab, Converter={StaticResource BoolToVisibility}}" />
+                    <Button x:Name="RefreshAllButton" Content="{Binding RefreshAllButtonText}" Command="{Binding RefreshAllCommand}"
+                            ToolTipService.ShowDuration="60000">
+                        <Button.ToolTip>
+                            <ToolTip DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}" MaxWidth="620">
+                                <StackPanel>
+                                    <TextBlock Text="F5 — оновити чеки, замовлення, автоприв’язки та накладні за вибраний період" FontWeight="SemiBold" TextWrapping="Wrap" Margin="3" />
+                                    <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" Margin="3" />
+                                    <TextBlock Text="{Binding Marketplace.Status}" TextWrapping="Wrap" Margin="3" />
+                                    <TextBlock Text="{Binding Waybills.Status}" TextWrapping="Wrap" Margin="3" />
+                                </StackPanel>
+                            </ToolTip>
+                        </Button.ToolTip>
+                    </Button>
+                    <Button Content="Скасувати оновлення" Command="{Binding CancelRefreshAllCommand}"
+                            Visibility="{Binding IsRefreshingAll, Converter={StaticResource BoolToVisibility}}" />
                 </WrapPanel>
                 <Button Grid.Column="1" Content="Налаштування" Command="{Binding SettingsCommand}" VerticalAlignment="Top" />
                 <WrapPanel Grid.Row="1" Grid.ColumnSpan="2" Margin="0,5,0,0">
@@ -233,6 +244,7 @@
             </Grid>
         </Border>
 
+        <TextBlock DockPanel.Dock="Bottom" Text="{Binding RefreshAllStatus}" Margin="14,3" Foreground="#48566A" TextWrapping="Wrap" />
         <TextBlock DockPanel.Dock="Bottom" Text="{Binding StatusText}" Margin="14,4,14,8" Foreground="#48566A"
                    Visibility="{Binding IsReceiptTab, Converter={StaticResource BoolToVisibility}}" />
         <TextBlock DockPanel.Dock="Bottom" Text="{Binding BackgroundStatus}" Margin="14,3" Foreground="#667085"
@@ -291,8 +303,6 @@
                         <ScrollViewer x:Name="OrdersWorkspaceToolbarScroll" HorizontalScrollBarVisibility="Auto"
                                       VerticalScrollBarVisibility="Disabled">
                         <StackPanel x:Name="OrdersWorkspaceToolbar" Orientation="Horizontal">
-                            <Button Content="Оновити замовлення" Command="{Binding Marketplace.SyncCommand}" />
-                            <Button Content="Скасувати оновлення" Command="{Binding Marketplace.CancelCommand}" />
                             <Button Content="Друк наклейок" Command="{Binding Marketplace.Labels.PrintCommand}" />
                             <TextBlock Text="ⓘ" Margin="6" VerticalAlignment="Center" ToolTip="{Binding Marketplace.Labels.Status}" />
                             <CheckBox x:Name="ExtraOrderColumns" Content="Покупець, статус у таблиці" VerticalAlignment="Center" Margin="12,0" />
@@ -373,9 +383,6 @@
                                 <Button x:Name="LinkSelectedOrderButton" Content="Прив’язати вибрані" Padding="8,6" VerticalAlignment="Center"
                                         Command="{Binding Marketplace.LinkSelectedOrderCommand}"
                                         ToolTip="Виберіть замовлення ліворуч та чек праворуч. Прив’язку буде збережено лише після підтвердження." />
-                                <Button x:Name="MatchProductsButton" Content="Оновити автоприв’язки" Padding="8,6" VerticalAlignment="Center"
-                                        Command="{Binding Marketplace.AutoMatchCommand}"
-                                        ToolTip="Оновити ймовірні автоприв’язки з урахуванням кешу та нових даних. Ручні й точні фіскальні зв’язки мають пріоритет. Однакова сума й день за Києвом; приховані фільтрами конкуренти теж враховуються." />
                             </StackPanel>
                             </ScrollViewer>
                             <DataGrid x:Name="MarketplaceOrdersGrid" Grid.Row="1" ItemsSource="{Binding Marketplace.Orders}"

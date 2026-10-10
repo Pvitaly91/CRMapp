@@ -27,13 +27,13 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
     private long _requestVersion;
     private int _visibleCount;
     private DateOnly? _dateFrom, _dateTo;
-    private bool _active, _disposed, _needsRefresh = true, _isBusy, _replacingRows;
+    private bool _active, _disposed, _needsRefresh = true, _isBusy, _replacingRows, _refreshAcrossTabs;
     private string _searchText = "", _status = "Відкрийте вкладку, щоб завантажити накладні служб доставки.";
     private WaybillCarrierOption? _selectedCarrier;
     private WaybillRowViewModel? _selectedRow;
     private Func<WaybillRecord, IReadOnlyList<string>>? _associatedOrders;
     private CancellationTokenSource? _printCancellation;
-    private bool _printingBusy, _transmitting;
+    private bool _printingBusy, _transmitting, _isWorkspaceRefreshing;
     private bool _changingHeaderSelection;
     private string _printStatus = "";
 
@@ -51,10 +51,18 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
         View.SortDescriptions.Add(new(nameof(WaybillRowViewModel.CreatedLocal), ListSortDirection.Descending));
         View.SortDescriptions.Add(new(nameof(WaybillRowViewModel.TrackingNumber), ListSortDirection.Ascending));
         ((INotifyCollectionChanged)View).CollectionChanged += ViewChanged;
-        RefreshCommand = new RelayCommand(_ => _ = RefreshAsync(), _ => !_disposed);
+        RefreshCommand = new RelayCommand(_ => { if (!IsWorkspaceRefreshing) _ = RefreshAsync(); }, _ => !_disposed && !IsWorkspaceRefreshing);
         CancelCommand = new RelayCommand(_ => Cancel(), _ => !_disposed && (IsBusy || _debounceCancellation is not null));
-        SelectVisibleCommand = new RelayCommand(_ => { foreach (var row in Visible()) row.IsSelected = row.CanSelect; }, _ => CanChangeSelection);
-        ClearSelectionCommand = new RelayCommand(_ => { foreach (var row in Rows) row.IsSelected = false; }, _ => CanChangeSelection);
+        SelectVisibleCommand = new RelayCommand(_ =>
+        {
+            if (!CanChangeSelection) return;
+            foreach (var row in Visible()) row.IsSelected = row.CanSelect;
+        }, _ => CanChangeSelection);
+        ClearSelectionCommand = new RelayCommand(_ =>
+        {
+            if (!CanChangeSelection) return;
+            foreach (var row in Rows) row.IsSelected = false;
+        }, _ => CanChangeSelection);
         ToggleHeaderSelectionCommand = new RelayCommand(_ => ToggleHeaderSelection(), _ => CanToggleHeaderSelection);
         PreviewCommand = new AsyncRelayCommand(p => RunAsync(p as WaybillRowViewModel ?? SelectedRow, false),
             p => CanPrint && (p is WaybillRowViewModel row ? row.CanSelect : SelectedRow?.CanSelect == true || VisibleSelectedCount > 0));
@@ -98,11 +106,28 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
         get => _printingBusy;
         private set { if (SetProperty(ref _printingBusy, value)) RaisePrintCommands(); }
     }
+    public bool IsWorkspaceRefreshing
+    {
+        get => _isWorkspaceRefreshing;
+        set
+        {
+            if (_isWorkspaceRefreshing == value) return;
+            var pending = IsBusy || _debounceCancellation is not null;
+            SetProperty(ref _isWorkspaceRefreshing, value);
+            if (value && !_disposed)
+            {
+                StopPending();
+                if (pending) _needsRefresh = true;
+            }
+            ((RelayCommand)RefreshCommand).RaiseCanExecuteChanged();
+            RaisePrintCommands();
+        }
+    }
     public string PrintStatus { get => _printStatus; private set => SetProperty(ref _printStatus, value); }
     public int VisibleSelectedCount => Visible().Count(r => r.IsSelected);
     public int HiddenSelectedCount => Rows.Count(r => r.IsSelected) - VisibleSelectedCount;
     public string SelectionText => $"Вибрано видимих: {VisibleSelectedCount}\nВибрано прихованих: {HiddenSelectedCount}";
-    private bool CanChangeSelection => !_disposed && !IsPrintingBusy && !IsBusy;
+    private bool CanChangeSelection => !_disposed && !IsPrintingBusy && !IsBusy && !IsWorkspaceRefreshing;
     private bool CanPrint => CanChangeSelection && _preparation is not null && _settings is not null &&
         _history is not null && _printer is not null && _dialogs is not null;
     public bool IsBusy
@@ -158,6 +183,8 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
         }
         else
         {
+            // The explicit workspace refresh owns this request even when its tab is hidden.
+            if (_refreshAcrossTabs) return;
             var pending = IsBusy || _debounceCancellation is not null;
             StopPending();
             if (pending)
@@ -179,7 +206,16 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
         if (_active && ValidRange()) ScheduleRefresh();
     }
 
-    public async Task RefreshAsync()
+    public Task RefreshAsync() => RefreshCoreAsync(false, CancellationToken.None);
+
+    /// <summary>Refresh the shared date range regardless of the currently selected tab.</summary>
+    public async Task RefreshAllAsync(CancellationToken cancellationToken = default)
+    {
+        await RefreshCoreAsync(true, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    private async Task RefreshCoreAsync(bool acrossTabs, CancellationToken cancellationToken)
     {
         if (_disposed) return;
         StopPending();
@@ -191,20 +227,24 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
         }
         var version = _requestVersion;
         var range = EffectiveRange();
-        using var cancellation = new CancellationTokenSource();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _requestCancellation = cancellation;
+        _refreshAcrossTabs = acrossTabs;
         _needsRefresh = false;
         IsBusy = true;
         Status = "Завантажую накладні Нової пошти та Rozetka Delivery…";
         try
         {
+            cancellation.Token.ThrowIfCancellationRequested();
             var result = await _service.FetchAsync(range.From, range.To, cancellation.Token);
-            if (_disposed || version != _requestVersion || cancellation.IsCancellationRequested) return;
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (_disposed || version != _requestVersion) return;
             // Every result describes its own current sources. Failed sources do not
             // inherit another account's old documents or another date range.
             ReplaceRows(result.Documents);
             await RestoreHistoryAsync();
-            if (_disposed || version != _requestVersion || cancellation.IsCancellationRequested) return;
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (_disposed || version != _requestVersion) return;
             Status = result.Sources.Count == 0
                 ? (Rows.Count == 0 ? "Накладних за вибраний період не знайдено." : $"Завантажено накладних: {Rows.Count}.")
                 : string.Join(Environment.NewLine, result.Sources.Select(SourceStatus));
@@ -224,7 +264,11 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
         }
         finally
         {
-            if (ReferenceEquals(_requestCancellation, cancellation)) _requestCancellation = null;
+            if (ReferenceEquals(_requestCancellation, cancellation))
+            {
+                _requestCancellation = null;
+                _refreshAcrossTabs = false;
+            }
             if (!_disposed && version == _requestVersion) IsBusy = false;
         }
     }
@@ -239,6 +283,7 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
 
     private void ScheduleRefresh()
     {
+        if (_disposed || IsWorkspaceRefreshing) return;
         var cancellation = new CancellationTokenSource();
         _debounceCancellation = cancellation;
         ((RelayCommand)CancelCommand).RaiseCanExecuteChanged();
@@ -250,7 +295,7 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
         try
         {
             await Task.Delay(TimeSpan.FromMilliseconds(350), cancellation.Token);
-            if (_disposed || !_active || cancellation.IsCancellationRequested || !ReferenceEquals(_debounceCancellation, cancellation)) return;
+            if (_disposed || IsWorkspaceRefreshing || !_active || cancellation.IsCancellationRequested || !ReferenceEquals(_debounceCancellation, cancellation)) return;
             _debounceCancellation = null;
             await RefreshAsync();
         }
@@ -266,6 +311,7 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
     private void StopPending()
     {
         _requestVersion++;
+        _refreshAcrossTabs = false;
         if (!_transmitting) _printCancellation?.Cancel();
         _debounceCancellation?.Cancel();
         _debounceCancellation = null;
@@ -509,7 +555,7 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
         void CheckCurrent()
         {
             cancellation.Token.ThrowIfCancellationRequested();
-            if (_disposed || version != _requestVersion || requests.Any(request =>
+            if (_disposed || IsWorkspaceRefreshing || version != _requestVersion || requests.Any(request =>
                 !Rows.Any(row => SameIdentity(row.Model, request.Waybill))))
                 throw new InvalidOperationException("Накладні оновлено або підключення змінено. Підготуйте й підтвердьте актуальний пакет заново.");
         }
