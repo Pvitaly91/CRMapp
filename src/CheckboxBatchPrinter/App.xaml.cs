@@ -217,6 +217,9 @@ public partial class App : Application
         _coordinator?.Stop();
         _viewModel?.CancelPendingOperations();
         _viewModel?.Waybills?.Dispose();
+        _viewModel?.AllReceiptsTab.Dispose();
+        _viewModel?.OrdersReceiptsTab.Dispose();
+        _marketplaceViewModel?.Labels?.Dispose();
         _marketplaceViewModel?.CancelPendingOperations();
         _tray?.Dispose();
         _singleInstance?.Dispose();

@@ -22,6 +22,7 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
     private readonly ILabelPrinter? _printer;
     private readonly ILabelDialogs? _dialogs;
     private readonly WaybillRows _rows = new();
+    private readonly HashSet<WaybillRowViewModel> _observedRows = [];
     private CancellationTokenSource? _requestCancellation, _debounceCancellation;
     private long _requestVersion;
     private int _visibleCount;
@@ -33,6 +34,7 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
     private Func<WaybillRecord, IReadOnlyList<string>>? _associatedOrders;
     private CancellationTokenSource? _printCancellation;
     private bool _printingBusy, _transmitting;
+    private bool _changingHeaderSelection;
     private string _printStatus = "";
 
     public WaybillsViewModel(IWaybillService service, IWaybillLabelPreparation? preparation = null,
@@ -53,11 +55,13 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
         CancelCommand = new RelayCommand(_ => Cancel(), _ => !_disposed && (IsBusy || _debounceCancellation is not null));
         SelectVisibleCommand = new RelayCommand(_ => { foreach (var row in Visible()) row.IsSelected = row.CanSelect; }, _ => CanChangeSelection);
         ClearSelectionCommand = new RelayCommand(_ => { foreach (var row in Rows) row.IsSelected = false; }, _ => CanChangeSelection);
+        ToggleHeaderSelectionCommand = new RelayCommand(_ => ToggleHeaderSelection(), _ => CanToggleHeaderSelection);
         PreviewCommand = new AsyncRelayCommand(p => RunAsync(p as WaybillRowViewModel ?? SelectedRow, false),
             p => CanPrint && (p is WaybillRowViewModel row ? row.CanSelect : SelectedRow?.CanSelect == true || VisibleSelectedCount > 0));
         PrintSelectedCommand = new AsyncRelayCommand(_ => RunAsync(null, true), _ => CanPrint && VisibleSelectedCount > 0);
         RetryFailedCommand = new AsyncRelayCommand(_ => RunAsync(null, true, true), _ => CanPrint && Visible().Any(r => r.IsSelected && r.CanRetry));
         CancelPrintCommand = new RelayCommand(_ => CancelPrint(), _ => !_disposed && IsPrintingBusy && !_transmitting);
+        _rows.CollectionChanged += RowsChanged;
     }
 
     public ObservableCollection<WaybillRowViewModel> Rows => _rows;
@@ -67,6 +71,17 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
     public ICommand CancelCommand { get; }
     public ICommand SelectVisibleCommand { get; }
     public ICommand ClearSelectionCommand { get; }
+    public ICommand ToggleHeaderSelectionCommand { get; }
+    public bool CanToggleHeaderSelection => CanChangeSelection && (Visible().Any(r => r.CanSelect) || Rows.Any(r => r.IsSelected));
+    public bool? HeaderSelectionState
+    {
+        get
+        {
+            var visible = Visible().Where(r => r.CanSelect).ToArray();
+            if (visible.Length > 0 && visible.All(r => r.IsSelected)) return true;
+            return Rows.Any(r => r.IsSelected) ? null : false;
+        }
+    }
     public ICommand PreviewCommand { get; }
     public ICommand PrintSelectedCommand { get; }
     public ICommand RetryFailedCommand { get; }
@@ -292,10 +307,8 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
             var previous = oldRows.FirstOrDefault(r => SameIdentity(r.Model, document));
             if (previous is not null) row.RestoreState(previous);
             if (_associatedOrders is not null) row.ApplyAssociatedOrders(_associatedOrders(document));
-            row.PropertyChanged += RowChanged;
             return row;
         }).ToArray();
-        foreach (var row in oldRows) row.PropertyChanged -= RowChanged;
         _replacingRows = true;
         try
         {
@@ -333,12 +346,39 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
     }
 
     private WaybillRowViewModel[] Visible() => View.Cast<WaybillRowViewModel>().ToArray();
+    private void ToggleHeaderSelection()
+    {
+        if (!CanToggleHeaderSelection) return;
+        var visible = Visible();
+        var eligible = visible.Where(r => r.CanSelect).ToArray();
+        var clear = eligible.Length == 0 || eligible.All(r => r.IsSelected);
+        _changingHeaderSelection = true;
+        try
+        {
+            if (clear)
+                foreach (var row in Rows) row.IsSelected = false;
+            else
+                foreach (var row in visible) row.IsSelected = row.CanSelect;
+        }
+        finally { _changingHeaderSelection = false; UpdateSelection(); }
+    }
+    private void RowsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        var current = Rows.ToHashSet();
+        foreach (var row in _observedRows.Except(current).ToArray())
+        { row.PropertyChanged -= RowChanged; _observedRows.Remove(row); }
+        foreach (var row in current.Except(_observedRows).ToArray())
+        { row.PropertyChanged += RowChanged; _observedRows.Add(row); }
+        if (!_replacingRows) UpdateSelection();
+    }
     private void RowChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(WaybillRowViewModel.IsSelected) or nameof(WaybillRowViewModel.PrintStatus) or nameof(WaybillRowViewModel.CanRetry)) UpdateSelection();
     }
     private void UpdateSelection()
     {
+        if (_changingHeaderSelection) return;
+        OnPropertyChanged(nameof(HeaderSelectionState));
         OnPropertyChanged(nameof(VisibleSelectedCount));
         OnPropertyChanged(nameof(HiddenSelectedCount));
         OnPropertyChanged(nameof(SelectionText));
@@ -346,7 +386,8 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
     }
     private void RaisePrintCommands()
     {
-        foreach (var command in new[] { SelectVisibleCommand, ClearSelectionCommand, CancelPrintCommand })
+        OnPropertyChanged(nameof(CanToggleHeaderSelection));
+        foreach (var command in new[] { SelectVisibleCommand, ClearSelectionCommand, ToggleHeaderSelectionCommand, CancelPrintCommand })
             (command as RelayCommand)?.RaiseCanExecuteChanged();
         foreach (var command in new[] { PreviewCommand, PrintSelectedCommand, RetryFailedCommand })
             (command as AsyncRelayCommand)?.RaiseCanExecuteChanged();
@@ -512,10 +553,12 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
         if (_disposed) return;
         StopPending();
         _disposed = true;
+        _rows.CollectionChanged -= RowsChanged;
         ((INotifyCollectionChanged)View).CollectionChanged -= ViewChanged;
         ((RelayCommand)RefreshCommand).RaiseCanExecuteChanged();
         ((RelayCommand)CancelCommand).RaiseCanExecuteChanged();
-        foreach (var row in Rows) row.PropertyChanged -= RowChanged;
+        foreach (var row in _observedRows) row.PropertyChanged -= RowChanged;
+        _observedRows.Clear();
         RaisePrintCommands();
     }
 

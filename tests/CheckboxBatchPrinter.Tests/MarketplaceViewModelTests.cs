@@ -2107,16 +2107,19 @@ internal static partial class MarketplaceViewModelTests
             Equal(Color.FromRgb(0xED, 0xF5, 0xFF), ((SolidColorBrush)labelRow.Background).Color);
             True(!ReferenceEquals(allGrid.ItemsSource, ordersGrid.ItemsSource));
             Equal(3, allGrid.Items.Count);
-            var selectAll = (Button)mainWindow.FindName("SelectAllChecksButton");
-            var clearAll = (Button)mainWindow.FindName("ClearAllChecksButton");
+            True(mainWindow.FindName("SelectAllChecksButton") is null && mainWindow.FindName("ClearAllChecksButton") is null);
+            var selectAll = (CheckBox)mainWindow.FindName("AllReceiptsHeaderToggle");
             var todayReceipts = (Button)mainWindow.FindName("TodayReceiptsButton");
-            True(ReferenceEquals(selectAll.Command, main.SelectAllCommand));
-            True(ReferenceEquals(clearAll.Command, main.ClearSelectionCommand));
+            True(ReferenceEquals(selectAll.Command, main.AllReceiptsTab.ToggleHeaderSelectionCommand));
             True(ReferenceEquals(todayReceipts.Command, main.TodayCommand));
-            selectAll.Command.Execute(null);
+            ClickCheckBox(selectAll); await DrainDispatcherAsync();
             Equal(3, main.VisibleSelectedCount);
-            clearAll.Command.Execute(null);
+            Equal<bool?>(true, selectAll.IsChecked);
+            ClickCheckBox(selectAll); await DrainDispatcherAsync();
             Equal(0, main.SelectedCount);
+            Equal<bool?>(false, selectAll.IsChecked);
+            True(!VisualChildren<Button>((FrameworkElement)mainWindow.Content).Any(button =>
+                button.Content?.ToString() is "Виділити всі" or "Зняти всі" or "Вибрати видимі для наклейок" or "Зняти вибір наклейок"));
             var first = main.Receipts.Single(r => r.Id == ReceiptOne);
             var second = main.Receipts.Single(r => r.Id == ReceiptTwo);
             allGrid.SelectedItem = second;

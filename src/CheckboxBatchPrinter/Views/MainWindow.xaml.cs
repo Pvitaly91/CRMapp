@@ -15,8 +15,25 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        BindHeaderToggle(AllReceiptsHeaderToggle, "AllReceiptsTab");
+        BindHeaderToggle(OrdersReceiptsHeaderToggle, "OrdersReceiptsTab");
+        BindHeaderToggle(OrdersHeaderToggle, "Marketplace.Labels");
+        BindHeaderToggle(WaybillsHeaderToggle, "Waybills");
         Title = Infrastructure.AppEnvironment.WindowTitle;
         Loaded += OnLoaded;
+    }
+
+    private void BindHeaderToggle(CheckBox toggle, string ownerPath)
+    {
+        // Column Header objects can be disconnected from their presenter. Use
+        // the owning window directly so recycled/hidden tabs retain their scope.
+        var path = "DataContext." + ownerPath + ".";
+        toggle.SetBinding(System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty,
+            new Binding(path + "HeaderSelectionState") { Source = this, Mode = BindingMode.OneWay });
+        toggle.SetBinding(IsEnabledProperty,
+            new Binding(path + "CanToggleHeaderSelection") { Source = this, Mode = BindingMode.OneWay, FallbackValue = false, TargetNullValue = false });
+        toggle.SetBinding(System.Windows.Controls.Primitives.ButtonBase.CommandProperty,
+            new Binding(path + "ToggleHeaderSelectionCommand") { Source = this, Mode = BindingMode.OneWay });
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)

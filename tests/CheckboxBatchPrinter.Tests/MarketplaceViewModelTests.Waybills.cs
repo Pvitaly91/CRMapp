@@ -35,6 +35,15 @@ internal static partial class MarketplaceViewModelTests
             LayoutContent(window);
             await DrainDispatcherAsync();
             var grid = (DataGrid)window.FindName("AllWaybillsGrid");
+            var toggle = (CheckBox)window.FindName("WaybillsHeaderToggle");
+            True(ReferenceEquals(toggle.Command, waybills.ToggleHeaderSelectionCommand),
+                $"Waybill header command missing: visible={toggle.IsVisible}, enabled={toggle.IsEnabled}, parent={System.Windows.Media.VisualTreeHelper.GetParent(toggle)?.GetType().Name}; binding={toggle.GetBindingExpression(System.Windows.Controls.Primitives.ButtonBase.CommandProperty)?.Status}; errors={string.Join(" / ", failures.Messages)}");
+            ClickCheckBox(toggle); await DrainDispatcherAsync();
+            True(waybills.Rows.Where(r => r.CanSelect).All(r => r.IsSelected) && waybills.Rows.All(r => !r.IsDeleted || !r.IsSelected));
+            Equal<bool?>(true, toggle.IsChecked);
+            ClickCheckBox(toggle); await DrainDispatcherAsync();
+            True(waybills.Rows.All(r => !r.IsSelected));
+            Equal<bool?>(false, toggle.IsChecked);
             Equal(2, main.SelectedTabIndex);
             True(grid.Items.Count == 3, $"Waybill grid count={grid.Items.Count}; rows={waybills.Rows.Count}; view={waybills.View.Cast<object>().Count()}; search={waybills.SearchText}; carrier={waybills.SelectedCarrier}; sourceCalls={source.Calls}; itemsSource={grid.ItemsSource?.GetType().Name}; status={waybills.Status}");
             Equal(1, source.Calls);

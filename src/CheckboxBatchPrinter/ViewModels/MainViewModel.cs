@@ -260,6 +260,8 @@ public sealed class MainViewModel : ObservableObject
         private set
         {
             if (!SetProperty(ref _isBusy, value)) return;
+            AllReceiptsTab.IsHeaderSelectionBusy = value;
+            OrdersReceiptsTab.IsHeaderSelectionBusy = value;
             RaiseCommands();
         }
     }

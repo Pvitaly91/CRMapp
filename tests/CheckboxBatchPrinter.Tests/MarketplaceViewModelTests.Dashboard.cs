@@ -67,6 +67,8 @@ internal static partial class MarketplaceViewModelTests
             var indexColumn = grid.Columns[0];
             var canceledToggle = (CheckBox)window.FindName("ShowCanceledOrdersCheck");
             True(!workspace.ShowCanceledOrders && canceledToggle.IsChecked == false);
+            var orderToggle = (CheckBox)window.FindName("OrdersHeaderToggle");
+            True(ReferenceEquals(orderToggle.Command, workspace.Labels!.ToggleHeaderSelectionCommand));
             ClickCheckBox(canceledToggle); await DrainDispatcherAsync();
             True(workspace.ShowCanceledOrders && canceledToggle.IsChecked == true);
             ClickCheckBox(canceledToggle); await DrainDispatcherAsync();
@@ -78,6 +80,12 @@ internal static partial class MarketplaceViewModelTests
             await DrainDispatcherAsync();
             var rows = workspace.Orders.Cast<MarketplaceOrderRowViewModel>().ToArray();
             Equal(48, rows.Length);
+            ClickCheckBox(orderToggle); await DrainDispatcherAsync();
+            True(rows.All(r => r.IsSelectedForLabels));
+            Equal<bool?>(true, orderToggle.IsChecked);
+            ClickCheckBox(orderToggle); await DrainDispatcherAsync();
+            True(rows.All(r => !r.IsSelectedForLabels));
+            Equal<bool?>(false, orderToggle.IsChecked);
             for (var i = 0; i < rows.Length; i++)
             {
                 if (i % 4 < 2) continue;
@@ -170,6 +178,14 @@ internal static partial class MarketplaceViewModelTests
                 Equal(model, workspace.SelectedOrder);
             }
             var receipt = main.Receipts.Single();
+            var receiptsToggle = (CheckBox)window.FindName("OrdersReceiptsHeaderToggle");
+            True(ReferenceEquals(receiptsToggle.Command, main.OrdersReceiptsTab.ToggleHeaderSelectionCommand));
+            ClickCheckBox(receiptsToggle); await DrainDispatcherAsync();
+            True(receipt.IsSelectedForOrders && !receipt.IsSelected);
+            Equal<bool?>(true, receiptsToggle.IsChecked);
+            ClickCheckBox(receiptsToggle); await DrainDispatcherAsync();
+            True(!receipt.IsSelectedForOrders && !receipt.IsSelected);
+            Equal<bool?>(false, receiptsToggle.IsChecked);
             receipt.PrintStatus = PrintItemStatus.Done;
             receiptGrid.SelectedItem = receipt;
             receiptGrid.ScrollIntoView(receipt); LayoutContent(window); await DrainDispatcherAsync();

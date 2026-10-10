@@ -178,12 +178,6 @@
                     <Button x:Name="TodayReceiptsButton" Content="Чеки за сьогодні" Command="{Binding TodayCommand}"
                             Visibility="{Binding IsReceiptTab, Converter={StaticResource BoolToVisibility}}"
                             ToolTip="Показати чеки за сьогодні (Київ): скинути пошук і тип та одразу оновити список" />
-                    <Button x:Name="SelectAllChecksButton" Content="Виділити всі" Command="{Binding SelectAllCommand}"
-                            Visibility="{Binding IsReceiptTab, Converter={StaticResource BoolToVisibility}}"
-                            ToolTip="Позначити всі чеки у поточному відфільтрованому списку активної вкладки" />
-                    <Button x:Name="ClearAllChecksButton" Content="Зняти всі" Command="{Binding ClearSelectionCommand}"
-                            Visibility="{Binding IsReceiptTab, Converter={StaticResource BoolToVisibility}}"
-                            ToolTip="Зняти всі галочки активної вкладки, включно з прихованими фільтром" />
                 </WrapPanel>
             </Grid>
         </Border>
@@ -194,8 +188,6 @@
                 <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                 <WrapPanel Grid.ColumnSpan="2">
-                    <Button Content="Виділити всі" Command="{Binding SelectAllCommand}" ToolTip="Ctrl+A — усі видимі в активній вкладці" />
-                    <Button Content="Зняти всі" Command="{Binding ClearSelectionCommand}" ToolTip="Зняти видимі та приховані позначки активної вкладки" />
                     <TextBlock Text="{Binding SelectionText}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="12,0" />
                     <Button Content="Перегляд" Command="{Binding PreviewCommand}" />
                 </WrapPanel>
@@ -217,8 +209,6 @@
                 <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                 <WrapPanel Grid.ColumnSpan="2">
-                    <Button Content="Виділити всі" Command="{Binding Waybills.SelectVisibleCommand}" />
-                    <Button Content="Зняти всі" Command="{Binding Waybills.ClearSelectionCommand}" />
                     <TextBlock Text="{Binding Waybills.SelectionText}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="12,0" />
                     <Button Content="Перегляд" Command="{Binding Waybills.PreviewCommand}" />
                 </WrapPanel>
@@ -247,7 +237,12 @@
                           SelectedItem="{Binding AllReceiptsTab.SelectedReceipt, Mode=OneWayToSource}"
                           Sorting="DataGrid_Sorting" MouseDoubleClick="ReceiptsGrid_MouseDoubleClick" Margin="6">
                     <DataGrid.Columns>
-                        <DataGridTemplateColumn Header="✓" Width="42" CanUserSort="False">
+                        <DataGridTemplateColumn Width="42" CanUserSort="False">
+                            <DataGridTemplateColumn.Header>
+                                <CheckBox x:Name="AllReceiptsHeaderToggle" IsThreeState="True" HorizontalAlignment="Center"
+                                    AutomationProperties.Name="Вибрати або зняти всі чеки"
+                                    ToolTip="Позначити видимі чеки; повторне натискання знімає всі галочки цієї таблиці" />
+                            </DataGridTemplateColumn.Header>
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
@@ -316,8 +311,6 @@
                         </WrapPanel>
                         <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                             <StackPanel Orientation="Horizontal">
-                                <Button Content="Вибрати видимі для наклейок" Command="{Binding Marketplace.Labels.SelectVisibleCommand}" />
-                                <Button Content="Зняти вибір наклейок" Command="{Binding Marketplace.Labels.ClearCommand}" />
                                 <Button Content="Друк наклейок" Command="{Binding Marketplace.Labels.PrintCommand}" />
                                 <Button Content="Скасувати підготовку" Command="{Binding Marketplace.Labels.CancelCommand}" />
                                 <TextBlock Text="ⓘ" Margin="6" VerticalAlignment="Center" ToolTip="{Binding Marketplace.Labels.Status}" />
@@ -391,7 +384,15 @@
                                       RowStyle="{StaticResource OrderRowStyle}">
                                 <DataGrid.CellStyle><StaticResource ResourceKey="PreserveInactiveRowColor" /></DataGrid.CellStyle>
                                 <DataGrid.Columns>
-                                    <DataGridTemplateColumn Header="№ / ✓" Width="76" CanUserSort="False" ClipboardContentBinding="{Binding DisplayIndex}">
+                                    <DataGridTemplateColumn Width="76" CanUserSort="False" ClipboardContentBinding="{Binding DisplayIndex}">
+                                        <DataGridTemplateColumn.Header>
+                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                                <CheckBox x:Name="OrdersHeaderToggle" IsThreeState="True" VerticalAlignment="Center"
+                                                    AutomationProperties.Name="Вибрати або зняти всі замовлення для наклейок"
+                                                    ToolTip="Позначити видимі замовлення з ТТН; повторне натискання знімає всі галочки наклейок" />
+                                                <TextBlock Text="№" Margin="6,0,0,0" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </DataGridTemplateColumn.Header>
                                         <DataGridTemplateColumn.CellTemplate><DataTemplate>
                                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
                                                 <CheckBox IsChecked="{Binding IsSelectedForLabels, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" VerticalAlignment="Center" Focusable="False" />
@@ -489,7 +490,12 @@
                               SelectedItem="{Binding OrdersReceiptsTab.SelectedReceipt, Mode=OneWayToSource}"
                               Sorting="DataGrid_Sorting" MouseDoubleClick="ReceiptsGrid_MouseDoubleClick">
                         <DataGrid.Columns>
-                            <DataGridTemplateColumn Header="✓" Width="42" CanUserSort="False">
+                            <DataGridTemplateColumn Width="42" CanUserSort="False">
+                                <DataGridTemplateColumn.Header>
+                                    <CheckBox x:Name="OrdersReceiptsHeaderToggle" IsThreeState="True" HorizontalAlignment="Center"
+                                        AutomationProperties.Name="Вибрати або зняти всі чеки замовлень"
+                                        ToolTip="Позначити видимі чеки; повторне натискання знімає всі галочки цієї таблиці" />
+                                </DataGridTemplateColumn.Header>
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <CheckBox IsChecked="{Binding IsSelectedForOrders, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
@@ -557,7 +563,15 @@
                               SelectedItem="{Binding Waybills.SelectedRow, Mode=OneWayToSource}" CurrentCellChanged="Dashboard_CurrentCellChanged"
                               IsReadOnly="True" RowStyle="{StaticResource WaybillRowStyle}" Sorting="DataGrid_Sorting">
                         <DataGrid.Columns>
-                            <DataGridTemplateColumn Header="№ / ✓" Width="76" CanUserSort="False" ClipboardContentBinding="{Binding DisplayIndex}">
+                            <DataGridTemplateColumn Width="76" CanUserSort="False" ClipboardContentBinding="{Binding DisplayIndex}">
+                                <DataGridTemplateColumn.Header>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                        <CheckBox x:Name="WaybillsHeaderToggle" IsThreeState="True" VerticalAlignment="Center"
+                                            AutomationProperties.Name="Вибрати або зняти всі накладні"
+                                            ToolTip="Позначити видимі доступні накладні; повторне натискання знімає всі галочки накладних" />
+                                        <TextBlock Text="№" Margin="6,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </DataGridTemplateColumn.Header>
                                 <DataGridTemplateColumn.CellTemplate><DataTemplate>
                                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
                                         <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"

@@ -111,6 +111,7 @@ internal static class Program
         Tests.AddRange(MarketplaceViewModelTests.ShippingScenarios);
         Tests.AddRange(MarketplaceViewModelTests.DirectNpShippingScenarios);
         Tests.AddRange(MarketplaceViewModelTests.All);
+        Tests.AddRange(MarketplaceViewModelTests.HeaderToggleScenarios);
         var failed = 0;
         foreach (var (name, test) in Tests)
         {
