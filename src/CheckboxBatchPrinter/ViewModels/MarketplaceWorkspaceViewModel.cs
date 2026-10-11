@@ -683,6 +683,8 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         var decisions = ActiveDecisions;
         var unique = orders.DistinctBy(o => o.Key).ToArray();
         var keys = unique.Select(o => o.Key).ToHashSet();
+        var markedKeys = _orderRows.Where(row => row.IsSelectedForLabels)
+            .Select(row => _deduplication.NormalizeKey(row.Key)).ToHashSet();
         var existing = _orderRows.ToDictionary(r => r.Key);
         // Renumber once after a source batch, rather than once for every inserted row.
         _updatingOrderRows = true;
@@ -696,6 +698,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
                 if (!existing.TryGetValue(order.Key, out var row))
                 { row = new(order); _orderRows.Add(row); }
                 row.Update(order, _rows, decisions);
+                if (markedKeys.Contains(order.Key)) row.IsSelectedForLabels = true;
             }
         }
         finally { _updatingOrderRows = false; }

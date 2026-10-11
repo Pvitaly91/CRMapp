@@ -115,6 +115,7 @@ internal static class Program
         Tests.AddRange(MarketplaceViewModelTests.PrintCandidateScenarios);
         Tests.AddRange(MarketplaceViewModelTests.RefreshAllScenarios);
         Tests.AddRange(MarketplaceViewModelTests.RozetkaSettingsScenarios);
+        Tests.AddRange(MarketplaceViewModelTests.RozetkaDuplicateScenarios);
         var failed = 0;
         foreach (var (name, test) in Tests)
         {

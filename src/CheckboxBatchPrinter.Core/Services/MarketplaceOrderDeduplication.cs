@@ -2,19 +2,21 @@ using CheckboxBatchPrinter.Core.Models;
 
 namespace CheckboxBatchPrinter.Core.Services;
 
-// Session-only equivalence: an identical nonempty Prom bearer token proves that
-// two enabled connections read the same account. Names/order numbers alone do not.
-// No tokens, fingerprints or alias mappings are persisted.
+// Session-only equivalence: identical nonempty Prom bearer tokens or Rozetka
+// seller login/password pairs prove that enabled connections read the same account.
+// Names/order numbers alone do not. No credentials or alias mappings are persisted.
 public sealed class MarketplaceOrderDeduplication
 {
-    private readonly Dictionary<string, string> _aliases = new(StringComparer.Ordinal);
+    private readonly Dictionary<(MarketplaceKind Marketplace, string ConnectionId), string> _aliases = new();
 
     public static async Task<MarketplaceOrderDeduplication> ResolveAsync(MarketplaceSettings settings,
         IMarketplaceSecretStore secrets, CancellationToken ct = default)
     {
         var result = new MarketplaceOrderDeduplication();
-        var accounts = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var connection in settings.Connections.Where(c => c.Enabled && c.Marketplace == MarketplaceKind.Prom)
+        // Tuple string equality is ordinal; identities stay separate for each marketplace.
+        var accounts = new Dictionary<(MarketplaceKind Marketplace, string Login, string Secret), string>();
+        foreach (var connection in settings.Connections.Where(c => c.Enabled &&
+                         c.Marketplace is MarketplaceKind.Prom or MarketplaceKind.Rozetka)
                      .OrderBy(c => c.Id, StringComparer.Ordinal))
         {
             ct.ThrowIfCancellationRequested();
@@ -22,10 +24,21 @@ public sealed class MarketplaceOrderDeduplication
             {
                 var credential = await secrets.LoadAsync(connection.Id, ct).ConfigureAwait(false);
                 ct.ThrowIfCancellationRequested();
-                if (string.IsNullOrWhiteSpace(credential?.Token) || credential.Token.Any(char.IsControl)) continue;
-                var token = credential.Token.Trim();
-                if (!accounts.TryGetValue(token, out var primary)) accounts[token] = primary = connection.Id;
-                result._aliases[connection.Id] = primary;
+                (MarketplaceKind Marketplace, string Login, string Secret) identity;
+                if (connection.Marketplace == MarketplaceKind.Prom)
+                {
+                    if (string.IsNullOrWhiteSpace(credential?.Token) || credential.Token.Any(char.IsControl)) continue;
+                    identity = (MarketplaceKind.Prom, "", credential.Token.Trim());
+                }
+                else
+                {
+                    if (string.IsNullOrWhiteSpace(credential?.Login) || string.IsNullOrEmpty(credential.Password) ||
+                        credential.Login.Any(char.IsControl) || credential.Password.Any(char.IsControl)) continue;
+                    // Match the authentication request: trim the login, retain the exact password.
+                    identity = (MarketplaceKind.Rozetka, credential.Login.Trim(), credential.Password);
+                }
+                if (!accounts.TryGetValue(identity, out var primary)) accounts[identity] = primary = connection.Id;
+                result._aliases[(connection.Marketplace, connection.Id)] = primary;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception) { /* Unreadable credentials do not prove account equivalence. */ }
@@ -33,8 +46,8 @@ public sealed class MarketplaceOrderDeduplication
         return result;
     }
 
-    public OrderKey NormalizeKey(OrderKey key) => key.Marketplace == MarketplaceKind.Prom &&
-        _aliases.TryGetValue(key.ConnectionId, out var primary) ? key with { ConnectionId = primary } : key;
+    public OrderKey NormalizeKey(OrderKey key) =>
+        _aliases.TryGetValue((key.Marketplace, key.ConnectionId), out var primary) ? key with { ConnectionId = primary } : key;
 
     public IReadOnlyList<MarketplaceOrder> Merge(IEnumerable<MarketplaceOrder> orders) => orders
         .Select(order =>

@@ -147,6 +147,7 @@ internal static partial class MarketplaceViewModelTests
                 await PrintCandidatesDashboardAsync();
                 await CredentialIndicatorsXamlAsync();
                 await RozetkaSettingsWindowRoundTripAsync();
+                await RozetkaDuplicateDashboardAsync();
                 await WaybillsDashboardAsync();
                 await DashboardTextSelectionAsync();
                 await WaybillPrintingDashboardAsync();
