@@ -20,6 +20,7 @@ internal static class ShippingLabelsTests
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
         ("shipping carriers are independent of marketplace; old shipment cache round trips", Carrier),
+        ("Rozetka Nova Poshta locker names work from existing shipment caches without guessing unknown carriers", LockerCarrierCache),
         ("STA legacy label driver empty capabilities use only its actual sized default", () => Sta(DriverDefault)),
         ("RD verifies shipment and retrieves single-ID base64 PDF with separate token", DeliveryApi),
         ("RD rejects wrong identity, missing connection, forbidden and HTML documents", DeliveryErrors),
@@ -61,6 +62,36 @@ internal static class ShippingLabelsTests
         Check(ShippingCarrierNames.ForOrder(Order("3", ShippingCarrier.RozetkaDelivery, "00101")).Single().TrackingNumber == "00101", "Leading zero lost.");
         var old = JsonSerializer.Deserialize<OrderShipment>("{\"Carrier\":\"unknown\",\"TrackingNumber\":\"00123\",\"Destination\":\"synthetic\"}")!;
         Check(old.ShipmentId == "" && ShippingCarrierNames.FromDocumentedDeliveryField(old.Carrier) == ShippingCarrier.Unknown, "Old cache became a guessed carrier.");
+        return Task.CompletedTask;
+    }
+    private static Task LockerCarrierCache()
+    {
+        foreach (var name in new[] { "Нова Пошта (поштомати)", "  НОВА ПОШТА (ПОШТОМАТИ)\t" })
+        {
+            Check(ShippingCarrierNames.FromDocumentedDeliveryField(name) == ShippingCarrier.NovaPoshta,
+                "The explicit Rozetka locker service name was not recognized after case and edge whitespace normalization.");
+            // Old snapshots preserve the provider's carrier name rather than our resolved enum.
+            // Deliberately omit Source and other newer shipment fields to exercise the existing-cache path.
+            var old = JsonSerializer.Deserialize<OrderShipment>(JsonSerializer.Serialize(new
+                { Carrier = name, TrackingNumber = "20400000000001", Destination = "Synthetic locker" }))!;
+            var order = Order("locker", ShippingCarrier.NovaPoshta, "20400000000001") with
+                { Key = new(MarketplaceKind.Rozetka, "synthetic-rz-locker", "locker"), Shipments = [old] };
+            var restored = JsonSerializer.Deserialize<MarketplaceOrder>(JsonSerializer.Serialize(order))!;
+            var shipment = ShippingCarrierNames.ForOrder(restored).Single();
+            Check(shipment.Carrier == ShippingCarrier.NovaPoshta && shipment.TrackingNumber == "20400000000001" && shipment.Source == "",
+                "An existing cached locker shipment required network enrichment or acquired an invented source.");
+        }
+        foreach (var name in new[] { "", "43660", "unknown", "Нова Пошта (невідоме)", "Нова Пошта (поштомати) партнер" })
+        {
+            var order = Order("unknown", ShippingCarrier.NovaPoshta, "20400000000001") with
+            {
+                Key = new(MarketplaceKind.Rozetka, "synthetic-rz-locker", "unknown"),
+                Shipments = [new(name, "20400000000001") { Source = "Rozetka.ttn", DeliveryServiceId = "43660" },
+                    new(name, "20400000000002") { Source = "Rozetka.carrier.carrier_track_num" }]
+            };
+            Check(ShippingCarrierNames.ForOrder(order).All(s => s.Carrier == ShippingCarrier.Unknown),
+                "A numeric service ID, source, 14-digit TTN or unrecognized partner name became a guessed carrier.");
+        }
         return Task.CompletedTask;
     }
     internal sealed class Stores : IShippingSettingsStore, IMarketplaceSettingsStore, IMarketplaceSecretStore

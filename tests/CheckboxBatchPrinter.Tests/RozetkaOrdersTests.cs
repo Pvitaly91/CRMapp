@@ -12,6 +12,7 @@ internal static class RozetkaOrdersTests
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
         ("Rozetka documented auth, complete pagination, money and distinct buyer/recipient", PaginationAsync),
+        ("Rozetka locker delivery name routes the primary TTN while unknown partner carrier IDs stay unresolved", LockerDeliveryNameAsync),
         ("Rozetka detail hydration and optional fiscal link are read-only", DetailAsync),
         ("Rozetka optional PRRO denial preserves the order and rejects unknown UUID inference", PrroUnavailableAsync),
         ("Rozetka null fields remain unknown and fiscal number is not a receipt UUID", NullFieldsAsync),
@@ -95,6 +96,41 @@ internal static class RozetkaOrdersTests
         Equal("TTN-TEST-2", first.Shipments.Last().TrackingNumber);
         Equal(ShippingCarrier.Unknown, ShippingCarrierNames.ForOrder(first).Last().Carrier); // Unverified numeric carrier ID is never guessed.
         Equal("3", result.Orders.Single(o => o.Number == "101").SourceStatus);
+    }
+
+    private static async Task LockerDeliveryNameAsync()
+    {
+        var names = new[] { "Нова Пошта (поштомати)", " НОВА ПОШТА (ПОШТОМАТИ) ", "43660", "Unknown service" };
+        var handler = new Handler(request =>
+        {
+            if (request.Method == HttpMethod.Post) return Task.FromResult(Login());
+            Equal("/orders/search", request.RequestUri!.AbsolutePath);
+            return Task.FromResult(Page(1, 1, names.Select((name, index) => new
+            {
+                id = 100 + index, created = "2026-09-23 10:00:00", status = 1,
+                cost_with_discount = "100.00", purchases = Array.Empty<object>(), user = new { contact_fio = "Synthetic buyer" },
+                delivery = new { delivery_service_name = name, delivery_service_id = 43660 },
+                ttn = "20400000000001", carrier = new { carrier_inner_id = 43660, carrier_track_num = "20400000000002" }
+            }).Cast<object>().ToArray()));
+        });
+        using var http = new HttpClient(handler);
+        var result = await new RozetkaOrdersClient(new MarketplaceHttpTransport(http)).FetchAsync(Connection, Credentials, Range);
+        True(result.Complete); Equal(4, result.Orders.Count);
+        for (var index = 0; index < names.Length; index++)
+        {
+            var order = result.Orders.Single(o => o.Number == (100 + index).ToString());
+            Equal(names[index], order.Shipments.First().Carrier);
+            Equal("Rozetka.ttn", order.Shipments.First().Source);
+            Equal("43660", order.Shipments.First().DeliveryServiceId);
+            Equal("Rozetka.carrier.carrier_track_num", order.Shipments.Last().Source);
+            Equal("43660", order.Shipments.Last().Carrier);
+            var restored = JsonSerializer.Deserialize<MarketplaceOrder>(JsonSerializer.Serialize(order))!;
+            var shipments = ShippingCarrierNames.ForOrder(restored);
+            Equal(index < 2 ? ShippingCarrier.NovaPoshta : ShippingCarrier.Unknown, shipments.First().Carrier);
+            Equal(ShippingCarrier.Unknown, shipments.Last().Carrier);
+            Equal("20400000000001", shipments.First().TrackingNumber);
+            Equal("Rozetka.ttn", shipments.First().Source);
+        }
     }
 
     private static async Task DetailAsync()

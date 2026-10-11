@@ -123,7 +123,8 @@ public static class ShippingCarrierNames
 {
     public static ShippingCarrier FromDocumentedDeliveryField(string value) => value.Trim().ToLowerInvariant() switch
     {
-        "nova_poshta" or "нова пошта" or "новая почта" or "nova poshta" => ShippingCarrier.NovaPoshta,
+        "nova_poshta" or "нова пошта" or "новая почта" or "nova poshta" or
+        "нова пошта (поштомати)" => ShippingCarrier.NovaPoshta,
         "rozetka delivery" or "rozetka_delivery" or "доставка rozetka" or "rozetka" => ShippingCarrier.RozetkaDelivery,
         _ => ShippingCarrier.Unknown
     };
