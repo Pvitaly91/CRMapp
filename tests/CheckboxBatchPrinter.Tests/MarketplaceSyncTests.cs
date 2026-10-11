@@ -28,6 +28,10 @@ internal static class MarketplaceSyncTests
         ("sync: Prom and Rozetka lanes overlap while their account reads and merged cache writes stay serial", ParallelProviderLanesAsync),
         ("sync: a failed parallel provider preserves the other provider and sanitized individual checkpoints", ParallelProviderFailureAsync),
         ("sync: canceled late provider results cannot overwrite the other completed provider cache", ParallelProviderCancellationAsync),
+        ("sync: identical seller connections fetch once and retain alias keys and conflicting fiscal evidence", DuplicateSellerAccountsAsync),
+        ("sync: alias manual keys refresh one canonical detail and retain every persisted alias", DuplicateSellerKnownKeysAsync),
+        ("sync: changed or unreadable seller credentials never share a request", DuplicateSellerCredentialBoundariesAsync),
+        ("sync: partial duplicate-account responses update all aliases without advancing their checkpoints", DuplicateSellerPartialFailureAsync),
         ("sync: Kyiv day boundaries honor DST and configurable lookback", DateRangeAsync),
         ("transport: only documented read/auth requests reach HTTP handler", ReadOnlyWhitelistAsync),
         ("transport: Retry-After delta/date control injected delay", RetryAfterAsync),
@@ -381,6 +385,157 @@ internal static class MarketplaceSyncTests
         }
     }
 
+    private static MarketplaceSettings DuplicateSellerSettings() => new()
+    {
+        Connections =
+        [
+            new() { Id = "seller-z-alias", Marketplace = MarketplaceKind.Rozetka, Enabled = true, Name = "Alias shop" },
+            new() { Id = "seller-a-primary", Marketplace = MarketplaceKind.Rozetka, Enabled = true, Name = "Primary shop" }
+        ]
+    };
+
+    private static SellerSecrets DuplicateSellerSecrets() => new()
+    {
+        Values =
+        {
+            ["seller-a-primary"] = new(Login: "seller", Password: "synthetic-secret "),
+            ["seller-z-alias"] = new(Login: " seller ", Password: "synthetic-secret ")
+        }
+    };
+
+    private static async Task DuplicateSellerAccountsAsync()
+    {
+        var config = DuplicateSellerSettings();
+        var secrets = DuplicateSellerSecrets();
+        var aliasKey = new OrderKey(MarketplaceKind.Rozetka, "seller-z-alias", "42");
+        var oldReference = new FiscalDocumentReference(FiscalDocumentKeyKind.CheckboxReceiptUuid,
+            "11111111-1111-1111-1111-111111111111", "old assertion", aliasKey, "Checkbox", "document");
+        var old = Order("42", "old", aliasKey.ConnectionId, MarketplaceKind.Rozetka) with
+            { FiscalReferences = [oldReference], ReceiptIds = [oldReference.Value] };
+        var cache = new MemoryCache(new([old], []));
+        var client = new FakeClient(MarketplaceKind.Rozetka)
+        {
+            Fetch = (connection, _) =>
+            {
+                Equal("seller-a-primary", connection.Id);
+                var order = Order("42", "Скасовано", connection.Id, MarketplaceKind.Rozetka);
+                var fresh = oldReference with { Order = order.Key, Value = "22222222-2222-2222-2222-222222222222", Source = "fresh assertion" };
+                return Task.FromResult(new OrdersFetchResult([order with { FiscalReferences = [fresh], ReceiptIds = [fresh.Value] }], true));
+            }
+        };
+        var result = await new MarketplaceSyncService([client], secrets, cache, new Clock()).SynchronizeAsync(config, Range, []);
+        Equal(1, client.FetchCount); Equal(0, client.DetailIds.Count); Equal(1, cache.Saves);
+        Equal(2, result.Orders.Count); Equal(2, result.States.Count); True(result.States.All(s => s.Complete));
+        True(result.Orders.All(o => o.IsCanceled));
+        foreach (var order in result.Orders)
+        {
+            Equal(config.Connections.Single(c => c.Id == order.Key.ConnectionId).Name, order.StoreName);
+            True(order.FiscalReferences.All(reference => reference.Order == order.Key));
+            True(order.FiscalReferences.Any(reference => reference.Source == "fresh assertion"));
+        }
+        True(result.Orders.Single(o => o.Key == aliasKey).FiscalReferences.Contains(oldReference));
+        var identity = await MarketplaceOrderDeduplication.ResolveAsync(config, secrets);
+        Equal(2, identity.Merge(result.Orders).Single().FiscalReferences.Count);
+        Equal(aliasKey, old.Key); Equal(aliasKey, oldReference.Order);
+    }
+
+    private static async Task DuplicateSellerKnownKeysAsync()
+    {
+        var config = DuplicateSellerSettings();
+        var secrets = DuplicateSellerSecrets();
+        var old = Order("7", "old", "seller-z-alias", MarketplaceKind.Rozetka, Now.AddDays(-100));
+        var oldKey = old.Key;
+        var primaryKey = oldKey with { ConnectionId = "seller-a-primary" };
+        var cache = new MemoryCache(new([old], []));
+        var client = new FakeClient(MarketplaceKind.Rozetka)
+        {
+            Detail = (connection, id, _) =>
+            {
+                Equal("seller-a-primary", connection.Id); Equal("7", id);
+                var order = old with { Key = primaryKey, Status = "updated" };
+                return Task.FromResult<MarketplaceOrder?>(order with
+                {
+                    FiscalReferences = [new(FiscalDocumentKeyKind.CheckboxReceiptUuid,
+                        "33333333-3333-3333-3333-333333333333", "detail", primaryKey, "Checkbox", "document")]
+                });
+            }
+        };
+        var known = new[] { oldKey, primaryKey, oldKey with { ConnectionId = "disabled-other-seller" } };
+        var result = await new MarketplaceSyncService([client], secrets, cache, new Clock()).SynchronizeAsync(config, Range, known);
+        Equal(1, client.FetchCount); Equal("7", client.DetailIds.Single()); Equal(2, result.Orders.Count);
+        True(result.Orders.All(o => o.Status == "updated" && o.FiscalReferences.Single().Order == o.Key));
+        True(result.Orders.Any(o => o.Key == oldKey)); True(result.Orders.Any(o => o.Key == primaryKey));
+        Equal(oldKey, known[0]); Equal(oldKey, old.Key);
+        True(result.States.All(state => state.Complete && state.DetailCursor == "7"));
+        True(secrets.LoadCounts.Values.All(count => count == 1));
+    }
+
+    private static async Task DuplicateSellerCredentialBoundariesAsync()
+    {
+        var config = DuplicateSellerSettings();
+        var secrets = DuplicateSellerSecrets();
+        foreach (var (id, credential) in new[]
+        {
+            ("different-password", new MarketplaceCredentials(Login: "seller", Password: "synthetic-secret")),
+            ("different-login", new MarketplaceCredentials(Login: "Seller", Password: "synthetic-secret ")),
+            ("unreadable", new MarketplaceCredentials(Login: "seller", Password: "synthetic-secret "))
+        })
+        {
+            config.Connections.Add(new() { Id = id, Marketplace = MarketplaceKind.Rozetka, Enabled = true });
+            secrets.Values[id] = credential;
+        }
+        secrets.Unreadable.Add("unreadable");
+        var client = new FakeClient(MarketplaceKind.Rozetka)
+        {
+            Fetch = (connection, _) => Task.FromResult(new OrdersFetchResult(
+                [Order("42", connection.Id, connection.Id, MarketplaceKind.Rozetka)], true))
+        };
+        var service = new MarketplaceSyncService([client], secrets, new MemoryCache(), new Clock());
+        var first = await service.SynchronizeAsync(config, Range, []);
+        Equal(3, client.FetchCount); Equal(4, first.Orders.Count);
+        True(!first.States.Single(s => s.ConnectionId == "unreadable").Complete);
+        True(secrets.LoadCounts.Values.All(count => count == 1));
+        // Rotation is observed on the next synchronization, not retained as an old alias proof.
+        secrets.Values["seller-z-alias"] = new(Login: "seller", Password: "rotated-password");
+        var second = await service.SynchronizeAsync(config, Range, []);
+        Equal(7, client.FetchCount); Equal(4, second.Orders.Count);
+        Equal("seller-z-alias", second.Orders.Single(o => o.Key.ConnectionId == "seller-z-alias").Status);
+    }
+
+    private static async Task DuplicateSellerPartialFailureAsync()
+    {
+        var config = DuplicateSellerSettings();
+        config.Connections.Add(new() { Id = PromId, Marketplace = MarketplaceKind.Prom, Enabled = true });
+        var secrets = DuplicateSellerSecrets(); secrets.Values[PromId] = new(Token: "separate-prom");
+        var oldStates = config.Connections.Select((c, index) =>
+            new ConnectionSyncState(c.Id, Range, true, Now.AddDays(-index - 1), "old", Now.AddDays(-index - 1))).ToArray();
+        var cache = new MemoryCache(new([], oldStates));
+        var client = new FakeClient(MarketplaceKind.Rozetka)
+        {
+            Fetch = (connection, _) => Task.FromResult(new OrdersFetchResult(
+                [Order("42", "partial", connection.Id, MarketplaceKind.Rozetka)], false, "Incomplete page"))
+        };
+        var prom = new FakeClient(MarketplaceKind.Prom)
+        { Fetch = (connection, _) => Task.FromResult(new OrdersFetchResult([Order("42", "good", connection.Id)], true)) };
+        var service = new MarketplaceSyncService([client, prom], secrets, cache, new Clock());
+        var partial = await service.SynchronizeAsync(config, Range, []);
+        Equal(1, client.FetchCount); Equal(1, prom.FetchCount); Equal(3, partial.Orders.Count);
+        foreach (var state in partial.States.Where(s => s.ConnectionId != PromId))
+        {
+            True(!state.Complete); Equal(oldStates.Single(s => s.ConnectionId == state.ConnectionId).LastSuccessUtc, state.LastSuccessUtc);
+        }
+        True(partial.States.Single(s => s.ConnectionId == PromId).Complete);
+        client.Fetch = (_, _) => throw new MarketplaceApiException("Rozetka: HTTP 429.", (HttpStatusCode)429, TimeSpan.FromMinutes(2));
+        var failed = await service.SynchronizeAsync(config, Range, []);
+        Equal(2, client.FetchCount); Equal(3, failed.Orders.Count);
+        foreach (var state in failed.States.Where(s => s.ConnectionId != PromId))
+        {
+            True(!state.Complete); Equal((HttpStatusCode)429, state.FailureStatus);
+            Equal(TimeSpan.FromMinutes(2), state.RetryAfter);
+            Equal(oldStates.Single(s => s.ConnectionId == state.ConnectionId).LastSuccessUtc, state.LastSuccessUtc);
+        }
+    }
+
     private static Task DateRangeAsync()
     {
         var spring = MarketplaceSyncService.BuildRange(new DateOnly(2024, 3, 31), new DateOnly(2024, 3, 31), 0);
@@ -610,8 +765,22 @@ internal static class MarketplaceSyncTests
     private sealed class MemorySecrets : IMarketplaceSecretStore
     {
         public Task<MarketplaceCredentials?> LoadAsync(string connectionId, CancellationToken cancellationToken = default) =>
-            Task.FromResult<MarketplaceCredentials?>(new(Token: "fake-token", Login: "fake-login", Password: "fake-password"));
+            Task.FromResult<MarketplaceCredentials?>(new(Token: "fake-token-" + connectionId, Login: "fake-login-" + connectionId, Password: "fake-password"));
         public Task SaveAsync(string connectionId, MarketplaceCredentials credentials, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+    private sealed class SellerSecrets : IMarketplaceSecretStore
+    {
+        public Dictionary<string, MarketplaceCredentials?> Values { get; } = new();
+        public Dictionary<string, int> LoadCounts { get; } = new();
+        public HashSet<string> Unreadable { get; } = new();
+        public Task<MarketplaceCredentials?> LoadAsync(string connectionId, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            LoadCounts[connectionId] = LoadCounts.GetValueOrDefault(connectionId) + 1;
+            if (Unreadable.Contains(connectionId)) throw new InvalidOperationException("Synthetic unreadable protected credential.");
+            return Task.FromResult(Values.GetValueOrDefault(connectionId));
+        }
+        public Task SaveAsync(string connectionId, MarketplaceCredentials credentials, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
     private sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => Now; }
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> handle) : HttpMessageHandler

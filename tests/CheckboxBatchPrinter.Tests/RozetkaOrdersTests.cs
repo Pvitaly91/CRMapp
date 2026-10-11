@@ -19,6 +19,12 @@ internal static class RozetkaOrdersTests
         ("Rozetka bounded reauthentication handles HTTP and JSON expiry", ReauthenticationAsync),
         ("Rozetka repeated pages and missing metadata cannot claim completion", InvalidPaginationAsync),
         ("Rozetka connection check rejects a success envelope without orders", ConnectionShapeAsync),
+        ("Rozetka repeated refresh reuses only confirmed UUIDs while order fields stay fresh", FiscalCacheReuseAsync),
+        ("Rozetka changed fiscal assertions, dates and credentials invalidate UUID reuse", FiscalCacheInvalidationAsync),
+        ("Rozetka canceled orders remain present without stale fiscal inference", FiscalCacheCanceledAsync),
+        ("Rozetka failed and code-only fiscal reads are retried on the next refresh", FiscalCacheNegativeAsync),
+        ("Rozetka successful fiscal cache evicts older documents at its bounded limit", FiscalCacheBoundedAsync),
+        ("Rozetka API rows outside the requested dates do not trigger hydration", OutOfRangeHydrationAsync),
         ("Rozetka cancellation propagates", CancellationAsync)
     ];
 
@@ -250,6 +256,177 @@ internal static class RozetkaOrdersTests
             throw new InvalidOperationException("Malformed list accepted as valid credentials/read access.");
         }
         catch (System.IO.InvalidDataException) { }
+    }
+
+    private static object FiscalRow(int id = 100, int prroStatus = 1, string code = "FISCAL-TEST", string changed = "2026-09-23 11:00:00",
+        string status = "1", string amount = "100.10", string tracking = "TTN-TEST", string provider = "Checkbox", string organization = "") => new
+    {
+        id, created = "2026-09-23 10:00:00", changed, status, cost_with_discount = amount, ttn = tracking,
+        user = new { contact_fio = "Покупець" }, purchases = Array.Empty<object>(),
+        prro = new { prro_receipt_status = prroStatus, prro_receipt_fiscal_code = code, prro_receipt_service_name = provider, organization_id = organization }
+    };
+
+    private const string FiscalUuidUrl = "https://api.checkbox.ua/api/v1/receipts/00000000-0000-0000-0000-000000000100/html";
+
+    private static async Task FiscalCacheReuseAsync()
+    {
+        var pages = 0;
+        var fiscalReads = 0;
+        var handler = new Handler(request =>
+        {
+            if (request.Method == HttpMethod.Post) return Task.FromResult(Login());
+            if (request.RequestUri!.AbsolutePath == "/orders/search")
+            {
+                pages++;
+                return Task.FromResult(Page(1, 1, Enumerable.Range(100, 20).Select(id => FiscalRow(id,
+                    amount: pages == 1 ? "100.10" : "125.20", tracking: pages == 1 ? "OLD-TTN" : "NEW-TTN")).ToArray()));
+            }
+            fiscalReads++;
+            return Task.FromResult(request.RequestUri.Query == "?type=link"
+                ? Json(new { success = false, errors = new { code = 15005 } })
+                : Json(new { success = true, content = new { url = FiscalUuidUrl } }));
+        });
+        using var http = new HttpClient(handler);
+        var client = new RozetkaOrdersClient(new MarketplaceHttpTransport(http));
+        for (var refresh = 0; refresh < 4; refresh++)
+        {
+            var result = await client.FetchAsync(Connection, Credentials, Range);
+            True(result.Complete); Equal(20, result.Orders.Count);
+            True(result.Orders.All(o => o.FiscalReceiptUrls.Single() == FiscalUuidUrl));
+            if (refresh > 0)
+            {
+                True(result.Orders.All(o => o.Total == 125.20m));
+                True(result.Orders.All(o => o.Shipments.Single().TrackingNumber == "NEW-TTN"));
+            }
+        }
+        Equal(4, pages); Equal(40, fiscalReads); // Formerly 160 PRRO requests for the same immutable documents.
+    }
+
+    private static async Task FiscalCacheInvalidationAsync()
+    {
+        object row = FiscalRow();
+        var reads = 0;
+        var permissions = true;
+        var handler = new Handler(request =>
+        {
+            if (request.Method == HttpMethod.Post) return Task.FromResult(permissions ? Login() :
+                Json(new { success = true, content = new { access_token = "test-session", permissions = Array.Empty<string>() } }));
+            if (request.RequestUri!.AbsolutePath == "/orders/search") return Task.FromResult(Page(1, 1, row));
+            reads++;
+            return Task.FromResult(Json(new { success = true, content = new { url = FiscalUuidUrl } }));
+        });
+        using var http = new HttpClient(handler);
+        var client = new RozetkaOrdersClient(new MarketplaceHttpTransport(http));
+        async Task Refresh(int expected, MarketplaceCredentials? credentials = null, MarketplaceConnection? connection = null)
+        {
+            True((await client.FetchAsync(connection ?? Connection, credentials ?? Credentials, Range)).Complete);
+            Equal(expected, reads);
+        }
+        await Refresh(1); await Refresh(1);
+        row = FiscalRow(code: "NEW-FISCAL"); await Refresh(2); await Refresh(2);
+        row = FiscalRow(code: "NEW-FISCAL", changed: "2026-09-23 12:00:00"); await Refresh(3);
+        row = FiscalRow(code: "NEW-FISCAL", changed: "2026-09-23 12:00:00", provider: "Changed provider"); await Refresh(4);
+        row = FiscalRow(code: "NEW-FISCAL", changed: "2026-09-23 12:00:00", provider: "Changed provider", organization: "changed-context"); await Refresh(5);
+        await Refresh(6, Credentials with { Password = "different-demo-password" });
+        await Refresh(7, Credentials with { Login = "different-demo-seller" });
+        await Refresh(8, connection: new() { Id = "other-connection", Marketplace = MarketplaceKind.Rozetka });
+        row = FiscalRow(prroStatus: 0); await Refresh(8);
+        row = FiscalRow(code: "NEW-FISCAL", changed: "2026-09-23 12:00:00", provider: "Changed provider", organization: "changed-context"); await Refresh(9);
+        permissions = false;
+        var denied = await client.FetchAsync(Connection, Credentials, Range);
+        Equal(0, denied.Orders.Single().FiscalReceiptUrls.Count); Equal(9, reads);
+        permissions = true; await Refresh(10);
+    }
+
+    private static async Task FiscalCacheCanceledAsync()
+    {
+        var canceled = false;
+        var denied = false;
+        var reads = 0;
+        var handler = new Handler(request =>
+        {
+            if (request.Method == HttpMethod.Post) return Task.FromResult(Login());
+            if (request.RequestUri!.AbsolutePath == "/orders/search")
+                return Task.FromResult(Page(1, 1, FiscalRow(status: canceled ? "canceled" : "1")));
+            reads++;
+            return Task.FromResult(denied ? new HttpResponseMessage(HttpStatusCode.Forbidden) :
+                Json(new { success = true, content = new { url = FiscalUuidUrl } }));
+        });
+        using var http = new HttpClient(handler);
+        var client = new RozetkaOrdersClient(new MarketplaceHttpTransport(http));
+        var active = (await client.FetchAsync(Connection, Credentials, Range)).Orders.Single();
+        Equal(FiscalUuidUrl, active.FiscalReceiptUrls.Single());
+        canceled = true; denied = true;
+        var unavailable = (await client.FetchAsync(Connection, Credentials, Range)).Orders.Single();
+        True(unavailable.IsCanceled); Equal(0, unavailable.FiscalReceiptUrls.Count); Equal(2, reads);
+        denied = false;
+        var confirmed = (await client.FetchAsync(Connection, Credentials, Range)).Orders.Single();
+        True(confirmed.IsCanceled); Equal(FiscalUuidUrl, confirmed.FiscalReceiptUrls.Single()); Equal(3, reads);
+        var again = (await client.FetchAsync(Connection, Credentials, Range)).Orders.Single();
+        True(again.IsCanceled); Equal(FiscalUuidUrl, again.FiscalReceiptUrls.Single()); Equal(3, reads);
+    }
+
+    private static async Task FiscalCacheNegativeAsync()
+    {
+        foreach (var url in new[] { "", "https://api.checkbox.ua/api/v1/receipts/ABC12345678/html", "https://kasa.example/display" })
+        {
+            var reads = 0;
+            var handler = new Handler(request =>
+            {
+                if (request.Method == HttpMethod.Post) return Task.FromResult(Login());
+                if (request.RequestUri!.AbsolutePath == "/orders/search") return Task.FromResult(Page(1, 1, FiscalRow()));
+                reads++;
+                return Task.FromResult(url.Length == 0 ? new HttpResponseMessage(HttpStatusCode.Forbidden) :
+                    Json(new { success = true, content = new { url } }));
+            });
+            using var http = new HttpClient(handler);
+            var client = new RozetkaOrdersClient(new MarketplaceHttpTransport(http));
+            await client.FetchAsync(Connection, Credentials, Range);
+            var first = reads; True(first > 0);
+            await client.FetchAsync(Connection, Credentials, Range);
+            Equal(first * 2, reads);
+        }
+    }
+
+    private static async Task FiscalCacheBoundedAsync()
+    {
+        var phase = 0;
+        var reads = 0;
+        var handler = new Handler(request =>
+        {
+            if (request.Method == HttpMethod.Post) return Task.FromResult(Login());
+            if (request.RequestUri!.AbsolutePath == "/orders/search")
+                return Task.FromResult(Page(1, 1, phase == 0
+                    ? Enumerable.Range(100, 1024).Select(id => FiscalRow(id)).ToArray()
+                    : new[] { FiscalRow(phase switch { 2 => 1124, 4 => 101, _ => 100 }) }));
+            reads++;
+            return Task.FromResult(Json(new { success = true, content = new { url = FiscalUuidUrl } }));
+        });
+        using var http = new HttpClient(handler);
+        var client = new RozetkaOrdersClient(new MarketplaceHttpTransport(http));
+        foreach (var expected in new[] { 1024, 1024, 1025, 1025, 1026 })
+        {
+            True((await client.FetchAsync(Connection, Credentials, Range)).Complete);
+            Equal(expected, reads); phase++;
+        }
+    }
+
+    private static async Task OutOfRangeHydrationAsync()
+    {
+        foreach (var malformedPage in new[] { false, true })
+        {
+            var handler = new Handler(request =>
+            {
+                if (request.Method == HttpMethod.Post) return Task.FromResult(Login());
+                Equal("/orders/search", request.RequestUri!.AbsolutePath);
+                return Task.FromResult(Page(1, malformedPage ? 2 : 1,
+                    new { id = 99, created = "2026-08-31 23:59:59" },
+                    new { id = 100, created = "2026-09-24 00:00:00" }));
+            });
+            using var http = new HttpClient(handler);
+            var result = await new RozetkaOrdersClient(new MarketplaceHttpTransport(http)).FetchAsync(Connection, Credentials, Range);
+            Equal(!malformedPage, result.Complete); Equal(0, result.Orders.Count);
+        }
     }
 
     private static void True(bool value) { if (!value) throw new InvalidOperationException("Assertion failed."); }

@@ -18,7 +18,7 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
     private bool _saving;
     private bool _updatingCredentialFields;
     private long _selectionRevision, _loginEditRevision;
-    private int _historyDays = 30, _cacheDays = 30;
+    private int _historyDays, _cacheDays = 30;
     private readonly Dictionary<string, MarketplaceCredentials> _pending = [];
     private readonly Dictionary<string, bool?> _savedPresence = [];
     private readonly Dictionary<string, string> _savedLogins = [];

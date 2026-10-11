@@ -81,7 +81,7 @@ internal static partial class MarketplaceViewModelTests
             var receipt = main.Receipts.Single(r => r.Id == ReceiptOne);
             Equal(ReceiptLinkState.Exact, receipt.OrderMatch!.State); Equal("100", receipt.OrderMatch.Order!.Number);
             True(workspace.AllOrderRows.Single(r => r.Number == "100").HasConfirmedLink);
-            Equal(2, fixture.Rozetka.FetchCalls); // One fetch per configured duplicate connection; no second refresh.
+            Equal(1, fixture.Rozetka.FetchCalls); // Equivalent connections share one account fetch; no second refresh.
             Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
         }
         finally { fixture.ReceiptSource.Gate.TrySetResult(true); main.CancelPendingOperations(); await refreshing; }

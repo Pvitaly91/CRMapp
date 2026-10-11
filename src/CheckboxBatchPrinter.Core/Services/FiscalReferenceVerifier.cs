@@ -24,13 +24,21 @@ public sealed class FiscalReferenceVerifier(CheckboxApiClient api, ISettingsServ
         {
             var references = new List<FiscalDocumentReference>();
             var status = order.FiscalDataStatus;
+            var uuidDocuments = order.FiscalReferences.Where(reference => reference.Order == order.Key &&
+                    reference.Source.Length > 0 && reference.DocumentId.Length > 0 &&
+                    string.Equals(reference.Provider, "Checkbox", StringComparison.OrdinalIgnoreCase) && HasReceiptUuid(reference))
+                .Select(reference => reference.DocumentId).ToHashSet(StringComparer.Ordinal);
             foreach (var raw in order.FiscalReferences)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var reference = raw with { VerifiedReceiptId = "", VerifiedAccountContext = "" };
                 var code = reference.Kind == FiscalDocumentKeyKind.FiscalCode ? reference.Value :
                     reference.Kind == FiscalDocumentKeyKind.CheckboxReceiptUrl && CheckboxReceiptReference.TryParseUrl(reference.Value, out var parsed) ? parsed.FiscalCode : "";
+                // The matcher checks every UUID, fiscal code and cashier assertion in
+                // this document together. Resolving its code again adds no evidence;
+                // keep the code unchanged so disagreements still become conflicts.
                 if (reference.Order == order.Key && reference.Provider == "Checkbox" && code.Length > 0 &&
+                    !uuidDocuments.Contains(reference.DocumentId) &&
                     (reference.OrganizationId.Length > 0 || reference.CashRegisterFiscalNumber.Length > 0))
                 {
                     try
@@ -63,6 +71,13 @@ public sealed class FiscalReferenceVerifier(CheckboxApiClient api, ISettingsServ
         return PrintAccountContext.Create(current) == accountContext ? result :
             WithoutVerification(orders, "Касира змінено під час перевірки. Оновіть чеки та замовлення.");
     }
+
+    private static bool HasReceiptUuid(FiscalDocumentReference reference) => reference.Kind switch
+    {
+        FiscalDocumentKeyKind.CheckboxReceiptUuid => Guid.TryParseExact(reference.Value, "D", out var id) && id != Guid.Empty,
+        FiscalDocumentKeyKind.CheckboxReceiptUrl => CheckboxReceiptReference.TryParseUrl(reference.Value, out var parsed) && parsed.ReceiptId.Length > 0,
+        _ => false
+    };
 
     private static IReadOnlyList<MarketplaceOrder> WithoutVerification(IReadOnlyList<MarketplaceOrder> orders, string status) =>
         orders.Select(order => order with

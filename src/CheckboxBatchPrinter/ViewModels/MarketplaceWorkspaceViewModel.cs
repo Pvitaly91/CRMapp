@@ -550,33 +550,8 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
             var snapshot = await _sync.SynchronizeAsync(_config, range, known, token);
             token.ThrowIfCancellationRequested();
             if (generation != _generation) return;
-            _snapshot = snapshot;
-            if (_fiscalVerifier is not null && _account.Length > 0)
-            {
-                var verified = await _fiscalVerifier.VerifyAsync(ActiveOrders, _account, token);
-                token.ThrowIfCancellationRequested();
-                if (generation != _generation) return;
-                _snapshot = new(verified, snapshot.States);
-            }
-            var enabled = _config.Connections.Where(c => c.Enabled).ToArray();
-            var ordersComplete = enabled.All(c => _snapshot.States.Any(s => s.ConnectionId == c.Id && s.Complete && s.Range == range));
-            if (!ordersComplete && !background)
-                _orderCoverage.RemoveAll(r => r.From <= range.From && r.ToExclusive >= range.ToExclusive);
-            if (ordersComplete && !_orderCoverage.Contains(range))
-            {
-                _orderCoverage.Add(range);
-                if (_orderCoverage.Count > 256)
-                {
-                    var old = _orderCoverage.FindIndex(r =>
-                        !(r.From <= MatchScope.OrderRange!.From && r.ToExclusive >= MatchScope.OrderRange.ToExclusive));
-                    _orderCoverage.RemoveAt(old < 0 ? 0 : old);
-                }
-            }
-            _coverageComplete = HasCoverage(_from, _to);
-            Status = $"Діапазон замовлень: {range.From:dd.MM.yyyy} — {range.ToExclusive.AddDays(-1):dd.MM.yyyy} (Київ). " +
-                string.Join(" | ", enabled.Select(c => { var s = _snapshot.States.FirstOrDefault(s => s.ConnectionId == c.Id); return $"{c.Name}: {s?.Message} Успішне оновлення: {s?.LastSuccessUtc?.ToLocalTime().ToString("dd.MM HH:mm") ?? "немає"}"; }));
-            _loadingDetails.UnionWith(DetailTargets(syncFrom, syncTo).Take(100).Select(r => r.Id));
-            ApplyMatches(); // Orders are visible before optional Checkbox detail reads finish.
+            using var fiscalPublication = BlockFiscalPublication();
+            var returnsComplete = true;
             // Return receipts may carry a documented original receipt ID; fetch only these details.
             foreach (var row in _rows.Where(r => ReceiptCoverageFresh && _account.Length > 0 && r.RawType == ReceiptTypes.Return && !_receiptDetails.ContainsKey(r.Id) &&
                 (!background || IsInRange(r, syncFrom, syncTo))))
@@ -593,9 +568,40 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
                 catch (Exception)
                 {
                     if (generation != _generation) return;
-                    _coverageComplete = false; Status += " Деталі повернення недоступні.";
+                    returnsComplete = false;
                 }
             }
+            if (_fiscalVerifier is not null && _account.Length > 0)
+            {
+                var verified = await VerifyFiscalReferencesInPeriodAsync(ActiveOrdersFrom(snapshot), syncFrom, syncTo, token);
+                token.ThrowIfCancellationRequested();
+                if (generation != _generation) return;
+                snapshot = new(verified, snapshot.States);
+            }
+            token.ThrowIfCancellationRequested();
+            if (generation != _generation) return;
+            fiscalPublication?.Dispose();
+            _snapshot = snapshot;
+            var enabled = _config.Connections.Where(c => c.Enabled).ToArray();
+            var ordersComplete = enabled.All(c => _snapshot.States.Any(s => s.ConnectionId == c.Id && s.Complete && s.Range == range));
+            if (!ordersComplete && !background)
+                _orderCoverage.RemoveAll(r => r.From <= range.From && r.ToExclusive >= range.ToExclusive);
+            if (ordersComplete && !_orderCoverage.Contains(range))
+            {
+                _orderCoverage.Add(range);
+                if (_orderCoverage.Count > 256)
+                {
+                    var old = _orderCoverage.FindIndex(r =>
+                        !(r.From <= MatchScope.OrderRange!.From && r.ToExclusive >= MatchScope.OrderRange.ToExclusive));
+                    _orderCoverage.RemoveAt(old < 0 ? 0 : old);
+                }
+            }
+            _coverageComplete = HasCoverage(_from, _to) && returnsComplete;
+            Status = $"Діапазон замовлень: {range.From:dd.MM.yyyy} — {range.ToExclusive.AddDays(-1):dd.MM.yyyy} (Київ). " +
+                string.Join(" | ", enabled.Select(c => { var s = _snapshot.States.FirstOrDefault(s => s.ConnectionId == c.Id); return $"{c.Name}: {s?.Message} Успішне оновлення: {s?.LastSuccessUtc?.ToLocalTime().ToString("dd.MM HH:mm") ?? "немає"}"; })) +
+                (returnsComplete ? "" : " Деталі повернення недоступні.");
+            _loadingDetails.UnionWith(DetailTargets(syncFrom, syncTo).Take(100).Select(r => r.Id));
+            ApplyMatches();
             if (ordersComplete && ReceiptCoverageFresh && _account.Length > 0 && HasReceiptCoverage(syncFrom, syncTo))
                 await LoadBasketDetailsAsync(generation, token, syncFrom, syncTo);
             ApplyMatches();
@@ -635,7 +641,8 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
     internal OrderKey NormalizeOrderKey(OrderKey key) => _deduplication.NormalizeKey(key);
     internal (int Generation, string Account, DateOnly From, DateOnly To, DateOnly? DisplayFrom, DateOnly? DisplayTo) SelectionScope =>
         (_generation, _account, _from, _to, _displayFrom, _displayTo);
-    private IReadOnlyList<MarketplaceOrder> ActiveOrders => _deduplication.Merge(_snapshot.Orders.Where(o =>
+    private IReadOnlyList<MarketplaceOrder> ActiveOrders => ActiveOrdersFrom(_snapshot);
+    private IReadOnlyList<MarketplaceOrder> ActiveOrdersFrom(MarketplaceSnapshot snapshot) => _deduplication.Merge(snapshot.Orders.Where(o =>
         _config.Connections.Any(c => c.Enabled && c.Id == o.Key.ConnectionId && c.Marketplace == o.Key.Marketplace)));
 
     private bool MatchesOrderFilter(object value)
@@ -894,6 +901,7 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
     private void ApplyMatches(bool? backgroundOnly = null)
     {
         if (!_canApply) return;
+        if (_pendingFiscalPublications.Any(block => block.IsCurrent)) return;
         if (_parallelPublishing && Labels?.IsPrintOperationActive == true) return;
         var backgroundMode = backgroundOnly ?? _backgroundSyncing;
         var orders = ActiveOrders;

@@ -67,7 +67,7 @@ public sealed partial class MarketplaceWorkspaceViewModel
                 display != (_displayFrom, _displayTo) || expectedAccount.Length > 0 && _account.Length > 0 && expectedAccount != _account)
                 return false;
             if (Labels is { } labelOperation) await labelOperation.WaitForPrintOperationAsync(ct);
-            await EnsureAttachedAsync();
+            await EnsureAttachedBeforeFiscalPublicationAsync();
             ct.ThrowIfCancellationRequested();
             if (configurationVersion != _configurationVersion || accountVersion != _parallelAccountVersion ||
                 display != (_displayFrom, _displayTo) || expectedAccount.Length > 0 && _account.Length > 0 && expectedAccount != _account) return false;
@@ -119,27 +119,8 @@ public sealed partial class MarketplaceWorkspaceViewModel
     private async Task<bool> ApplyParallelSnapshotAsync(MarketplaceSnapshot snapshot, MarketplaceRange range, DateOnly from, DateOnly to,
         int generation, int configurationVersion, int accountVersion, (DateOnly?, DateOnly?) display, bool background, CancellationToken token)
     {
-        _snapshot = snapshot;
-        if (_fiscalVerifier is not null && _account.Length > 0)
-        {
-            var verified = await _fiscalVerifier.VerifyAsync(ActiveOrders, _account, token);
-            token.ThrowIfCancellationRequested();
-            if (!IsCurrentParallelContext(generation, configurationVersion, accountVersion, display)) return false;
-            _snapshot = new(verified, snapshot.States);
-        }
-        var enabled = _config.Connections.Where(c => c.Enabled).ToArray();
-        var ordersComplete = enabled.All(c => _snapshot.States.Any(s => s.ConnectionId == c.Id && s.Complete && s.Range == range));
-        if (!ordersComplete && !background) _orderCoverage.RemoveAll(r => r.From <= range.From && r.ToExclusive >= range.ToExclusive);
-        if (ordersComplete && !_orderCoverage.Contains(range))
-        {
-            _orderCoverage.Add(range);
-            if (_orderCoverage.Count > 256) _orderCoverage.RemoveAt(0);
-        }
-        _coverageComplete = HasCoverage(_from, _to);
-        Status = $"Діапазон замовлень: {range.From:dd.MM.yyyy} — {range.ToExclusive.AddDays(-1):dd.MM.yyyy} (Київ). " +
-            string.Join(" | ", enabled.Select(c => { var s = _snapshot.States.FirstOrDefault(s => s.ConnectionId == c.Id); return $"{c.Name}: {s?.Message} Успішне оновлення: {s?.LastSuccessUtc?.ToLocalTime().ToString("dd.MM HH:mm") ?? "немає"}"; }));
-        _loadingDetails.UnionWith(DetailTargets(from, to).Take(100).Select(r => r.Id));
-        ApplyMatches();
+        using var fiscalPublication = BlockFiscalPublication();
+        var returnsComplete = true;
         foreach (var row in _rows.Where(r => ReceiptCoverageFresh && _account.Length > 0 && r.RawType == ReceiptTypes.Return &&
             !_receiptDetails.ContainsKey(r.Id) && (!background || IsInRange(r, from, to))))
         {
@@ -152,8 +133,36 @@ public sealed partial class MarketplaceWorkspaceViewModel
                 RememberDetails(row, details);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-            catch (Exception) { if (!IsCurrentParallelContext(generation, configurationVersion, accountVersion, display)) return false; _coverageComplete = false; Status += " Деталі повернення недоступні."; }
+            catch (Exception) { if (!IsCurrentParallelContext(generation, configurationVersion, accountVersion, display)) return false; returnsComplete = false; }
         }
+        if (_fiscalVerifier is not null && _account.Length > 0)
+        {
+            // Return details must be available before selecting fiscal verification
+            // targets: their original sale can be outside the displayed period.
+            var verified = await VerifyFiscalReferencesInPeriodAsync(ActiveOrdersFrom(snapshot), from, to, token);
+            token.ThrowIfCancellationRequested();
+            if (!IsCurrentParallelContext(generation, configurationVersion, accountVersion, display)) return false;
+            snapshot = new(verified, snapshot.States);
+        }
+        if (Labels is { } pendingPrint) await pendingPrint.WaitForPrintOperationAsync(token);
+        token.ThrowIfCancellationRequested();
+        if (!IsCurrentParallelContext(generation, configurationVersion, accountVersion, display)) return false;
+        fiscalPublication?.Dispose();
+        _snapshot = snapshot;
+        var enabled = _config.Connections.Where(c => c.Enabled).ToArray();
+        var ordersComplete = enabled.All(c => _snapshot.States.Any(s => s.ConnectionId == c.Id && s.Complete && s.Range == range));
+        if (!ordersComplete && !background) _orderCoverage.RemoveAll(r => r.From <= range.From && r.ToExclusive >= range.ToExclusive);
+        if (ordersComplete && !_orderCoverage.Contains(range))
+        {
+            _orderCoverage.Add(range);
+            if (_orderCoverage.Count > 256) _orderCoverage.RemoveAt(0);
+        }
+        _coverageComplete = HasCoverage(_from, _to) && returnsComplete;
+        Status = $"Діапазон замовлень: {range.From:dd.MM.yyyy} — {range.ToExclusive.AddDays(-1):dd.MM.yyyy} (Київ). " +
+            string.Join(" | ", enabled.Select(c => { var s = _snapshot.States.FirstOrDefault(s => s.ConnectionId == c.Id); return $"{c.Name}: {s?.Message} Успішне оновлення: {s?.LastSuccessUtc?.ToLocalTime().ToString("dd.MM HH:mm") ?? "немає"}"; })) +
+            (returnsComplete ? "" : " Деталі повернення недоступні.");
+        _loadingDetails.UnionWith(DetailTargets(from, to).Take(100).Select(r => r.Id));
+        ApplyMatches();
         if (ordersComplete && ReceiptCoverageFresh && _account.Length > 0 && HasReceiptCoverage(from, to))
             await LoadBasketDetailsAsync(generation, token, from, to);
         if (Labels is { } printing) await printing.WaitForPrintOperationAsync(token);

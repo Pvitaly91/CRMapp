@@ -47,6 +47,7 @@ internal static partial class MarketplaceViewModelTests
         foreach (var tab in new[] { 0, 1, 2 })
         {
             var fixture = RefreshAllFixture();
+            Equal(0, fixture.Settings.Market.HistoryDays);
             var carrierSource = new RefreshAllWaybillSource();
             using var waybills = new WaybillsViewModel(carrierSource);
             var (main, workspace) = fixture.Create(waybills: waybills);
@@ -63,7 +64,7 @@ internal static partial class MarketplaceViewModelTests
                 Equal((fixture.ReceiptSource.LastFrom, fixture.ReceiptSource.LastTo),
                     (carrierSource.Calls[0].From, carrierSource.Calls[0].To));
                 var expectedRange = MarketplaceSyncService.BuildRange(fixture.ReceiptSource.LastFrom,
-                    fixture.ReceiptSource.LastTo, fixture.Settings.Market.HistoryDays);
+                    fixture.ReceiptSource.LastTo, 0);
                 Equal(expectedRange, fixture.Source.LastRange); Equal(expectedRange, fixture.Rozetka.LastRange);
                 Equal(3, main.Receipts.Count); Equal(2, workspace.AllOrderRows.Count); Equal(2, waybills.Rows.Count);
                 Equal(tab, main.SelectedTabIndex);

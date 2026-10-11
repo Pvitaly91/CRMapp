@@ -116,6 +116,7 @@ internal static class Program
         Tests.AddRange(MarketplaceViewModelTests.PrintCandidateScenarios);
         Tests.AddRange(MarketplaceViewModelTests.OrderSelectionBackgroundScenarios);
         Tests.AddRange(MarketplaceViewModelTests.RefreshAllScenarios);
+        Tests.AddRange(MarketplaceViewModelTests.FiscalVerificationScenarios);
         Tests.AddRange(MarketplaceViewModelTests.RozetkaSettingsScenarios);
         Tests.AddRange(MarketplaceViewModelTests.RozetkaDuplicateScenarios);
         Tests.AddRange(MarketplaceViewModelTests.RozetkaExactIdScenarios);

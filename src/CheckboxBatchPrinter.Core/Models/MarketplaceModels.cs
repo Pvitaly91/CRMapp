@@ -17,7 +17,7 @@ public sealed class MarketplaceConnection
 
 public sealed class MarketplaceSettings
 {
-    public int HistoryDays { get; set; } = 30;
+    public int HistoryDays { get; set; }
     public int CacheDays { get; set; } = 30;
     public List<MarketplaceConnection> Connections { get; set; } = [];
 }

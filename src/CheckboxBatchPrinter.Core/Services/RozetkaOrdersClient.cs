@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using CheckboxBatchPrinter.Core.Models;
@@ -16,6 +17,10 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
     private const string FiscalLinkSource = "GET /prro/receipt/{order_id}?type=link: content.url";
     private const string FiscalHtmlSource = "GET /prro/receipt/{order_id}?type=html: content.url";
     private const int PageLimit = 1000;
+    private const int FiscalCacheLimit = 1024;
+    private readonly object _fiscalCacheLock = new();
+    private readonly Dictionary<FiscalCacheKey, CachedFiscalUrl> _fiscalCache = new();
+    private readonly LinkedList<FiscalCacheKey> _fiscalCacheRecency = new();
     private static readonly TimeZoneInfo Kyiv = TimeZoneInfo.FindSystemTimeZoneById("FLE Standard Time");
     public MarketplaceKind Marketplace => MarketplaceKind.Rozetka;
 
@@ -35,6 +40,7 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
         Validate(connection, credentials);
         if (range.ToExclusive <= range.From) throw new ArgumentException("Некоректний діапазон дат замовлень.");
         var orders = new Dictionary<string, MarketplaceOrder>(StringComparer.Ordinal);
+        var seenOrderIds = new HashSet<string>(StringComparer.Ordinal);
         var complete = true;
         var warning = "Rozetka: дати без часового поясу трактуються як Europe/Kyiv; API не документує пояс.";
         try
@@ -57,15 +63,17 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
                 foreach (var row in rows.EnumerateArray())
                 {
                     var order = ParseOrder(row, connection);
+                    if (seenOrderIds.Add(order.Key.OrderId)) idsOnPage.Add(order.Key.OrderId);
+                    // A server-side date filter is not permission to hydrate unrelated history.
+                    // Still count these IDs for pagination progress and validate every page below.
+                    if (order.CreatedAt is { } created && (created < range.From || created >= range.ToExclusive)) continue;
                     if (order.CreatedAt is null)
                     {
                         complete = false;
                         warning = "Частина замовлень Rozetka має невизначену дату; повноту діапазону не підтверджено.";
                     }
                     var previous = orders.GetValueOrDefault(order.Key.OrderId);
-                    var isNew = previous is null;
                     orders[order.Key.OrderId] = MarketplaceFiscalEvidence.Preserve(order, previous);
-                    if (isNew) idsOnPage.Add(order.Key.OrderId);
                     var data = row;
                     // DetailExpand does not document prro. Keep list PRRO data even if details omit/null it.
                     if (!row.TryGetProperty("purchases", out _) ||
@@ -84,7 +92,7 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
                             warning = "Частина деталей Rozetka недоступна; отримані замовлення збережені.";
                         }
                     }
-                    var fiscal = await ReadFiscalUrlAsync(data, order.Key.OrderId, session, credentials, cancellationToken);
+                    var fiscal = await ReadFiscalUrlAsync(data, connection.Id, order.Key.OrderId, session, credentials, cancellationToken);
                     orders[order.Key.OrderId] = MarketplaceFiscalEvidence.Preserve(
                         ParseOrder(data, connection, fiscal.Url, fiscal.Source) with { FiscalDataStatus = fiscal.Status },
                         MarketplaceFiscalEvidence.Preserve(order, previous));
@@ -114,14 +122,23 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
         using var detail = await ReadAsync($"/orders/{orderId}?expand={DetailExpand}", session, credentials, cancellationToken);
         var data = Field(detail.RootElement, "content");
         if (Text(data, "id") != orderId) throw new InvalidDataException("Rozetka повернула інше замовлення.");
-        var fiscal = await ReadFiscalUrlAsync(data, orderId, session, credentials, cancellationToken);
+        var fiscal = await ReadFiscalUrlAsync(data, connection.Id, orderId, session, credentials, cancellationToken);
         return ParseOrder(data, connection, fiscal.Url, fiscal.Source) with { FiscalDataStatus = fiscal.Status };
     }
 
-    private async Task<(string? Url, string Status, string Source)> ReadFiscalUrlAsync(JsonElement data, string orderId,
+    private async Task<(string? Url, string Status, string Source)> ReadFiscalUrlAsync(JsonElement data, string connectionId, string orderId,
         Session session, MarketplaceCredentials credentials, CancellationToken cancellationToken)
     {
-        if (!session.CanReadPrro) return (null, "Немає права prro_access для читання посилання. Це не означає, що чека немає.", "");
+        cancellationToken.ThrowIfCancellationRequested();
+        var cacheKey = new FiscalCacheKey(CredentialFingerprint(credentials), connectionId, orderId);
+        // Fresh order fields (including cancellation), PRRO assertions and update time must
+        // still agree. Only immutable, strictly parsed Checkbox UUID URLs are reused.
+        var fingerprint = FiscalFingerprint(data);
+        if (!session.CanReadPrro)
+        {
+            ForgetFiscalUrl(cacheKey);
+            return (null, "Немає права prro_access для читання посилання. Це не означає, що чека немає.", "");
+        }
         try
         {
             var status = Integer(Field(data, "prro"), "prro_receipt_status");
@@ -131,8 +148,13 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
                 using var state = await ReadAsync($"/prro/receipt-status/{orderId}", session, credentials, cancellationToken);
                 status = Integer(Field(state.RootElement, "content"), "status");
             }
-            if (status == 0) return (null, "Rozetka повідомляє: чек ще не фіскалізований.", "");
-            if (status != 1) return (null, "Статус PRRO невідомий; наявність чека не встановлена.", "");
+            if (status != 1)
+            {
+                ForgetFiscalUrl(cacheKey);
+                return (null, status == 0 ? "Rozetka повідомляє: чек ще не фіскалізований." :
+                    "Статус PRRO невідомий; наявність чека не встановлена.", "");
+            }
+            if (TryGetFiscalUrl(cacheKey, fingerprint, out var cached)) return (cached.Url, "", cached.Source);
             string? displayUrl = null;
             var displaySource = "";
             var authorizationFailed = false;
@@ -140,10 +162,15 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
             try
             {
                 using var receipt = await ReadAsync($"/prro/receipt/{orderId}?type=link", session, credentials, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 var candidate = Text(Field(receipt.RootElement, "content"), "url");
                 if (IsSafeDisplayUrl(candidate))
                 {
-                    if (CheckboxReceiptReference.TryParseUrl(candidate, out _)) return (candidate, "", FiscalLinkSource);
+                    if (CheckboxReceiptReference.TryParseUrl(candidate, out var parsed))
+                    {
+                        if (parsed.ReceiptId.Length > 0) RememberFiscalUrl(cacheKey, fingerprint, candidate, FiscalLinkSource);
+                        return (candidate, "", FiscalLinkSource);
+                    }
                     displayUrl = candidate;
                     displaySource = FiscalLinkSource;
                     warning = "Формат посилання PRRO не підтверджений як Checkbox; автоприв’язку за ним не виконано.";
@@ -164,10 +191,15 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
                 try
                 {
                     using var html = await ReadAsync($"/prro/receipt/{orderId}?type=html", session, credentials, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
                     var candidate = Text(Field(html.RootElement, "content"), "url");
                     if (IsSafeDisplayUrl(candidate))
                     {
-                        if (CheckboxReceiptReference.TryParseUrl(candidate, out _)) return (candidate, "", FiscalHtmlSource);
+                        if (CheckboxReceiptReference.TryParseUrl(candidate, out var parsed))
+                        {
+                            if (parsed.ReceiptId.Length > 0) RememberFiscalUrl(cacheKey, fingerprint, candidate, FiscalHtmlSource);
+                            return (candidate, "", FiscalHtmlSource);
+                        }
                         if (displayUrl is null)
                         {
                             displayUrl = candidate;
@@ -184,6 +216,66 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
         catch (Exception exception) when (IsRecoverable(exception, cancellationToken))
         { return (null, "Читання наявного PRRO-документа недоступне; це не означає, що чека немає.", ""); }
     }
+
+    private static string CredentialFingerprint(MarketplaceCredentials credentials) =>
+        Fingerprint([credentials.Login.Trim(), credentials.Password]);
+
+    private static string FiscalFingerprint(JsonElement data) => Fingerprint(
+        new[] { "changed", "prro", "status", "status_data", "organization", "organization_id",
+            "cash_register", "cash_register_id", "cash_register_fiscal_number" }
+        .Select(name => Field(data, name) is { ValueKind: not JsonValueKind.Undefined } value ? value.GetRawText() : "").ToArray());
+
+    private static string Fingerprint(string[] values)
+    {
+        // Cache keys contain a digest, never retained login/password strings. Nothing is persisted.
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(values);
+        try { return Convert.ToHexString(SHA256.HashData(bytes)); }
+        finally { CryptographicOperations.ZeroMemory(bytes); }
+    }
+
+    private bool TryGetFiscalUrl(FiscalCacheKey key, string fingerprint, out CachedFiscalUrl value)
+    {
+        lock (_fiscalCacheLock)
+        {
+            if (_fiscalCache.TryGetValue(key, out var cached))
+            {
+                _fiscalCacheRecency.Remove(cached.Node);
+                if (cached.Fingerprint == fingerprint)
+                {
+                    _fiscalCacheRecency.AddFirst(cached.Node);
+                    value = cached;
+                    return true;
+                }
+                _fiscalCache.Remove(key);
+            }
+            value = null!;
+            return false;
+        }
+    }
+
+    private void RememberFiscalUrl(FiscalCacheKey key, string fingerprint, string url, string source)
+    {
+        lock (_fiscalCacheLock)
+        {
+            if (_fiscalCache.Remove(key, out var previous)) _fiscalCacheRecency.Remove(previous.Node);
+            var node = _fiscalCacheRecency.AddFirst(key);
+            _fiscalCache[key] = new(fingerprint, url, source, node);
+            while (_fiscalCache.Count > FiscalCacheLimit && _fiscalCacheRecency.Last is { } oldest)
+            {
+                _fiscalCache.Remove(oldest.Value);
+                _fiscalCacheRecency.RemoveLast();
+            }
+        }
+    }
+
+    private void ForgetFiscalUrl(FiscalCacheKey key)
+    {
+        lock (_fiscalCacheLock)
+            if (_fiscalCache.Remove(key, out var previous)) _fiscalCacheRecency.Remove(previous.Node);
+    }
+
+    private sealed record FiscalCacheKey(string Credentials, string ConnectionId, string OrderId);
+    private sealed record CachedFiscalUrl(string Fingerprint, string Url, string Source, LinkedListNode<FiscalCacheKey> Node);
 
     private static bool IsSafeDisplayUrl(string candidate) =>
         Uri.TryCreate(candidate, UriKind.Absolute, out var uri) && uri.Scheme == "https" &&

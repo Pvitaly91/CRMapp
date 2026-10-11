@@ -89,7 +89,7 @@ internal static partial class MarketplaceViewModelTests
             if (rejected) True(receipt.OrderMatch?.Order is null && receipt.OrderMatch?.State != ReceiptLinkState.Suggested,
                 "Rejecting an alias must reject the canonical order rather than expose its other copy.");
             else Equal(ReceiptLinkState.Suggested, receipt.OrderMatch!.State);
-            Equal(2, fixture.Rozetka.FetchCalls); Equal(0, fixture.Source.FetchCalls);
+            Equal(1, fixture.Rozetka.FetchCalls); Equal(0, fixture.Source.FetchCalls);
             Equal(rejected ? 1 : 0, fixture.Links.Saves);
             Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
         }
@@ -122,7 +122,7 @@ internal static partial class MarketplaceViewModelTests
             "A marked alias must transfer its print selection when an unchanged source order becomes canonical.");
         Equal("rz-test", restarted.Receipts.Single().OrderMatch!.Order!.Key.ConnectionId);
         Equal(originalKey, (await fixture.Links.LoadAsync(account)).Single().ConfirmedOrder);
-        Equal(1, fixture.Links.Saves); Equal(6, fixture.Rozetka.FetchCalls);
+        Equal(1, fixture.Links.Saves); Equal(4, fixture.Rozetka.FetchCalls);
         Equal(0, fixture.Printer.Calls);
     }
 

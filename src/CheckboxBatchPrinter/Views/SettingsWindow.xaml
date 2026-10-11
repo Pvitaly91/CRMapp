@@ -106,8 +106,9 @@
                                    TextWrapping="Wrap" Foreground="#667085" Margin="6,5" />
                         <Button Content="Перевірити підключення" Command="{Binding TestCommand}" HorizontalAlignment="Left" />
                         <WrapPanel Margin="0,6">
-                            <TextBlock Text="Історія до дати чека, днів:" VerticalAlignment="Center" />
-                            <TextBox Text="{Binding HistoryDays}" Width="70" />
+                            <TextBlock Text="Додатково до «Дата від», днів:" VerticalAlignment="Center" />
+                            <TextBox Text="{Binding HistoryDays}" Width="70"
+                                     ToolTip="0 — завантажувати тільки вибрані дати. Більше значення додає попередні дні та збільшує час оновлення. Уже завантажена історія залишається в кеші." />
                             <TextBlock Text="Строк кешу, днів:" VerticalAlignment="Center" Margin="12,0,0,0" />
                             <TextBox Text="{Binding CacheDays}" Width="70" />
                         </WrapPanel>

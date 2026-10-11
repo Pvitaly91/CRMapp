@@ -32,6 +32,8 @@ internal static class FiscalLinkTests
         ("fiscal verifier: empty, denied, collision and changed account never manufacture proof", LookupFailureAsync),
         ("fiscal verifier: failures count toward request bound and duplicate keys do not retry", LookupBoundAsync),
         ("fiscal verifier: cashier change during HTTP read discards new and previous proof", AccountChangesDuringLookupAsync),
+        ("fiscal verifier: exact document UUID avoids redundant code lookup while retaining code and cashier conflicts", UuidAvoidsCodeLookupAsync),
+        ("fiscal verifier: unrelated or untrusted UUID cannot skip another document's code lookup", UuidLookupDocumentIsolationAsync),
         ("fiscal matching: same serial or code on another cash register is not a link", ContextIsolationAsync),
         ("fiscal matching: independent sale/return documents and manual decisions survive", MultipleAndManualAsync),
         ("fiscal cache: raw evidence persists but account verification does not", SerializationAsync),
@@ -276,6 +278,67 @@ internal static class FiscalLinkTests
         var rejected = (await verifier.VerifyAsync([stale], account)).Single();
         Equal(1, calls); // Already changed account: no further network request.
         True(rejected.FiscalReferences.All(r => r.VerifiedReceiptId.Length == 0));
+    }
+
+    private static async Task UuidAvoidsCodeLookupAsync()
+    {
+        var source = await Fetch(Url + "&organization_id=" + Organization);
+        var settings = new Settings(); var account = PrintAccountContext.Create(await settings.LoadAsync());
+        var calls = 0;
+        using var http = new HttpClient(new Handler(_ => { calls++; return ReceiptPage(Receipt()); }));
+        var verifier = new FiscalReferenceVerifier(new CheckboxApiClient(http, new Auth(), new Logger()), settings);
+        foreach (var mode in new[] { "url", "uuid", "wrong-code", "wrong-context", "conflicting-uuid", "missing-receipt-code" })
+        {
+            var refs = source.FiscalReferences.Select(reference => reference.Kind == FiscalDocumentKeyKind.FiscalCode
+                ? reference with { Value = mode == "wrong-code" ? "OTHER-CODE" : Code,
+                    CashRegisterFiscalNumber = mode == "wrong-context" ? "another-cash" : "000123" }
+                : mode == "uuid" ? reference with { Kind = FiscalDocumentKeyKind.CheckboxReceiptUuid, Value = ReceiptId } : reference).ToList();
+            if (mode == "conflicting-uuid") refs.Add(new(FiscalDocumentKeyKind.CheckboxReceiptUuid, OtherId,
+                "synthetic second UUID", source.Key, "Checkbox", "rozetka.prro", OrganizationId: Organization));
+            var order = source with { FiscalReferences = refs };
+            var verified = (await verifier.VerifyAsync([order], account)).Single();
+            Equal(0, calls); True(verified.FiscalReferences.SequenceEqual(refs));
+            var result = Match(verified, Receipt(code: mode == "missing-receipt-code" ? "" : Code), account: account);
+            if (mode is "url" or "uuid") Equal(ReceiptLinkState.Exact, result.State);
+            else if (mode == "missing-receipt-code") True(result.State != ReceiptLinkState.Exact);
+            else Equal(ReceiptLinkState.Conflict, result.State);
+        }
+    }
+
+    private static async Task UuidLookupDocumentIsolationAsync()
+    {
+        var source = await Fetch($"https://api.checkbox.ua/api/v1/receipts/{Code}/html?organization_id={Organization}");
+        var settings = new Settings(); var account = PrintAccountContext.Create(await settings.LoadAsync());
+        foreach (var mode in new[] { "other-document", "other-order", "other-provider", "no-source", "foreign-url", "empty-uuid" })
+        {
+            var uuid = new FiscalDocumentReference(FiscalDocumentKeyKind.CheckboxReceiptUuid, ReceiptId,
+                "synthetic UUID", source.Key, "Checkbox", "rozetka.prro");
+            uuid = mode switch
+            {
+                "other-document" => uuid with { DocumentId = "return" },
+                "other-order" => uuid with { Order = source.Key with { OrderId = "101" } },
+                "other-provider" => uuid with { Provider = "another-provider" },
+                "no-source" => uuid with { Source = "" },
+                "foreign-url" => uuid with { Kind = FiscalDocumentKeyKind.CheckboxReceiptUrl, Value = Url.Replace("api.checkbox.ua", "foreign.example") },
+                _ => uuid with { Value = Guid.Empty.ToString("D") }
+            };
+            var calls = 0;
+            using var http = new HttpClient(new Handler(_ => { calls++; return ReceiptPage(Receipt()); }));
+            var verifier = new FiscalReferenceVerifier(new CheckboxApiClient(http, new Auth(), new Logger()), settings);
+            var order = source with { FiscalReferences = source.FiscalReferences.Append(uuid).ToArray() };
+            var verified = (await verifier.VerifyAsync([order], account)).Single();
+            Equal(1, calls); Equal(order.FiscalReferences.Count, verified.FiscalReferences.Count);
+            var contextualCodes = verified.FiscalReferences.Where(reference => reference.Kind == FiscalDocumentKeyKind.FiscalCode &&
+                reference.OrganizationId == Organization).ToArray();
+            True(contextualCodes.Length > 0);
+            True(contextualCodes
+                .All(reference => reference.VerifiedReceiptId == ReceiptId && reference.VerifiedAccountContext == account));
+            // The adapter also retains the original list assertion without seller
+            // context; a successful lookup must not upgrade that bare code.
+            True(verified.FiscalReferences.Where(reference => reference.Kind == FiscalDocumentKeyKind.FiscalCode &&
+                    reference.OrganizationId.Length == 0 && reference.CashRegisterFiscalNumber.Length == 0)
+                .All(reference => reference.VerifiedReceiptId.Length == 0 && reference.VerifiedAccountContext.Length == 0));
+        }
     }
 
     private static async Task MultipleAndManualAsync()

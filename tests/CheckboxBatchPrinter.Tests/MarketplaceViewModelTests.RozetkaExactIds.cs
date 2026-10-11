@@ -50,7 +50,11 @@ internal static partial class MarketplaceViewModelTests
         var receipt = main.Receipts.Single(r => r.Id == ReceiptOne);
         Equal(ReceiptLinkState.Exact, receipt.OrderMatch!.State); Equal("100", receipt.OrderNumber);
         Equal("Точний фіскальний зв’язок", receipt.LinkStatus); True(receipt.LinkExplanation.Contains("За посиланням на чек"));
-        Equal(2, workspace.AllOrderRows.Count); Equal(3, fixture.Cache.Snapshot.Orders.Count);
+        Equal(2, workspace.AllOrderRows.Count); Equal(4, fixture.Cache.Snapshot.Orders.Count);
+        // Both same-account orders are persisted for both original connection keys,
+        // including the competitor that the synthetic response listed only once.
+        True(fixture.Cache.Snapshot.Orders.GroupBy(order => order.Key.OrderId).All(group =>
+            group.Select(order => order.Key.ConnectionId).ToHashSet().SetEquals(["rz-test", DuplicateRozetkaId])));
         True(workspace.AllOrderRows.Single(r => r.Number == "100").HasConfirmedLink);
         True(main.Receipts.Single(r => r.Id == ReceiptTwo).OrderMatch?.Order?.Key.OrderId != "100");
         receipt.IsSelectedForOrders = true;
@@ -66,7 +70,7 @@ internal static partial class MarketplaceViewModelTests
         Equal(fetches, fixture.Rozetka.FetchCalls);
         Equal(ReceiptLinkState.Exact, restarted.Receipts.Single(r => r.Id == ReceiptOne).OrderMatch!.State);
         Equal("100", restarted.Receipts.Single(r => r.Id == ReceiptOne).OrderNumber);
-        Equal(2, restored.AllOrderRows.Count); Equal(3, fixture.Cache.Snapshot.Orders.Count);
+        Equal(2, restored.AllOrderRows.Count); Equal(4, fixture.Cache.Snapshot.Orders.Count);
         True(fixture.Cache.Snapshot.Orders.Where(o => o.Number == "100").All(o =>
             o.FiscalReferences.Any(r => r.Kind == FiscalDocumentKeyKind.CheckboxReceiptUrl && r.Source.Contains("type=html"))));
         Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
