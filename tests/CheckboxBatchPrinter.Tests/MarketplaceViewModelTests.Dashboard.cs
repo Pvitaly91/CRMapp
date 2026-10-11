@@ -160,6 +160,26 @@ internal static partial class MarketplaceViewModelTests
                 await AssertIndexCell(rows[i]);
             }
 
+            // The status code supplied by Rozetka must override both its ordinary
+            // green row and its already-printed green row, then restore on reactivation.
+            workspace.ShowCanceledOrders = true;
+            foreach (var i in new[] { 1, 3 })
+            {
+                var original = rows[i].Model;
+                rows[i].Update(original with { SourceStatus = "45", Status = "Скасовано покупцем" }, rows[i].LinkedReceipts, []);
+                await DrainDispatcherAsync();
+                var canceledRow = await Realize(rows[i], indexColumn);
+                Equal(Color.FromRgb(0xFD, 0xE8, 0xE7), ((SolidColorBrush)canceledRow.Background).Color);
+                Equal(Color.FromRgb(0x8A, 0x20, 0x20), ((SolidColorBrush)canceledRow.Foreground).Color);
+                rows[i].Update(original with { SourceStatus = "46", Status = "Відновлено при продзвоні" }, rows[i].LinkedReceipts, []);
+                await DrainDispatcherAsync();
+                var restoredRow = await Realize(rows[i], indexColumn);
+                Equal(colors[i], ((SolidColorBrush)restoredRow.Background).Color);
+                rows[i].Update(original, rows[i].LinkedReceipts, []);
+            }
+            workspace.ShowCanceledOrders = false;
+            await DrainDispatcherAsync();
+
             // Selection must remain available for linking across grids without the
             // inactive system-grey cells covering the order's printed palette.
             foreach (var model in new[] { rows[2], rows[3], rows[0] })

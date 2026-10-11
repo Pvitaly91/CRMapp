@@ -24,7 +24,7 @@ internal static partial class MarketplaceViewModelTests
         var rzLegacy = active with
             { Key = new(MarketplaceKind.Rozetka, "rz-test", "legacy"), Number = "RZ-LEGACY", SourceStatus = "17", Status = "Скасовано" };
         var rzUnknown = active with
-            { Key = new(MarketplaceKind.Rozetka, "rz-test", "unknown"), Number = "RZ-UNKNOWN", SourceStatus = "17", Status = "17" };
+            { Key = new(MarketplaceKind.Rozetka, "rz-test", "unknown"), Number = "RZ-UNKNOWN", SourceStatus = "999", Status = "999" };
         fixture.Source.Orders = [active, promRaw, promLegacy, paymentCanceled];
         fixture.Rozetka.Orders = [rzRaw, rzLegacy, rzUnknown];
         fixture.ReceiptSource.Rows = [];
@@ -183,5 +183,135 @@ internal static partial class MarketplaceViewModelTests
         Equal(0, fixture.Links.Saves);
         Equal(0, fixture.Printer.Calls);
         Equal(0, fixture.History.Saves);
+    }
+
+    private static async Task RozetkaCanceledCacheVisibilityAsync()
+    {
+        var fixture = new Fixture();
+        fixture.Settings.Market.Connections.Add(new()
+            { Id = "rz-test", Marketplace = MarketplaceKind.Rozetka, Enabled = true, Name = "Synthetic Rozetka" });
+        var active = Order() with
+            { Key = new(MarketplaceKind.Rozetka, "rz-test", "active"), Number = "RZ-ACTIVE", SourceStatus = "6", Status = "6" };
+        var buyerCanceled = active with
+            { Key = active.Key with { OrderId = "buyer-canceled" }, Number = "RZ-CANCELED", SourceStatus = "45", Status = "45" };
+        var unavailable = active with
+            { Key = active.Key with { OrderId = "unavailable" }, Number = "RZ-UNAVAILABLE", SourceStatus = "42", Status = "Немає в наявності" };
+        var unknown = active with
+            { Key = active.Key with { OrderId = "unknown" }, Number = "RZ-UNKNOWN", SourceStatus = "999", Status = "999" };
+        var promNumeric = Order() with { Number = "PROM-NUMERIC", SourceStatus = "45", Status = "45" };
+        // Model these as previously serialized orders, before source status groups existed.
+        await fixture.Cache.SaveAsync(new([active, buyerCanceled, unavailable, unknown, promNumeric], []));
+        fixture.ReceiptSource.Rows = [];
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync();
+        main.SelectedTabIndex = 1;
+        await main.PrepareOrdersAsync();
+
+        True(!workspace.ShowCanceledOrders);
+        Equal(5, workspace.AllOrderRows.Count);
+        True(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Select(row => row.Key).ToHashSet()
+            .SetEquals([active.Key, unknown.Key, promNumeric.Key]),
+            "Old Rozetka numeric cancellations must be hidden without applying their codes to Prom or unknown statuses.");
+        workspace.OrderFilter = "Rozetka";
+        Equal(2, workspace.Orders.Cast<object>().Count());
+        workspace.ShowCanceledOrders = true;
+        Equal(4, workspace.Orders.Cast<object>().Count());
+        workspace.OrderSearch = "RZ-CANCELED";
+        Equal(buyerCanceled.Key, workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single().Key);
+        workspace.ShowCanceledOrders = false;
+        Equal(0, workspace.Orders.Cast<object>().Count());
+        workspace.OrderSearch = "";
+        AssertDashboardIndices(workspace);
+        Equal(5, fixture.Cache.Snapshot.Orders.Count);
+
+        var (restarted, restored) = fixture.Create();
+        await restarted.RefreshAsync();
+        restarted.SelectedTabIndex = 1;
+        await restarted.PrepareOrdersAsync();
+        True(!restored.ShowCanceledOrders);
+        Equal(3, restored.Orders.Cast<object>().Count());
+        Equal(5, restored.AllOrderRows.Count);
+        Equal(0, fixture.Source.FetchCalls + fixture.Rozetka.FetchCalls);
+        Equal(0, fixture.Printer.Calls);
+        main.CancelPendingOperations(); restarted.CancelPendingOperations();
+    }
+
+    private static async Task RozetkaCanceledReactivationAsync()
+    {
+        var fixture = new Fixture();
+        fixture.Settings.Market.Connections.Add(new()
+            { Id = "rz-test", Marketplace = MarketplaceKind.Rozetka, Enabled = true, Name = "Synthetic Rozetka" });
+        var order = Order([ReceiptOne]) with
+        {
+            Key = new(MarketplaceKind.Rozetka, "rz-test", "changing"), Number = "RZ-CHANGING",
+            SourceStatus = "6", Status = "Замовлення виконано"
+        };
+        fixture.Rozetka.Orders = [order];
+        fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 10000)];
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync(); await OpenOrdersAsync(main, workspace);
+        var row = workspace.AllOrderRows.Single();
+        row.IsSelectedForLabels = true; workspace.SelectedOrder = row;
+        fixture.Rozetka.Orders = [order with { SourceStatus = "45", Status = "Скасовано покупцем" }];
+        await workspace.SyncAsync();
+        True(ReferenceEquals(row, workspace.AllOrderRows.Single()) && row.Model.IsCanceled);
+        Equal(0, workspace.Orders.Cast<object>().Count());
+        True(workspace.SelectedOrder is null && row.IsSelectedForLabels && row.HasConfirmedLink);
+        Equal(0, row.DisplayIndex);
+        workspace.ShowCanceledOrders = true;
+        Equal(row, workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single());
+        workspace.ShowCanceledOrders = false;
+
+        fixture.Rozetka.Orders = [order with { SourceStatus = "46", Status = "Відновлено при продзвоні" }];
+        await workspace.SyncAsync();
+        True(ReferenceEquals(row, workspace.AllOrderRows.Single()) && !row.Model.IsCanceled);
+        Equal(row, workspace.Orders.Cast<MarketplaceOrderRowViewModel>().Single());
+        Equal(1, row.DisplayIndex);
+        True(row.IsSelectedForLabels && row.HasConfirmedLink);
+        True(!fixture.Cache.Snapshot.Orders.Single().IsCanceled,
+            "A formerly canceled Rozetka order must not stay hidden after the API restores it.");
+        Equal(ReceiptLinkState.Exact, main.Receipts.Single().OrderMatch!.State);
+        Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
+        main.CancelPendingOperations();
+    }
+
+    private static async Task RozetkaCanceledPrintCandidatesAsync()
+    {
+        var fixture = new Fixture();
+        fixture.Settings.Market.Connections.Add(new()
+            { Id = "rz-test", Marketplace = MarketplaceKind.Rozetka, Enabled = true, Name = "Synthetic Rozetka" });
+        var active = Order([ReceiptOne]) with
+        {
+            Key = new(MarketplaceKind.Rozetka, "rz-test", "active"), Number = "RZ-ACTIVE",
+            SourceStatus = "6", Status = "Замовлення виконано", Shipments = [new("nova_poshta", "active-ttn")]
+        };
+        var canceled = active with
+        {
+            Key = active.Key with { OrderId = "canceled" }, Number = "RZ-CANCELED", SourceStatus = "45",
+            Status = "Скасовано покупцем", ReceiptIds = [ReceiptTwo], Shipments = [new("nova_poshta", "canceled-ttn")]
+        };
+        fixture.Rozetka.Orders = [active, canceled];
+        fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 10000), Receipt(ReceiptTwo, 2, 10000)];
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync(); await OpenOrdersAsync(main, workspace);
+        workspace.ShowCanceledOrders = true;
+        var printer = new LabelPrinter();
+        using var labels = Labels(workspace, new(), new(), printer, new());
+        foreach (var row in workspace.AllOrderRows) row.IsSelectedForLabels = true;
+        foreach (var receipt in main.Receipts) { receipt.IsSelected = true; receipt.IsSelectedForOrders = true; }
+        await ExecuteAsync(labels.SelectPrintCandidatesCommand);
+        main.AllReceiptsTab.SelectPrintCandidatesCommand.Execute(null);
+        main.OrdersReceiptsTab.SelectPrintCandidatesCommand.Execute(null);
+        True(workspace.AllOrderRows.Single(row => row.Key == active.Key).IsSelectedForLabels);
+        var canceledRow = workspace.AllOrderRows.Single(row => row.Key == canceled.Key);
+        True(canceledRow.HasConfirmedLink && !canceledRow.IsSelectedForLabels,
+            "A precise fiscal link does not make a canceled Rozetka order a print candidate.");
+        var activeReceipt = main.Receipts.Single(row => row.Id == ReceiptOne);
+        var canceledReceipt = main.Receipts.Single(row => row.Id == ReceiptTwo);
+        True(activeReceipt.IsSelected && activeReceipt.IsSelectedForOrders);
+        True(!canceledReceipt.IsSelected && !canceledReceipt.IsSelectedForOrders);
+        Equal(ReceiptLinkState.Exact, canceledReceipt.OrderMatch!.State);
+        Equal(0, printer.Calls); Equal(0, fixture.Printer.Calls); Equal(0, fixture.Links.Saves);
+        main.CancelPendingOperations();
     }
 }

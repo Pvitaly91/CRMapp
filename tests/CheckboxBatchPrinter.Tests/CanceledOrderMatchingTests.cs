@@ -13,6 +13,7 @@ internal static class CanceledOrderMatchingTests
         ("canceled orders: canceled Honda competitor does not block the NovaPay receipt", Run(CanceledCompetitor)),
         ("canceled orders: exact status variants exclude canceled documents without guessing unknown statuses", Run(StatusVariants)),
         ("canceled orders: cancellation removes saved suggestions and releases their receipts", Run(CancellationAfterLink)),
+        ("canceled orders: Rozetka cancellation releases cached automatic links but retains fiscal evidence", Run(RozetkaCancellationAfterLink)),
         ("canceled orders: manual and exact fiscal links retain priority", Run(AuthoritativeLinks))
     ];
     private static Func<Task> Run(Action action) => () => { action(); return Task.CompletedTask; };
@@ -110,5 +111,32 @@ internal static class CanceledOrderMatchingTests
         Check(confirmed.State == ReceiptLinkState.Manual && confirmed.Order?.Key == canceled.Key, "Cancellation removed a manual historical link.");
         var exact = matcher.MatchAll([receipt], Account, [canceled with { ReceiptIds = [receipt.Id] }], [], true, Details(receipt))[receipt.Id];
         Check(exact.State == ReceiptLinkState.Exact && exact.Order?.Key == canceled.Key, "Cancellation removed a proven fiscal link.");
+    }
+
+    private static void RozetkaCancellationAfterLink()
+    {
+        var receipt = Receipt();
+        var original = Order() with { Key = new(MarketplaceKind.Rozetka, "rozetka", "100"), SourceStatus = "6" };
+        var replacement = Order("replacement");
+        var service = new CachedReceiptOrderMatchingService(new Clock());
+        var cache = new AutomaticMatchCache();
+        var saved = service.MatchAll(cache, [receipt], Account, [original], [], true, Details(receipt)).Matches[receipt.Id];
+        Check(saved.Order?.Key == original.Key, "Original Rozetka fixture did not get a saved pair.");
+        foreach (var canceled in new[]
+        {
+            original with { SourceStatus = "45", Status = "Скасовано покупцем" },
+            original with { SourceStatus = "999", SourceStatusGroup = 3, Status = "Нова причина відмови" }
+        })
+        {
+            var restored = Restart(cache);
+            var match = service.MatchAll(restored, [receipt], Account, [canceled, replacement], [], true, Details(receipt)).Matches[receipt.Id];
+            Check(match.Order?.Key == replacement.Key, "Canceled Rozetka order retained a cached automatic pair.");
+            var partial = Restart(cache);
+            service.MatchAll(partial, [receipt], Account, [canceled], [], false, Details(receipt));
+            Check(!partial.Links.ContainsKey(receipt.Id), "Partial refresh retained canceled Rozetka suggestion.");
+            var exact = new ReceiptOrderMatchingService().MatchAll([receipt], Account,
+                [canceled with { ReceiptIds = [receipt.Id] }], [], true, Details(receipt))[receipt.Id];
+            Check(exact.State == ReceiptLinkState.Exact, "Rozetka cancellation removed historical fiscal evidence.");
+        }
     }
 }

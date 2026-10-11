@@ -15,6 +15,9 @@ internal static class RozetkaOrdersTests
         ("Rozetka detail hydration and optional fiscal link are read-only", DetailAsync),
         ("Rozetka optional PRRO denial preserves the order and rejects unknown UUID inference", PrroUnavailableAsync),
         ("Rozetka null fields remain unknown and fiscal number is not a receipt UUID", NullFieldsAsync),
+        ("Rozetka cancellation uses the order status group and rejects unrelated status fields", CanceledStatusGroupAsync),
+        ("Rozetka numeric cancellation fallback supports old caches without affecting Prom", CanceledStatusLegacyCacheAsync),
+        ("Rozetka detail status updates invalidate a stale list status group", CanceledStatusDetailAsync),
         ("Rozetka page failure preserves partial results", PartialAsync),
         ("Rozetka bounded reauthentication handles HTTP and JSON expiry", ReauthenticationAsync),
         ("Rozetka repeated pages and missing metadata cannot claim completion", InvalidPaginationAsync),
@@ -150,6 +153,130 @@ internal static class RozetkaOrdersTests
         True(order.CreatedAt is null); // Ambiguous Kyiv DST time is not guessed.
         Equal("2026-10-25 03:30:00", order.RawCreatedAt); Equal("", order.Currency);
         Equal(0, order.Items.Count); Equal(0, order.ReceiptIds.Count); Equal(1, order.FiscalReceiptNumbers.Count);
+    }
+
+    private static async Task CanceledStatusGroupAsync()
+    {
+        static object StatusRow(int id, object? code, object? details) => new
+        {
+            id, created = "2026-09-23 10:00:00", status = code, status_data = details,
+            user = new { contact_fio = "Покупець" }, purchases = Array.Empty<object>(),
+            payment = new { payment_status = new { title = "Скасовано" } }
+        };
+        var rows = new[]
+        {
+            StatusRow(100, 999, new { id = 999, status_group = 3, title = "Нова причина відмови" }),
+            StatusRow(101, 45, new { id = 45, status_group = 1, title = "Скасовано" }),
+            StatusRow(102, 45, new { id = 45, status_group = 2, title = "Скасовано" }),
+            StatusRow(103, null, new { id = 45, status_group = 3, title = "Причина відмови" }),
+            StatusRow(104, 45, new { id = 45, status_group = new { value = 3 } }),
+            StatusRow(105, 45, new { id = 45, title = "Причина відмови" }),
+            StatusRow(106, 45, new { id = 45, status_group = 99 }),
+            StatusRow(107, 999, new { id = 999, status_group = "не число" }),
+            StatusRow(108, 1, new { id = 1, status = 0, title = "Обробляється" }),
+            StatusRow(109, 1, new { id = 45, status_group = 3, title = "Застарілі дані" }),
+            StatusRow(110, 45, new { id = 1, status_group = 1, title = "Застарілі дані" }),
+            StatusRow(111, "45", new { id = 45, status_group = "3" })
+        };
+        var handler = new Handler(request =>
+        {
+            if (request.Method == HttpMethod.Post) return Task.FromResult(Login());
+            Equal("/orders/search", request.RequestUri!.AbsolutePath);
+            return Task.FromResult(Page(1, 1, rows));
+        });
+        using var http = new HttpClient(handler);
+        var result = await new RozetkaOrdersClient(new MarketplaceHttpTransport(http)).FetchAsync(Connection, Credentials, Range);
+        True(result.Complete); Equal(rows.Length, result.Orders.Count);
+        var expectedCanceled = new HashSet<string> { "100", "103", "104", "105", "106", "110", "111" };
+        foreach (var order in result.Orders)
+            Equal(expectedCanceled.Contains(order.Number), order.IsCanceled);
+        Equal<int?>(3, result.Orders.Single(o => o.Number == "100").SourceStatusGroup);
+        Equal("45", result.Orders.Single(o => o.Number == "103").SourceStatus);
+        foreach (var id in new[] { "104", "105", "107", "108", "109", "110" })
+            Equal<int?>(null, result.Orders.Single(o => o.Number == id).SourceStatusGroup);
+        Equal<int?>(3, result.Orders.Single(o => o.Number == "111").SourceStatusGroup);
+    }
+
+    private static Task CanceledStatusLegacyCacheAsync()
+    {
+        // Old cache entries contain the provider code but no status_group or localized cancellation label.
+        int[] canceledCodes = [10, 11, 12, 13, 16, 17, 18, 19, 20, 24, 25, 28, 29, 30, 31, 32,
+            33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 49, 50, 51, 71, 72, 75, 77, 85, 88];
+        foreach (var code in canceledCodes)
+        {
+            var oldJson = JsonSerializer.Serialize(new
+            {
+                Key = new OrderKey(MarketplaceKind.Rozetka, Connection.Id, "100"),
+                SourceStatus = code.ToString(System.Globalization.CultureInfo.InvariantCulture), Status = "Причина відмови"
+            });
+            var restored = JsonSerializer.Deserialize<MarketplaceOrder>(oldJson)!;
+            Equal<int?>(null, restored.SourceStatusGroup); True(restored.IsCanceled);
+            True(JsonSerializer.Deserialize<MarketplaceOrder>(JsonSerializer.Serialize(restored))!.IsCanceled);
+            True(!(restored with { Key = restored.Key with { Marketplace = MarketplaceKind.Prom } }).IsCanceled);
+        }
+        foreach (var code in new[] { "0", "1", "2", "3", "6", "7", "14", "15", "23", "48", "999", "not-a-code" })
+        {
+            var active = new MarketplaceOrder
+            {
+                Key = new(MarketplaceKind.Rozetka, Connection.Id, "100"), SourceStatus = code,
+                Status = "Обробляється", PaymentStatus = "Скасовано"
+            };
+            True(!active.IsCanceled);
+        }
+        foreach (var group in new[] { 1, 2, 3 })
+        {
+            var grouped = new MarketplaceOrder
+            {
+                Key = new(MarketplaceKind.Rozetka, Connection.Id, "100"),
+                SourceStatus = "45", SourceStatusGroup = group, Status = "Скасовано"
+            };
+            var restored = JsonSerializer.Deserialize<MarketplaceOrder>(JsonSerializer.Serialize(grouped))!;
+            Equal<int?>(group, restored.SourceStatusGroup); Equal(group == 3, restored.IsCanceled);
+        }
+        return Task.CompletedTask;
+    }
+
+    private static async Task CanceledStatusDetailAsync()
+    {
+        // Exercise complete list expansions, expansions without IDs, and a detail
+        // response that supplies its new code only through status_data.id.
+        foreach (var shape in new[] { "id", "no-id", "detail-expansion" })
+        {
+            var reopened = false;
+            var detailReads = 0;
+            object listStatus = shape == "no-id"
+                ? new { status_group = 1, title = "Обробляється" }
+                : new { id = 1, status_group = 1, title = "Обробляється" };
+            var handler = new Handler(request =>
+            {
+                if (request.Method == HttpMethod.Post) return Task.FromResult(Login());
+                if (request.RequestUri!.AbsolutePath == "/orders/search") return Task.FromResult(Page(1, 1, new
+                {
+                    id = 100, created = "2026-09-23 10:00:00", status = 1, status_data = listStatus
+                }));
+                Equal("/orders/100", request.RequestUri!.AbsolutePath); detailReads++;
+                if (reopened) return Task.FromResult(Json(new { success = true, content = new { id = 100, status = 1,
+                    status_data = new { id = 1, status_group = 1 },
+                    user = new { contact_fio = "Покупець" }, purchases = Array.Empty<object>() } }));
+                if (shape == "detail-expansion") return Task.FromResult(Json(new { success = true, content = new
+                {
+                    id = 100, status_data = new { id = 45, status_group = 3 },
+                    user = new { contact_fio = "Покупець" }, purchases = Array.Empty<object>() } }));
+                // Detail changes only the code; the list's old group must not override it.
+                return Task.FromResult(Json(new { success = true, content = new { id = 100, status = 45,
+                    user = new { contact_fio = "Покупець" }, purchases = Array.Empty<object>() } }));
+            });
+            using var http = new HttpClient(handler);
+            var client = new RozetkaOrdersClient(new MarketplaceHttpTransport(http));
+            var result = await client.FetchAsync(Connection, Credentials, Range);
+            True(result.Complete); Equal(1, detailReads);
+            var canceled = result.Orders.Single();
+            True(canceled.IsCanceled); Equal("45", canceled.SourceStatus);
+            Equal<int?>(shape == "detail-expansion" ? 3 : null, canceled.SourceStatusGroup);
+            reopened = true;
+            var active = await client.GetOrderAsync(Connection, Credentials, "100");
+            Equal(2, detailReads); True(!active!.IsCanceled); Equal<int?>(1, active.SourceStatusGroup);
+        }
     }
 
     private static async Task PrroUnavailableAsync()

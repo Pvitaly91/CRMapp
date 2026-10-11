@@ -343,6 +343,12 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
         var paymentStatus = Field(payment, "payment_status");
         if (paymentStatus.ValueKind != JsonValueKind.Object) paymentStatus = Field(row, "status_payment");
         var status = Field(row, "status_data");
+        var sourceStatus = First(Text(row, "status"), Text(status, "id"));
+        // A detail response can change status while the merged list expansion is stale.
+        if (Text(row, "status").Length > 0 && Text(status, "id").Length > 0 &&
+            Text(row, "status") != Text(status, "id") &&
+            !(Integer(row, "status") is int statusId && statusId == Integer(status, "id")))
+            status = default;
         var items = new List<OrderItem>();
         var purchases = Field(row, "purchases");
         if (purchases.ValueKind == JsonValueKind.Array)
@@ -379,8 +385,8 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
         {
             Key = key, StoreName = connection.Name, Number = id,
             CreatedAt = Date(row, "created"), UpdatedAt = Date(row, "changed"), RawCreatedAt = Text(row, "created"),
-            Status = First(Text(status, "title"), Text(status, "name_uk"), Text(status, "name"), Text(row, "status")),
-            SourceStatus = Text(row, "status"),
+            Status = First(Text(status, "title"), Text(status, "name_uk"), Text(status, "name"), sourceStatus),
+            SourceStatus = sourceStatus, SourceStatusGroup = Integer(status, "status_group"),
             PaymentStatus = First(Text(paymentStatus, "title"), Text(paymentStatus, "name"), Text(row, "payment_status")),
             PaymentMethod = First(Text(payment, "payment_method_name"), Text(row, "payment_type_name"), Text(row, "payment_type_title")),
             Buyer = buyerName.Length + buyerPhone.Length == 0 ? null : new(buyerName, buyerPhone),
@@ -401,6 +407,13 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
         if (detail.ValueKind != JsonValueKind.Object || Text(list, "id") != Text(detail, "id"))
             throw new InvalidDataException("Некоректні деталі замовлення Rozetka.");
         var values = list.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone(), StringComparer.Ordinal);
+        var detailStatus = Text(detail, "status");
+        if (detailStatus.Length > 0 && detailStatus != Text(list, "status") &&
+            !(Integer(detail, "status") is int statusId && statusId == Integer(list, "status")) &&
+            !detail.TryGetProperty("status_data", out _))
+            values.Remove("status_data");
+        else if (detailStatus.Length == 0 && Text(Field(detail, "status_data"), "id").Length > 0)
+            values.Remove("status");
         foreach (var property in detail.EnumerateObject())
         {
             if (property.Name == "prro" && values.TryGetValue("prro", out var prior) && prior.ValueKind == JsonValueKind.Object)

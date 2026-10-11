@@ -56,6 +56,7 @@ public sealed record MarketplaceOrder
     public DateTimeOffset? UpdatedAt { get; init; }
     public string Status { get; init; } = "";
     public string SourceStatus { get; init; } = "";
+    public int? SourceStatusGroup { get; init; }
     public string RawTotal { get; init; } = "";
     public string RawCreatedAt { get; init; } = "";
     public string PaymentStatus { get; init; } = "";
@@ -82,11 +83,31 @@ public sealed record MarketplaceOrder
     public string FiscalDataStatus { get; init; } = "";
     public string? SellerUrl { get; init; }
     public DateTimeOffset RetrievedAtUtc { get; init; } = DateTimeOffset.UtcNow;
-    [JsonIgnore] public bool IsCanceled => CanceledStatus(SourceStatus) || CanceledStatus(Status);
+    [JsonIgnore] public bool IsCanceled
+    {
+        get
+        {
+            if (Key.Marketplace == MarketplaceKind.Rozetka)
+            {
+                // Seller status_group: 1 processing, 2 successful, 3 canceled.
+                if (SourceStatusGroup is 1 or 2 or 3) return SourceStatusGroup == 3;
+                if (CanceledRozetkaCode(string.IsNullOrWhiteSpace(SourceStatus) ? Status : SourceStatus)) return true;
+            }
+            return CanceledStatus(SourceStatus) || CanceledStatus(Status);
+        }
+    }
     [JsonIgnore] public string TrackingDisplay => string.Join(", ", Shipments.Select(s => s.TrackingNumber).Where(s => s.Length > 0).Distinct());
 
-    // Recognize explicit source/localized order statuses; unknown numeric codes and
-    // payment statuses must not silently remove an order from matching.
+    // Verified Seller /order-statuses/search?status_group=3, both pages, 2026-10-11.
+    // Fallback for old caches / missing expansion; never apply these IDs to Prom.
+    private static bool CanceledRozetkaCode(string? status) =>
+        int.TryParse(status?.Trim(), System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture, out var code) && code is
+        10 or 11 or 12 or 13 or 16 or 17 or 18 or 19 or 20 or 24 or 25 or 28 or 29 or 30 or 31 or 32 or
+        33 or 34 or 35 or 36 or 37 or 38 or 39 or 40 or 41 or 42 or 43 or 44 or 45 or 49 or 50 or 51 or
+        71 or 72 or 75 or 77 or 85 or 88;
+
+    // Unknown codes and payment statuses must not silently remove an order.
     private static bool CanceledStatus(string? status) => status?.Trim().ToUpperInvariant() is
         "CANCELED" or "CANCELLED" or "СКАСОВАНО" or "СКАСОВАНЕ" or "СКАСОВАНИЙ" or
         "ЗАМОВЛЕННЯ СКАСОВАНО" or "ОТМЕНЕН" or "ОТМЕНЁН" or "ОТМЕНЕНО" or "ОТМЕНЁНО";

@@ -41,6 +41,7 @@
 | ID / номер | `id`, у межах `Rozetka + ConnectionId + id` |
 | Створення / оновлення | `created`, `changed` |
 | Статус | `status`, `status_data.title`, `status_data.name_uk`, `status_data.name`; оригінальний код зберігається в `SourceStatus` |
+| Скасування | `status_data.status_group`: 1 — в обробці, 2 — успішні, 3 — скасовані; зберігається як `SourceStatusGroup`. Для старого кешу — перевірені коди групи 3. [Перевірка 11.10.2026](ROZETKA_CANCELED_ORDERS_REPORT.md) |
 | Оплата | `payment.payment_method_name`, `payment.payment_status.title/name`; fallback `payment_type_name`, `payment_type_title`, `status_payment.title/name`, `payment_status` |
 | Покупець | `user_title.full_name`, `user.contact_fio`, `user_phone` |
 | Отримувач | `delivery.recipient_title`, `delivery.recipient_phone` |
