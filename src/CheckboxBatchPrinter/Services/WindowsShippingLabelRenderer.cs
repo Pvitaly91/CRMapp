@@ -71,7 +71,8 @@ public sealed class WindowsShippingLabelRenderer : IShippingLabelRenderer
                                 using var output = new MemoryStream(); encoder.Save(output);
                                 // History identifies pages within a TTN, independently of its position in a shared PDF.
                                 pages.Add(new(document.Shipment,document.DocumentId,document.Fingerprint,ordinal+1,widthMm,heightMm,output.ToArray())
-                                { ConnectionId = document.ConnectionId, Source = document.Source });
+                                { ConnectionId = document.ConnectionId, Source = document.Source,
+                                    CoveredShipments = document.CoveredShipments });
                             }
                             finally { fpdfview.FPDFBitmapDestroy(bitmap); }
                         }

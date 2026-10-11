@@ -40,14 +40,13 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
     public bool HasConfirmedLink { get; private set; }
     public bool HasSuggestedLink { get; private set; }
 
-    public void ApplyLabelHistory(IEnumerable<LabelPrintAttempt> history)
+    public void ApplyLabelHistory(IEnumerable<LabelPrintAttempt> history, Func<OrderKey, OrderKey>? normalizeOrder = null)
     {
         var shipments = ShippingCarrierNames.ForOrder(Model);
-        var attempts = history.Where(a => a.Pages.Any(p => shipments.Any(s =>
-            s.Carrier == p.Carrier && s.TrackingNumber == p.TrackingNumber))).ToArray();
+        var attempts = history.Where(a => a.Pages.Any(p => shipments.Any(s => p.Matches(s, normalizeOrder)))).ToArray();
         HasLabelSubmission = attempts.Any(a => a.State is LabelSubmissionState.Submitted or LabelSubmissionState.SubmissionUnknown);
         HasPrintedLabel = shipments.Count > 0 && shipments.All(s => attempts.Any(a => a.State == LabelSubmissionState.Submitted &&
-            a.Pages.Any(p => s.Carrier == p.Carrier && s.TrackingNumber == p.TrackingNumber)));
+            a.Pages.Any(p => p.Matches(s, normalizeOrder))));
         var latest = attempts.MaxBy(a => a.TimeUtc);
         LabelPrintStatus = latest?.State switch
         {

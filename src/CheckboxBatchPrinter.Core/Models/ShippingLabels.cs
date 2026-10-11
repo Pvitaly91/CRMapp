@@ -25,10 +25,16 @@ public sealed record ShippingLabelDocument(ShipmentReference Shipment, string Co
     public string Format { get; init; } = "application/pdf";
     // One-based indices in the original in-memory PDF, in this shipment's print order. Empty renders all pages.
     public IReadOnlyList<int> SourcePageNumbers { get; init; } = [];
+    // Only account-verified aliases of this document, scoped to the selected order.
+    public IReadOnlyList<ShipmentReference> CoveredShipments { get; init; } = [];
 }
 public sealed record ShippingLabelPage(ShipmentReference Shipment, string DocumentId, string Fingerprint,
     int PageNumber, double WidthMm, double HeightMm, byte[] Png)
-{ public string ConnectionId { get; init; } = ""; public string Source { get; init; } = ""; }
+{
+    public string ConnectionId { get; init; } = "";
+    public string Source { get; init; } = "";
+    public IReadOnlyList<ShipmentReference> CoveredShipments { get; init; } = [];
+}
 public sealed record LabelPrintBatch(string Id, IReadOnlyList<ShippingLabelPage> Pages, LabelPrintSettings Settings)
 {
     public int SelectedOrderCount { get; init; }
@@ -42,7 +48,15 @@ public sealed record LabelSkippedShipment(ShipmentReference Shipment, string Rea
 public sealed record LabelPrintAttempt(string AttemptId, string JobName, string PrinterName, DateTimeOffset TimeUtc,
     LabelSubmissionState State, IReadOnlyList<LabelAttemptPage> Pages, int? WindowsJobId = null);
 public sealed record LabelAttemptPage(ShippingCarrier Carrier, string ConnectionId, string TrackingNumber,
-    string DocumentId, int PageNumber, string Fingerprint);
+    string DocumentId, int PageNumber, string Fingerprint)
+{
+    // Optional for compatibility with existing carrier-only history. Seller labels bind an order/account.
+    public OrderKey? Order { get; init; }
+    public bool Matches(ShipmentReference shipment, Func<OrderKey, OrderKey>? normalizeOrder = null) =>
+        Carrier == shipment.Carrier && TrackingNumber == shipment.TrackingNumber &&
+        (Order is null || shipment.Order is null ||
+            (normalizeOrder?.Invoke(Order) ?? Order) == (normalizeOrder?.Invoke(shipment.Order) ?? shipment.Order));
+}
 
 public sealed record LabelPrintSettings
 {

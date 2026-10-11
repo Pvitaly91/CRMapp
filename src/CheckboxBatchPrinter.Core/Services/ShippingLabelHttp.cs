@@ -29,8 +29,9 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
             "rz-delivery.rozetka.ua" => request.Method == HttpMethod.Get &&
                 (uri.AbsolutePath == "/api/track" && ValidRozetkaDeliveryListQuery(uri) ||
                  uri.AbsolutePath == "/api/track/label" || Regex.IsMatch(uri.AbsolutePath, @"^/api/track/[0-9A-Za-z-]+$")),
-            "api-seller.rozetka.com.ua" => request.Method == HttpMethod.Post && uri.AbsolutePath == "/sites" ||
-                request.Method == HttpMethod.Get && uri.AbsolutePath is "/ttns/ttn-list" or "/ttns/ttn-print/zebra",
+            "api-seller.rozetka.com.ua" => request.Method == HttpMethod.Post && uri.AbsolutePath == "/sites" && uri.Query.Length == 0 ||
+                request.Method == HttpMethod.Get && uri.AbsolutePath is "/ttns/ttn-list" or "/ttns/ttn-print/zebra" ||
+                RozetkaSellerDeliveryReadOnlyContract.ValidRoute(request),
             _ => false
         };
         if (!allowed) throw new InvalidOperationException("Дозволено лише читання наявних накладних та їхніх копій.");
@@ -96,7 +97,12 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
                 }
                 if (!response.IsSuccessStatusCode) throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "API відхилило читання накладної.");
                 var actualType = response.Content.Headers.ContentType?.MediaType;
-                if (actualType != expectedType && !(novaPoshtaRequest is not null && actualType == "application/json"))
+                // This documented Seller print route returns a PDF as octet-stream in production.
+                // Accept that MIME only for the exact validated read-only route, then verify the bytes.
+                var sellerBinaryPdf = expectedType == "application/pdf" && actualType == "application/octet-stream" &&
+                    request.Method == HttpMethod.Post && request.RequestUri!.Host == "api-seller.rozetka.com.ua" &&
+                    request.RequestUri.AbsolutePath == RozetkaSellerDeliveryReadOnlyContract.PrintPath && request.RequestUri.Query.Length == 0;
+                if (actualType != expectedType && !sellerBinaryPdf && !(novaPoshtaRequest is not null && actualType == "application/json"))
                     throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "API повернуло не очікуваний PDF/JSON. Документ не друкуватиметься.");
                 if (response.Content.Headers.ContentLength > MaximumBytes) throw TooLarge();
                 using var buffer = new MemoryStream();
@@ -111,7 +117,8 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
                 var bytes = buffer.ToArray();
                 if (novaPoshtaRequest is not null && actualType == "application/json" && IsNovaPoshtaRateLimit(bytes))
                     throw novaPoshtaRequest.Limit(RetryDelay(response, _novaPoshtaPolicy.UtcNow));
-                if (actualType != expectedType)
+                if (sellerBinaryPdf) ValidatePdf(bytes);
+                else if (actualType != expectedType)
                     throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "API повернуло не очікуваний PDF/JSON. Документ не друкуватиметься.");
                 return bytes;
             }
@@ -155,11 +162,18 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
 }
 
 public sealed class OfficialShippingLabelSource(ShippingLabelHttp http, IShippingSettingsStore settings,
-    IMarketplaceSettingsStore marketplaceSettings, IMarketplaceSecretStore marketplaceSecrets) : IShippingLabelSource
+    IMarketplaceSettingsStore marketplaceSettings, IMarketplaceSecretStore marketplaceSecrets,
+    IReadOnlyList<ShipmentReference>? selectedShipments = null) : IShippingLabelBatchSource
 {
+    private readonly RozetkaSellerDeliveryLabelSource _sellerDelivery = new(http, marketplaceSettings, marketplaceSecrets, selectedShipments);
+    public IShippingLabelSource CreateBatchSource(IReadOnlyList<ShipmentReference>? shipments = null) =>
+        new OfficialShippingLabelSource(http, settings, marketplaceSettings, marketplaceSecrets, shipments);
     public async Task<ShippingLabelDocument> GetAsync(ShipmentReference shipment, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(shipment.TrackingNumber)) throw new ShippingLabelException(LabelFailureKind.MissingDocument, "Накладну не створено.");
+        if (RozetkaSellerDeliveryLabelSource.IsSellerDeliveryShipment(shipment))
+            return await _sellerDelivery.GetAsync(shipment, cancellationToken);
         if (shipment.Carrier == ShippingCarrier.Unknown) throw new ShippingLabelException(LabelFailureKind.UnsupportedFormat, "Перевізник не визначений документованими полями доставки.");
         var config = await settings.LoadAsync(cancellationToken);
         return shipment.Carrier == ShippingCarrier.RozetkaDelivery

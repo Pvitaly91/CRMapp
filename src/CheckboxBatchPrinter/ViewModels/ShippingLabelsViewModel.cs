@@ -98,7 +98,7 @@ public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
             _changingHeaderSelection = true;
             try
             {
-                foreach (var row in _workspace.AllOrderRows) row.ApplyLabelHistory(history);
+                foreach (var row in _workspace.AllOrderRows) row.ApplyLabelHistory(history, _workspace.NormalizeOrderKey);
                 var visible = Visible();
                 foreach (var row in visible) row.IsSelectedForLabels = IsPrintCandidate(row);
                 Status = $"Вибрано видимих замовлень для друку: {visible.Count(r => r.IsSelectedForLabels)}.";
@@ -177,7 +177,7 @@ public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
             var history = await _history.LoadAsync();
             if (IsBusy) return;
             foreach (var row in _workspace.AllOrderRows)
-                row.ApplyLabelHistory(history);
+                row.ApplyLabelHistory(history, _workspace.NormalizeOrderKey);
         }
         catch (Exception) { Status = "Не вдалося прочитати історію наклейок; перед друком вона перевірятиметься знову."; }
     }
@@ -229,9 +229,9 @@ public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
                 return;
             }
             var history = await _history.LoadAsync(_cancel.Token);
-            foreach (var row in rows) row.ApplyLabelHistory(history);
+            foreach (var row in rows) row.ApplyLabelHistory(history, _workspace.NormalizeOrderKey);
             var previous = history.Where(a => a.State != LabelSubmissionState.NotSubmitted && a.Pages.Any(old => batch.Pages.Any(p =>
-                old.Carrier == p.Shipment.Carrier && old.TrackingNumber == p.Shipment.TrackingNumber && old.PageNumber == p.PageNumber))).ToArray();
+                old.Matches(p.Shipment, _workspace.NormalizeOrderKey) && old.PageNumber == p.PageNumber))).ToArray();
             _cancel.Token.ThrowIfCancellationRequested();
             if (!_dialogs.Preview(batch, geometry, previous, print) || !print) { Status = "Перегляд завершено; принтер не викликався."; return; }
             _cancel.Token.ThrowIfCancellationRequested();
@@ -247,7 +247,7 @@ public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
             var omittedOrders = batch.SkippedShipments.Select(s => s.Shipment.Order).ToHashSet();
             foreach (var row in rows)
             {
-                row.ApplyLabelHistory(history.Append(result));
+                row.ApplyLabelHistory(history.Append(result), _workspace.NormalizeOrderKey);
                 if (printableOrders.Contains(row.Key) && !omittedOrders.Contains(row.Key)) row.IsSelectedForLabels = false;
             }
             Status = "Пакет передано Windows. " + (batch.SkippedShipments.Count > 0

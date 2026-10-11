@@ -112,12 +112,24 @@ Send this only through the user's chosen official support channel. Do not includ
 
 ## Rozetka Delivery
 
+### Rozetka orders through Seller (1.0.42)
+
+For a Rozetka order, use its exact enabled Seller connection and locally stored login/password. Never substitute the NP Seller override or try other shops. Seller auth must grant `module_octopus`. The [official list](https://api-seller.rozetka.com.ua/apidoc/#api-Octopus-OctopusTtnList) `GET /delivery-rozetka/ttn-list?order_id=ORDER&page=N&pageSize=100` returns `content.models` and `_meta`; a primary-RMP request also filters `ttn`. Verify complete stable pagination, an unambiguous `ttn` and exact `order_id`; only `carrier_track_num` proves a partner alias. Numeric Seller `id` is distinct from `ext_id`, which is not assumed to equal the tracking number. No deleted/archived/place count is documented for this list.
+
+The [official PDF method](https://api-seller.rozetka.com.ua/apidoc/#api-Octopus-OctopusPrintTtnBatch) is `POST /delivery-rozetka/ttn-print-batch`, exact JSON `{"track_numbers":["RMP-…"]}`. This POST reads the print form of an existing document; create/edit endpoints are excluded. One verified primary TTN per PDF preserves all pages without guessing their order. A live response uses `application/octet-stream`; this MIME is accepted only for this exact route when PDF was expected, with PDF-header and native-parser validation. Other routes retain strict MIME requirements. No format, size, orientation or partner-number print parameter is invented.
+
+Known primary and partner references from the same selected order share an operation-local PDF. The verified covered references propagate into protected print history while the physical pages are submitted once. Page deduplication is scoped to service, connection and canonical document. Raw order/cache identities remain intact; unknown partner carrier IDs are not assigned an invented carrier. Each partner number must be verified in Seller's matching order record before entering this path. Cache is limited to the current order/account/credentials and bounded to 80 MiB.
+
+Seller history adds an optional exact order/account key to each attempt-page identity; existing records without it retain their previous behavior. Candidate state and duplicate warnings normalize only credential-proven connection aliases, then match that key. Different Seller accounts/orders with the same partner TTN cannot inherit newly recorded print state. Independent carrier documents still match their known carrier/TTN identity.
+
+### Direct Delivery account / other marketplace orders
+
 | Operation | Contract |
 |---|---|
 | GET https://rz-delivery.rozetka.ua/api/track/{id} | ID documented as EN number; statusCode=0, data.id/places/carrier_track_num. Check returned ID and selected public/partner TTN. Never substitute order ID. |
 | GET /api/track/label?id=VERIFIED_ID | Swagger id query is an array of strings, form/explode. One-ID requests; statusCode=0, data.label base64 PDF. |
 
-Separate locally entered Bearer RD token; never reuse Seller credentials on this host. Swagger mentions static tokens; its separate login/activity-token lifecycle is not reimplemented. No documented size/format parameter or multi-ID page map was found. Fetch one verified EN at a time, preserve all pages, and inspect actual PDF sizes. Do not invent format=100x100 or crop A4. Generic Seller fragile/top stickers are not parcel labels and are not used.
+Separate locally entered Bearer RD token; never reuse Seller credentials on this host. This existing route remains for Prom shipments and independent Delivery documents. Swagger mentions static tokens; its separate login/activity-token lifecycle is not reimplemented. No documented size/format parameter or multi-ID page map was found. Fetch one verified EN at a time, preserve all pages, and inspect actual PDF sizes. Do not invent format=100x100 or crop A4. Generic Seller fragile/top stickers are not parcel labels and are not used.
 
 Documented places are a minimum, not an exact PDF page count: partner legs can add pages. The UI shows PDF page/part indices, not invented physical-seat IDs. Real partner metadata/page-to-seat correspondence remains unverified.
 

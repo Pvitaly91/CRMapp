@@ -13,8 +13,8 @@ public sealed class LabelBatchPreparation(IShippingLabelSource source, IShipping
         var batchSource = source is IShippingLabelBatchSource scoped ? scoped.CreateBatchSource(selectedShipments) : source;
         var pages = new List<ShippingLabelPage>();
         var skipped = new List<LabelSkippedShipment>();
-        var seenShipments = new HashSet<(ShippingCarrier, string, string)>();
-        var seenPages = new HashSet<(ShippingCarrier, string, int)>();
+        var seenShipments = new HashSet<(OrderKey? Order, ShippingCarrier Carrier, string Tracking, string ShipmentId)>();
+        var seenPages = new HashSet<(ShippingCarrier Carrier, string ConnectionId, string Source, string DocumentId, int Page)>();
         long rasterBytes = 0;
         double decodedBytes = 0;
         foreach (var order in selectedOrders)
@@ -24,7 +24,7 @@ public sealed class LabelBatchPreparation(IShippingLabelSource source, IShipping
             foreach (var shipment in shipments)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (!seenShipments.Add((shipment.Carrier, shipment.TrackingNumber, shipment.ShipmentId))) continue;
+                if (!seenShipments.Add((shipment.Order, shipment.Carrier, shipment.TrackingNumber, shipment.ShipmentId))) continue;
                 ShippingLabelDocument document;
                 try { document = await batchSource.GetAsync(shipment, cancellationToken); }
                 catch (ShippingLabelException ex) when (ex.Kind == LabelFailureKind.ConnectionRequired && ex.MissingCredentials && !ex.AppliesToBatch)
@@ -47,13 +47,17 @@ public sealed class LabelBatchPreparation(IShippingLabelSource source, IShipping
                 {
                     if (page.Shipment != document.Shipment || page.DocumentId != document.DocumentId || page.Fingerprint != document.Fingerprint || page.ConnectionId != document.ConnectionId)
                         throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "Сторінка не відповідає перевіреному документу.");
-                    if (!seenPages.Add((shipment.Carrier, document.DocumentId, page.PageNumber))) continue;
+                    var documentCarrier = document.Source == "RozetkaSeller.Delivery" ? ShippingCarrier.RozetkaDelivery : shipment.Carrier;
+                    if (!seenPages.Add((documentCarrier, document.ConnectionId, document.Source, document.DocumentId, page.PageNumber))) continue;
                     _ = LabelPageLayout.Place(page, settings, geometry);
                     rasterBytes += page.Png.Length;
                     decodedBytes += Math.Ceiling(page.WidthMm * geometry.DpiX / 25.4) * Math.Ceiling(page.HeightMm * geometry.DpiY / 25.4) * 4;
                     if (decodedBytes > 256L * 1024 * 1024) throw new InvalidOperationException("Растери пакета перевищують 256 МіБ. Виберіть менший пакет.");
                     if (pages.Count >= 250 || rasterBytes > 80 * 1024 * 1024) throw new InvalidOperationException("Пакет перевищує 250 сторінок або 80 MiB.");
-                    pages.Add(page with { Png = page.Png.ToArray() });
+                    // Coverage comes from the verified source, never from an arbitrary renderer.
+                    var coverage = document.CoveredShipments.Where(s => s.Order == shipment.Order &&
+                        selectedShipments.Contains(s)).Distinct().ToArray();
+                    pages.Add(page with { Png = page.Png.ToArray(), CoveredShipments = Array.AsReadOnly(coverage) });
                 }
             }
         }

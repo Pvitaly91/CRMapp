@@ -626,6 +626,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         SelectedReceipt = null; Status = "Касира змінено. Оновіть список чеків."; RaiseCommands();
     }
 
+    internal OrderKey NormalizeOrderKey(OrderKey key) => _deduplication.NormalizeKey(key);
     private IReadOnlyList<MarketplaceOrder> ActiveOrders => _deduplication.Merge(_snapshot.Orders.Where(o =>
         _config.Connections.Any(c => c.Enabled && c.Id == o.Key.ConnectionId && c.Marketplace == o.Key.Marketplace)));
 

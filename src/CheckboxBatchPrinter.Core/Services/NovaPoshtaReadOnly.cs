@@ -309,7 +309,8 @@ public sealed class ConfiguredShippingLabelSource(IShippingSettingsStore setting
     IShippingLabelSource existing) : IShippingLabelBatchSource
 {
     public IShippingLabelSource CreateBatchSource(IReadOnlyList<ShipmentReference>? shipments = null) => new ConfiguredShippingLabelSource(settings,
-        direct is IShippingLabelBatchSource scoped ? scoped.CreateBatchSource(shipments) : direct, existing);
+        direct is IShippingLabelBatchSource scoped ? scoped.CreateBatchSource(shipments) : direct,
+        existing is IShippingLabelBatchSource existingScoped ? existingScoped.CreateBatchSource(shipments) : existing);
     public async Task<ShippingLabelDocument> GetAsync(ShipmentReference shipment, CancellationToken cancellationToken = default)
     {
         var config = await settings.LoadAsync(cancellationToken);
