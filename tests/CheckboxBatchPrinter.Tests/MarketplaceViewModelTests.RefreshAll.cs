@@ -9,13 +9,24 @@ internal static partial class MarketplaceViewModelTests
     public static IReadOnlyList<(string Name, Func<Task> Test)> RefreshAllScenarios =>
     [
         ("STA unified refresh updates receipts both marketplaces and carriers from every tab", () => StaAsync(RefreshAllServicesAsync)),
+        ("STA unified refresh starts Checkbox Prom Rozetka and carrier reads before any provider completes", () => StaAsync(RefreshAllConcurrentStartsAsync)),
+        ("STA parallel refresh applies exact Rozetka UUID after late Checkbox completion without a second marketplace request", () => StaAsync(RefreshAllLateExactIdsAsync)),
+        ("STA parallel refresh performs final complete basket matching when orders finish before Checkbox", () => StaAsync(RefreshAllLateBasketAsync)),
+        ("STA parallel refresh discards all late uncancelable provider results after the shared dates change", () => StaAsync(RefreshAllLateDateResultsAsync)),
+        ("STA parallel refresh cannot apply old marketplace configuration after its connections are disabled", () => StaAsync(RefreshAllConfigurationChangedAsync)),
+        ("STA an older same-period background receipt flight cannot certify or replace the global refresh", () => StaAsync(RefreshAllOldBackgroundFlightAsync)),
+        ("STA parallel refresh rejects late old-cashier matches and a subsequent new-cashier refresh succeeds", () => StaAsync(RefreshAllAccountChangedAsync)),
+        ("STA staged marketplace publication waits for label submission but never for candidate-history selection", () => StaAsync(ParallelMarketplaceLabelPublicationAsync)),
+        ("STA old background receipt history completion cannot publish into a global refresh", () => StaAsync(RefreshAllOldBackgroundHistoryAsync)),
+        ("STA unavailable local Checkbox settings do not abort independent global marketplace and carrier reads", () => StaAsync(RefreshAllSettingsFailureAsync)),
+        ("STA changed shared dates during a staged label-print wait cannot publish old marketplace rows or TTNs", () => StaAsync(ParallelMarketplaceDateDuringPrintAsync)),
         ("STA unified refresh recomputes enabled automatic links while the orders tab is inactive", () => StaAsync(RefreshAllInactiveMatchingAsync)),
         ("STA missing Checkbox credentials or failed receipt API do not skip independent stores and carriers", () => StaAsync(RefreshAllReceiptFailureAsync)),
         ("STA failed Checkbox refresh cannot create a new automatic pair from stale receipt coverage and retry restores matching", () => StaAsync(RefreshAllStaleReceiptCoverageAsync)),
         ("STA unified refresh continues carrier loading after marketplace API failure", () => StaAsync(RefreshAllMarketplaceFailureAsync)),
         ("STA unified refresh rejects incomplete or reversed shared dates before any service call", () => StaAsync(RefreshAllInvalidDatesAsync)),
         ("STA repeated unified refresh shares one flight and blocks printing throughout all stages", () => StaAsync(RefreshAllSingleFlightAsync)),
-        ("STA changing shared dates cancels the old unified refresh before remaining services", () => StaAsync(RefreshAllDateCancellationAsync)),
+        ("STA changing shared dates cancels all already-started unified refresh providers", () => StaAsync(RefreshAllDateCancellationAsync)),
         ("STA explicitly requested carrier stage survives leaving its tab", () => StaAsync(RefreshAllWaybillTabExitAsync)),
         ("STA unified refresh cannot start while a frozen receipt job is being submitted", () => StaAsync(RefreshAllPrintGuardAsync))
     ];
@@ -217,6 +228,7 @@ internal static partial class MarketplaceViewModelTests
             Equal(1, fixture.ReceiptSource.Calls);
             fixture.ReceiptSource.Gate.SetResult(true);
             await carrierSource.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await RefreshWaitUntilAsync(() => main.Receipts.Count > 0);
             main.Receipts[0].IsSelected = true;
             True(main.IsBusy && !main.PrintSelectedCommand.CanExecute(null) && !main.PreviewCommand.CanExecute(null),
                 "Receipt printing/preview became available before the carrier stage completed.");
@@ -241,23 +253,34 @@ internal static partial class MarketplaceViewModelTests
     {
         var fixture = RefreshAllFixture();
         fixture.ReceiptSource.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        var carrierSource = new RefreshAllWaybillSource();
+        fixture.Source.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Rozetka.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var carrierSource = new RefreshAllWaybillSource { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
         using var waybills = new WaybillsViewModel(carrierSource);
         var (main, workspace) = fixture.Create(waybills: waybills);
         var old = main.RefreshAllAsync();
         try
         {
-            await fixture.ReceiptSource.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await AllRefreshProvidersEnteredAsync(fixture, carrierSource);
             main.DateTo = new(2026, 9, 24);
             await old.WaitAsync(TimeSpan.FromSeconds(5));
-            Equal(0, fixture.Source.FetchCalls); Equal(0, carrierSource.Calls.Count);
+            Equal(1, fixture.Source.FetchCalls); Equal(1, fixture.Rozetka.FetchCalls); Equal(1, carrierSource.Calls.Count);
+            True(fixture.ReceiptSource.LastToken.IsCancellationRequested && fixture.Source.LastToken.IsCancellationRequested &&
+                fixture.Rozetka.LastToken.IsCancellationRequested && carrierSource.Calls[0].Token.IsCancellationRequested,
+                "Changing the date did not cancel every already-started provider.");
+            Equal(0, main.Receipts.Count); Equal(0, workspace.AllOrderRows.Count); Equal(0, waybills.Rows.Count);
             True(!main.IsBusy && !workspace.IsWorkspaceRefreshing && !waybills.IsWorkspaceRefreshing);
-            fixture.ReceiptSource.Gate = null;
+            fixture.ReceiptSource.Gate = null; fixture.Source.Gate = null; fixture.Rozetka.Gate = null; carrierSource.Gate = null;
             await main.RefreshAllAsync();
-            Equal(2, fixture.ReceiptSource.Calls); Equal(1, fixture.Source.FetchCalls); Equal(1, carrierSource.Calls.Count);
-            Equal(new DateOnly(2026, 9, 24), carrierSource.Calls[0].To);
+            Equal(2, fixture.ReceiptSource.Calls); Equal(2, fixture.Source.FetchCalls); Equal(2, carrierSource.Calls.Count);
+            Equal(new DateOnly(2026, 9, 24), carrierSource.Calls[1].To);
         }
-        finally { fixture.ReceiptSource.Gate?.TrySetResult(true); main.CancelPendingOperations(); }
+        finally
+        {
+            fixture.ReceiptSource.Gate?.TrySetResult(true); fixture.Source.Gate?.TrySetResult(true);
+            fixture.Rozetka.Gate?.TrySetResult(true); carrierSource.Gate?.TrySetResult(true);
+            main.CancelPendingOperations(); await old.WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
     private static async Task RefreshAllWaybillTabExitAsync()
@@ -305,11 +328,12 @@ internal static partial class MarketplaceViewModelTests
     {
         public List<(DateOnly From, DateOnly To, CancellationToken Token)> Calls { get; } = [];
         public TaskCompletionSource<bool>? Gate;
+        public bool IgnoreCancellation;
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public async Task<WaybillFetchResult> FetchAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default)
         {
             Calls.Add((from, to, cancellationToken)); Entered.TrySetResult();
-            if (Gate is not null) await Gate.Task.WaitAsync(cancellationToken);
+            if (Gate is not null) await Gate.Task.WaitAsync(IgnoreCancellation ? CancellationToken.None : cancellationToken);
             return new([
                 new(ShippingCarrier.NovaPoshta, "np-test", "Synthetic NP", "np-doc", "NP-REFRESH", from.ToDateTime(new(12, 0)),
                     "Створено", "Synthetic recipient", "Київ", 100, 1),

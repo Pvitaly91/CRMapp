@@ -95,28 +95,35 @@ public sealed partial class MainViewModel
         var token = cancellation.Token;
         try
         {
-            RefreshAllStatus = "Оновлення всіх даних: чеки…";
-            if (_authentication.HasStoredCredentials) await RefreshReceiptsAsync(prepareOrders: false);
-            else StatusText = "Checkbox не налаштовано; оновлюю інші служби.";
-            token.ThrowIfCancellationRequested();
-
-            if (Marketplace is not null)
+            RefreshAllStatus = "Паралельно оновлюю Checkbox, Prom, Rozetka та накладні…";
+            var expectedAccount = "";
+            if (_authentication.HasStoredCredentials)
             {
-                RefreshAllStatus = "Оновлення всіх даних: замовлення та автоприв’язки…";
-                try { await Marketplace.RefreshAllAsync(from, to, token); }
+                try { expectedAccount = CheckboxBatchPrinter.Core.Services.PrintAccountContext.Create(await _settingsService.LoadAsync(token)); }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                catch (Exception exception) { _logger.Error("refresh.all.checkbox.settings", exception); }
+            }
+            var receipts = _authentication.HasStoredCredentials ? RefreshReceiptsAsync(prepareOrders: false) : Task.CompletedTask;
+            if (!_authentication.HasStoredCredentials) StatusText = "Checkbox не налаштовано; оновлюю інші служби.";
+            async Task RefreshMarketplaceAsync()
+            {
+                if (Marketplace is null) return;
+                try { await Marketplace.RefreshAllAsync(from, to, receipts, expectedAccount, token); }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
                 catch (Exception exception) { _logger.Error("refresh.all.marketplace", exception); }
             }
-            token.ThrowIfCancellationRequested();
-            if (Waybills is not null)
+            async Task RefreshWaybillsAsync()
             {
-                RefreshAllStatus = "Оновлення всіх даних: накладні…";
+                if (Waybills is null) return;
                 try { await Waybills.RefreshAllAsync(token); }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
                 catch (Exception exception) { _logger.Error("refresh.all.waybills", exception); }
-                token.ThrowIfCancellationRequested();
-                await UpdateWaybillOrderAssociationsAsync();
             }
+            var marketplace = RefreshMarketplaceAsync();
+            var waybills = RefreshWaybillsAsync();
+            await Task.WhenAll(receipts, marketplace, waybills);
+            token.ThrowIfCancellationRequested();
+            if (Waybills is not null) await UpdateWaybillOrderAssociationsAsync();
             token.ThrowIfCancellationRequested();
             RefreshAllStatus = "Оновлення завершено. Стан кожної служби — у підказці «Оновити все».";
         }

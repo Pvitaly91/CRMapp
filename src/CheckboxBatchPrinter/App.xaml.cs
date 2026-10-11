@@ -151,41 +151,92 @@ public partial class App : Application
                 () => OnUi(() => _ = ExitFromTrayAsync()));
             window.Show();
             if (e.Args.Contains("--background", StringComparer.OrdinalIgnoreCase) || settings.StartMinimizedToTray) window.Hide();
+            async Task RefreshBackgroundOrdersAsync(Task? receiptsSettled, CancellationToken token)
+            {
+                if (viewModel.IsRefreshingAll) throw new BackgroundSourceSkippedException("Триває оновлення всіх даних");
+                var current = await settingsService.LoadAsync(token);
+                if (viewModel.IsRefreshingAll) throw new BackgroundSourceSkippedException("Триває оновлення всіх даних");
+                var today = DateOnly.FromDateTime(DateRangeBuilder.TodayKyiv);
+                var from = today.AddDays(1 - current.BackgroundWorkingDays);
+                var expectedAccount = authentication.HasStoredCredentials ? PrintAccountContext.Create(current) : "";
+                marketplace.SetBackgroundRange(from, today);
+                var started = DateTimeOffset.UtcNow;
+                try
+                {
+                    if (receiptsSettled is null) await marketplace.SyncBackgroundAsync(token);
+                    else await marketplace.SyncBackgroundAsync(receiptsSettled, expectedAccount, token);
+                }
+                finally
+                {
+                    // A failed shop must not hide new orders from another successfully checked shop.
+                    if (!_exiting && !viewModel.IsRefreshingAll && !token.IsCancellationRequested)
+                    {
+                        try
+                        {
+                            var notification = await _orderNotifications.ObserveAsync(
+                                marketplace.GetOrderNotificationSnapshot(started), from, today,
+                                _appSettings?.NotifyNewOrders ?? current.NotifyNewOrders, token);
+                            if (notification is not null && !_exiting && _appSettings?.NotifyNewOrders != false)
+                                _tray?.ShowNewOrders(notification);
+                        }
+                        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+                        catch (Exception exception) { _logger.Error("orders.notifications.update", exception); }
+                    }
+                }
+            }
             _coordinator = new BackgroundSyncCoordinator(
                 async token =>
                 {
                     if (!authentication.HasStoredCredentials) throw new BackgroundSourceSkippedException("Не налаштовано");
                     var current = await settingsService.LoadAsync(token);
+                    if (viewModel.IsRefreshingAll) throw new BackgroundSourceSkippedException("Триває оновлення всіх даних");
                     var today = DateOnly.FromDateTime(DateRangeBuilder.TodayKyiv);
                     viewModel.AdvanceTodayIfFollowing(today.ToDateTime(TimeOnly.MinValue));
                     await viewModel.BackgroundRefreshAsync(today.AddDays(1 - current.BackgroundWorkingDays), today, token);
                 },
-                async token =>
+                token => RefreshBackgroundOrdersAsync(null, token), token => settingsService.LoadAsync(token),
+                parallelOrders: (receiptsSettled, token) => RefreshBackgroundOrdersAsync(receiptsSettled, token),
+                waybills: async token =>
                 {
-                    var current = await settingsService.LoadAsync(token);
-                    var today = DateOnly.FromDateTime(DateRangeBuilder.TodayKyiv);
-                    var from = today.AddDays(1 - current.BackgroundWorkingDays);
-                    marketplace.SetBackgroundRange(from, today);
-                    var started = DateTimeOffset.UtcNow;
-                    try { await marketplace.SyncBackgroundAsync(token); }
-                    finally
+                    if (viewModel.IsBusy || viewModel.IsPrinting || marketplace.Labels?.IsBusy == true ||
+                        viewModel.Waybills is not { } waybills || waybills.IsPrintingBusy || waybills.IsBusy)
+                        throw new BackgroundSourceSkippedException("Друк або оновлення вже виконується");
+                    if (viewModel.DateFrom is null || viewModel.DateTo is null || viewModel.DateTo < viewModel.DateFrom)
+                        throw new BackgroundSourceSkippedException("Оберіть коректний період накладних");
+                    var shipping = await shippingSettings.LoadAsync(token);
+                    var configured = new List<ShippingCarrier>();
+                    if (shipping.NovaPoshtaConnections.Any(connection => NovaPoshtaReadOnlyContract.ValidKey(connection.ApiKey)))
+                        configured.Add(ShippingCarrier.NovaPoshta);
+                    if (!string.IsNullOrWhiteSpace(shipping.RozetkaDeliveryToken)) configured.Add(ShippingCarrier.RozetkaDelivery);
+                    if (configured.Count == 0) throw new BackgroundSourceSkippedException("Не налаштовано");
+                    if (viewModel.IsBusy || viewModel.IsPrinting || marketplace.Labels?.IsBusy == true ||
+                        waybills.IsPrintingBusy || waybills.IsBusy)
+                        throw new BackgroundSourceSkippedException("Друк або оновлення вже виконується");
+                    await waybills.RefreshAllAsync(token);
+                    if (!waybills.LastRefreshSucceeded || configured.Any(carrier =>
+                        !waybills.LastSourceStatuses.Any(source => source.Carrier == carrier) ||
+                        waybills.LastSourceStatuses.Any(source => source.Carrier == carrier && !source.Complete)))
+                        throw new InvalidOperationException("Перевірка налаштованих служб доставки неповна.");
+                },
+                beginCycle: () =>
+                {
+                    // A skipped/cooling receipt source must not certify old rows for new orders.
+                    if (!viewModel.IsRefreshingAll)
                     {
-                        // A failed shop must not hide new orders from another successfully checked shop.
-                        if (!_exiting && !token.IsCancellationRequested)
-                        {
-                            try
-                            {
-                                var notification = await _orderNotifications.ObserveAsync(
-                                    marketplace.GetOrderNotificationSnapshot(started), from, today,
-                                    _appSettings?.NotifyNewOrders ?? current.NotifyNewOrders, token);
-                                if (notification is not null && !_exiting && _appSettings?.NotifyNewOrders != false)
-                                    _tray?.ShowNewOrders(notification);
-                            }
-                            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-                            catch (Exception exception) { _logger.Error("orders.notifications.update", exception); }
-                        }
+                        viewModel.AdvanceTodayIfFollowing(DateRangeBuilder.TodayKyiv);
+                        marketplace.ReceiptCoverageFresh = false;
                     }
-                }, token => settingsService.LoadAsync(token));
+                },
+                afterCycle: async token =>
+                {
+                    if (_exiting || viewModel.IsRefreshingAll || token.IsCancellationRequested) return;
+                    try { await viewModel.UpdateWaybillOrderAssociationsAsync(); }
+                    catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+                    catch (Exception exception)
+                    {
+                        _logger.Error("waybills.background.associations", exception);
+                    }
+                });
             _coordinator.StateChanged += (_, _) =>
             {
                 var states = _coordinator.States;

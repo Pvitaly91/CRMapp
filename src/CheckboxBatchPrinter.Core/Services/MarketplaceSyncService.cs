@@ -27,17 +27,38 @@ public sealed class MarketplaceSyncService(
             throw new InvalidOperationException("Оновлення маркетплейсів уже виконується.");
         try
         {
+            // Settings can be edited while I/O is pending; every lane must use the same scope.
+            var connections = settings.Connections.Where(c => c.Enabled).Select(c => new MarketplaceConnection
+            { Id = c.Id, Marketplace = c.Marketplace, Enabled = c.Enabled, Name = c.Name }).ToArray();
+            var knownKeys = knownOrders.ToArray();
             var previous = await cache.LoadAsync(settings.CacheDays, ct).ConfigureAwait(false);
             var orders = previous.Orders.ToDictionary(o => o.Key);
             var states = previous.States.ToDictionary(s => s.ConnectionId);
-            // Sequential connections + requests bound parallelism and avoid seller rate spikes.
-            foreach (var connection in settings.Connections.Where(c => c.Enabled))
+            using var saveGate = new SemaphoreSlim(1, 1);
+            // Independent providers run together. Connections, pages and details within one
+            // provider stay sequential, retaining its existing rate limits and error handling.
+            await Task.WhenAll(connections.GroupBy(c => c.Marketplace).Select(ReadLaneAsync)).ConfigureAwait(false);
+            return new(orders.Values.ToArray(), states.Values.ToArray());
+
+            async Task ReadLaneAsync(IGrouping<MarketplaceKind, MarketplaceConnection> lane)
+            {
+                var laneOrders = previous.Orders.Where(o => o.Key.Marketplace == lane.Key).ToDictionary(o => o.Key);
+                var laneStates = previous.States.ToDictionary(s => s.ConnectionId);
+                foreach (var connection in lane)
+                {
+                    await ReadConnectionAsync(connection, laneOrders, laneStates).ConfigureAwait(false);
+                }
+            }
+
+            async Task ReadConnectionAsync(MarketplaceConnection connection,
+                Dictionary<OrderKey, MarketplaceOrder> laneOrders, Dictionary<string, ConnectionSyncState> laneStates)
             {
                 ct.ThrowIfCancellationRequested();
+                var updates = new Dictionary<OrderKey, MarketplaceOrder>();
                 var complete = true;
                 var message = "Отримано всі сторінки замовлень.";
-                var lastSuccess = states.GetValueOrDefault(connection.Id)?.LastSuccessUtc;
-                var detailCursor = states.GetValueOrDefault(connection.Id)?.DetailCursor;
+                var lastSuccess = laneStates.GetValueOrDefault(connection.Id)?.LastSuccessUtc;
+                var detailCursor = laneStates.GetValueOrDefault(connection.Id)?.DetailCursor;
                 MarketplaceApiException? apiFailure = null;
                 try
                 {
@@ -49,7 +70,7 @@ public sealed class MarketplaceSyncService(
                     message = fetched.Message.Length > 0 ? fetched.Message : message;
                     foreach (var order in fetched.Orders)
                         if (order.Key.ConnectionId == connection.Id && order.Key.Marketplace == connection.Marketplace)
-                            orders[order.Key] = MarketplaceFiscalEvidence.Preserve(order, orders.GetValueOrDefault(order.Key));
+                            updates[order.Key] = laneOrders[order.Key] = MarketplaceFiscalEvidence.Preserve(order, laneOrders.GetValueOrDefault(order.Key));
 
                     // Durable links must stay current even outside the requested range. Other cached
                     // orders only affect this range's completeness when their date is in it or unknown;
@@ -57,7 +78,7 @@ public sealed class MarketplaceSyncService(
                     var fetchedKeys = fetched.Orders.Select(o => o.Key).ToHashSet();
                     var relevantCachedKeys = previous.Orders.Where(o => o.CreatedAt is not { } created ||
                         created >= range.From && created < range.ToExclusive).Select(o => o.Key);
-                    var refresh = knownOrders.Concat(relevantCachedKeys).Distinct()
+                    var refresh = knownKeys.Concat(relevantCachedKeys).Distinct()
                         .Where(k => k.ConnectionId == connection.Id && k.Marketplace == connection.Marketplace && !fetchedKeys.Contains(k))
                         .OrderBy(k => k.OrderId, StringComparer.Ordinal).ToArray();
                     if (refresh.Length > 500) { complete = false; message = "Частково: понад 500 старих замовлень потребують перевірки."; }
@@ -70,7 +91,8 @@ public sealed class MarketplaceSyncService(
                         try
                         {
                             var order = await client.GetOrderAsync(connection, credential, key.OrderId, ct).ConfigureAwait(false);
-                            if (order is not null && order.Key == key) orders[key] = MarketplaceFiscalEvidence.Preserve(order, orders.GetValueOrDefault(key));
+                            if (order is not null && order.Key == key)
+                                updates[key] = laneOrders[key] = MarketplaceFiscalEvidence.Preserve(order, laneOrders.GetValueOrDefault(key));
                             else { complete = false; message = "Частково: одне з раніше пов’язаних замовлень недоступне."; }
                         }
                         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -90,11 +112,20 @@ public sealed class MarketplaceSyncService(
                     message = ex is MarketplaceApiException ? ex.Message : "API недоступне або підключення не налаштоване.";
                 }
                 if (complete) lastSuccess = _clock.GetUtcNow();
-                states[connection.Id] = new ConnectionSyncState(connection.Id, range, complete, lastSuccess, message, _clock.GetUtcNow(), detailCursor)
+                var state = new ConnectionSyncState(connection.Id, range, complete, lastSuccess, message, _clock.GetUtcNow(), detailCursor)
                 { FailureStatus = apiFailure?.StatusCode, RetryAfter = apiFailure?.RetryAfter };
-                await cache.SaveAsync(new(orders.Values.ToArray(), states.Values.ToArray()), ct).ConfigureAwait(false);
+                laneStates[connection.Id] = state;
+                // Persist every completed connection without concurrent cache writes or lost
+                // updates when the other provider is still fetching, fails, or is cancelled.
+                await saveGate.WaitAsync(ct).ConfigureAwait(false);
+                try
+                {
+                    foreach (var (key, order) in updates) orders[key] = order;
+                    states[connection.Id] = state;
+                    await cache.SaveAsync(new(orders.Values.ToArray(), states.Values.ToArray()), ct).ConfigureAwait(false);
+                }
+                finally { saveGate.Release(); }
             }
-            return new(orders.Values.ToArray(), states.Values.ToArray());
         }
         finally { _syncGate.Release(); }
     }

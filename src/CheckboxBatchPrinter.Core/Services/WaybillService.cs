@@ -18,7 +18,25 @@ public sealed class WaybillService(ShippingLabelHttp http, IShippingSettingsStor
     {
         if (to < from) throw new InvalidOperationException("Дата до має бути не раніше дати від.");
         cancellationToken.ThrowIfCancellationRequested();
-        var config = await settings.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var loaded = await settings.LoadAsync(cancellationToken).ConfigureAwait(false);
+        var config = loaded with { NovaPoshtaConnections = loaded.NovaPoshtaConnections.ToArray(),
+            NovaPoshtaStoreBindings = loaded.NovaPoshtaStoreBindings.ToArray() };
+        // Carriers have independent credentials and request policies. Keep each carrier's
+        // accounts/pages serial, while allowing its network wait to overlap the other carrier.
+        var novaPoshtaTask = ReadNovaPoshtaSourcesAsync(config, from, to, cancellationToken);
+        var deliveryTask = ReadDeliverySourceAsync(config, from, to, cancellationToken);
+        await Task.WhenAll(novaPoshtaTask, deliveryTask).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        var novaPoshta = await novaPoshtaTask.ConfigureAwait(false);
+        var delivery = await deliveryTask.ConfigureAwait(false);
+        return new(novaPoshta.Documents.Concat(delivery.Documents).OrderByDescending(r => r.CreatedLocal)
+            .ThenBy(r => r.TrackingNumber, StringComparer.Ordinal).ToArray(),
+            novaPoshta.Sources.Concat(delivery.Sources).ToArray());
+    }
+
+    private async Task<WaybillFetchResult> ReadNovaPoshtaSourcesAsync(ShippingLabelSettings config,
+        DateOnly from, DateOnly to, CancellationToken cancellationToken)
+    {
         var documents = new List<WaybillRecord>();
         var sources = new List<WaybillSourceStatus>();
         var readKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -43,17 +61,20 @@ public sealed class WaybillService(ShippingLabelHttp http, IShippingSettingsStor
             documents.AddRange(rows.Values); sources.Add(status);
         }
         cancellationToken.ThrowIfCancellationRequested();
-        if (string.IsNullOrWhiteSpace(config.RozetkaDeliveryToken))
-            sources.Add(new(ShippingCarrier.RozetkaDelivery, "Rozetka Delivery", false, 0, "Токен Rozetka Delivery не встановлений."));
-        else
-        {
-            var rows = new Dictionary<string, WaybillRecord>(StringComparer.Ordinal);
-            var status = await ReadSourceAsync(ShippingCarrier.RozetkaDelivery, "Rozetka Delivery", rows,
-                () => ReadDeliveryAsync(config, from, to, rows, cancellationToken), cancellationToken).ConfigureAwait(false);
-            documents.AddRange(rows.Values); sources.Add(status);
-        }
+        return new(documents, sources);
+    }
+
+    private async Task<WaybillFetchResult> ReadDeliverySourceAsync(ShippingLabelSettings config,
+        DateOnly from, DateOnly to, CancellationToken cancellationToken)
+    {
         cancellationToken.ThrowIfCancellationRequested();
-        return new(documents.OrderByDescending(r => r.CreatedLocal).ThenBy(r => r.TrackingNumber, StringComparer.Ordinal).ToArray(), sources);
+        if (string.IsNullOrWhiteSpace(config.RozetkaDeliveryToken))
+            return new([], [new(ShippingCarrier.RozetkaDelivery, "Rozetka Delivery", false, 0, "Токен Rozetka Delivery не встановлений.")]);
+        var rows = new Dictionary<string, WaybillRecord>(StringComparer.Ordinal);
+        var status = await ReadSourceAsync(ShippingCarrier.RozetkaDelivery, "Rozetka Delivery", rows,
+            () => ReadDeliveryAsync(config, from, to, rows, cancellationToken), cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        return new(rows.Values.ToArray(), [status]);
     }
 
     private static async Task<WaybillSourceStatus> ReadSourceAsync(ShippingCarrier carrier, string name,

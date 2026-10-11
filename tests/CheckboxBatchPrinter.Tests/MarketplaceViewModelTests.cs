@@ -2574,8 +2574,10 @@ internal static partial class MarketplaceViewModelTests
             { Connections = [new() { Id = "prom-test", Marketplace = MarketplaceKind.Prom, Enabled = true, Name = "Test shop" }] };
         public Dictionary<string, MarketplaceCredentials> Secrets { get; } = [];
         public bool ThrowOnMarketplaceLoad;
+        public bool ThrowOnAppLoad;
         public int AppSaves, MarketplaceSaves, SecretSaves, MarketplaceLoads, SecretLoads;
-        Task<AppSettings> ISettingsService.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(App);
+        Task<AppSettings> ISettingsService.LoadAsync(CancellationToken cancellationToken) => ThrowOnAppLoad
+            ? Task.FromException<AppSettings>(new JsonException("Synthetic damaged Checkbox settings.")) : Task.FromResult(App);
         Task<MarketplaceSettings> IMarketplaceSettingsStore.LoadAsync(CancellationToken cancellationToken)
         {
             MarketplaceLoads++;
@@ -2598,12 +2600,14 @@ internal static partial class MarketplaceViewModelTests
         public int DetailCalls;
         public MarketplaceRange? LastRange;
         public TaskCompletionSource<bool>? Gate;
+        public bool IgnoreCancellation;
+        public CancellationToken LastToken;
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task TestConnectionAsync(MarketplaceConnection c, MarketplaceCredentials s, CancellationToken ct = default) => Task.CompletedTask;
         public async Task<OrdersFetchResult> FetchAsync(MarketplaceConnection c, MarketplaceCredentials s, MarketplaceRange range, CancellationToken ct = default)
         {
-            FetchCalls++; LastRange = range; Entered.TrySetResult();
-            if (Gate is not null) await Gate.Task.WaitAsync(ct);
+            FetchCalls++; LastRange = range; LastToken = ct; Entered.TrySetResult();
+            if (Gate is not null) await Gate.Task.WaitAsync(IgnoreCancellation ? CancellationToken.None : ct);
             if (Fail) throw new MarketplaceApiException("API unavailable (test).");
             return new(Orders, Complete, Complete ? "" : "Перевірка неповна (synthetic test).");
         }
@@ -2644,8 +2648,14 @@ internal static partial class MarketplaceViewModelTests
         public Dictionary<string, PrintedReceiptRecord> Records { get; } = [];
         public int Saves;
         public bool FailSave;
-        public Task<IReadOnlyDictionary<string, PrintedReceiptRecord>> LoadAsync(string account, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyDictionary<string, PrintedReceiptRecord>>(Records.Where(p => p.Value.AccountContext == account).ToDictionary(p => p.Key, p => p.Value));
+        public TaskCompletionSource<bool>? LoadGate;
+        public TaskCompletionSource LoadEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async Task<IReadOnlyDictionary<string, PrintedReceiptRecord>> LoadAsync(string account, CancellationToken ct = default)
+        {
+            LoadEntered.TrySetResult();
+            if (LoadGate is not null) await LoadGate.Task.WaitAsync(ct);
+            return Records.Where(p => p.Value.AccountContext == account).ToDictionary(p => p.Key, p => p.Value);
+        }
         public Task MarkPrintedAsync(string account, IReadOnlyCollection<string> ids, string printer, CancellationToken ct = default)
         {
             if (FailSave) return Task.FromException(new IOException("Synthetic history save failure"));
@@ -2679,13 +2689,17 @@ internal static partial class MarketplaceViewModelTests
         public bool FilterDates;
         public bool Fail;
         public TaskCompletionSource<bool>? Gate;
+        public bool IgnoreCancellation;
+        public CancellationToken LastToken;
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public DateOnly LastFrom, LastTo;
+        public Func<DateOnly, DateOnly, CancellationToken, Task<IReadOnlyList<ReceiptRecord>>>? Read;
         public IReadOnlyList<ReceiptRecord> Rows = [Receipt(ReceiptTwo, 2, 10000), Receipt(ReceiptOne, 1, 10000), Receipt(ReceiptThree, 3, 99900)];
         public async Task<IReadOnlyList<ReceiptRecord>> GetReceiptsAsync(DateOnly from, DateOnly to, CancellationToken ct = default)
         {
-            Calls++; LastFrom = from; LastTo = to; Entered.TrySetResult();
-            if (Gate is not null) await Gate.Task.WaitAsync(ct);
+            Calls++; LastFrom = from; LastTo = to; LastToken = ct; Entered.TrySetResult();
+            if (Read is not null) return await Read(from, to, ct);
+            if (Gate is not null) await Gate.Task.WaitAsync(IgnoreCancellation ? CancellationToken.None : ct);
             if (Fail) throw new IOException("Synthetic receipt service unavailable.");
             return FilterDates ? Rows.Where(r => r.DisplayDate is { } date &&
                 DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(date, DateRangeBuilder.KyivZone).DateTime) >= from &&

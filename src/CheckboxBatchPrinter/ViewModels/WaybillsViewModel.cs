@@ -74,6 +74,9 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
 
     public ObservableCollection<WaybillRowViewModel> Rows => _rows;
     public ICollectionView View { get; }
+    // Describes only the completed current request, for source-aware background backoff.
+    public bool LastRefreshSucceeded { get; private set; }
+    public IReadOnlyList<WaybillSourceStatus> LastSourceStatuses { get; private set; } = [];
     public IReadOnlyList<WaybillCarrierOption> Carriers { get; }
     public ICommand RefreshCommand { get; }
     public ICommand CancelCommand { get; }
@@ -245,6 +248,8 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
             await RestoreHistoryAsync();
             cancellation.Token.ThrowIfCancellationRequested();
             if (_disposed || version != _requestVersion) return;
+            LastSourceStatuses = result.Sources.ToArray();
+            LastRefreshSucceeded = true;
             Status = result.Sources.Count == 0
                 ? (Rows.Count == 0 ? "Накладних за вибраний період не знайдено." : $"Завантажено накладних: {Rows.Count}.")
                 : string.Join(Environment.NewLine, result.Sources.Select(SourceStatus));
@@ -311,6 +316,8 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
     private void StopPending()
     {
         _requestVersion++;
+        LastRefreshSucceeded = false;
+        LastSourceStatuses = [];
         _refreshAcrossTabs = false;
         if (!_transmitting) _printCancellation?.Cancel();
         _debounceCancellation?.Cancel();

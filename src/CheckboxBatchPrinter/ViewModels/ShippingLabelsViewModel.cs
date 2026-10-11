@@ -26,6 +26,7 @@ public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
     private bool _busy;
     private string _status = "";
     private CancellationTokenSource? _cancel;
+    private TaskCompletionSource? _printOperationCompletion;
     private readonly HashSet<MarketplaceOrderRowViewModel> _observedRows = [];
     private bool _changingHeaderSelection, _disposed;
     public ShippingLabelsViewModel(MarketplaceWorkspaceViewModel workspace, IShippingSettingsStore settings,
@@ -54,6 +55,12 @@ public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
     }
     public bool IsBusy { get => _busy; private set { SetProperty(ref _busy, value); RaiseBusyCommands(); } }
     private bool CanOperate => !_disposed && !IsBusy && !_workspace.IsWorkspaceRefreshing;
+    internal bool IsPrintOperationActive => _printOperationCompletion is { Task.IsCompleted: false };
+    internal async Task WaitForPrintOperationAsync(CancellationToken token)
+    {
+        while (_printOperationCompletion is { Task.IsCompleted: false } completion)
+            await completion.Task.WaitAsync(token);
+    }
     private void RaiseBusyCommands()
     {
         foreach (var c in new[] { SelectVisibleCommand, ClearCommand, CancelCommand }) ((RelayCommand)c).RaiseCanExecuteChanged();
@@ -206,6 +213,8 @@ public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
                 orders = [chosen];
             }
         }
+        var printCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _printOperationCompletion = printCompletion;
         IsBusy = true;
         _cancel = new();
         _cancel.CancelAfter(TimeSpan.FromMinutes(5));
@@ -262,6 +271,11 @@ public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
             Status = ex.Message; _dialogs.Error(ex.Message);
         }
         catch (Exception ex) { Status = "Пакет не передано; перевірте етикетки / підключення."; _dialogs.Error(ex is ShippingLabelException or InvalidOperationException ? ex.Message : "Не вдалося підготувати етикетки. Перевірте локальні налаштування."); }
-        finally { _cancel.Dispose(); _cancel = null; IsBusy = false; }
+        finally
+        {
+            _cancel.Dispose(); _cancel = null; IsBusy = false;
+            printCompletion.TrySetResult();
+            if (ReferenceEquals(_printOperationCompletion, printCompletion)) _printOperationCompletion = null;
+        }
     }
 }

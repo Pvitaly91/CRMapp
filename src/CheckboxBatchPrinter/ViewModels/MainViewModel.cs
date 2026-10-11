@@ -25,6 +25,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly object _receiptFlightGate = new();
     private Task? _receiptFlight;
     private (DateOnly From, DateOnly To) _receiptFlightRange;
+    private bool _receiptFlightPersistSnapshot;
     private CancellationTokenSource? _operationCancellation;
     private DateTime? _dateFrom = DateRangeBuilder.TodayKyiv;
     private DateTime? _dateTo = DateRangeBuilder.TodayKyiv;
@@ -317,9 +318,11 @@ public sealed partial class MainViewModel : ObservableObject
             return Task.FromException(new BackgroundSourceSkippedException("Триває оновлення всіх даних"));
         lock (_receiptFlightGate)
         {
-            if (_receiptFlight is { IsCompleted: false } && _receiptFlightRange == (from, to)) return _receiptFlight;
+            if (_receiptFlight is { IsCompleted: false } && _receiptFlightRange == (from, to) &&
+                !(IsRefreshingAll && !persistSnapshot && _receiptFlightPersistSnapshot)) return _receiptFlight;
             var result = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _receiptFlightRange = (from, to);
+            _receiptFlightPersistSnapshot = persistSnapshot;
             _receiptFlight = result.Task;
             _ = RunReceiptFlightAsync(from, to, token, persistSnapshot, result);
             return result.Task;
@@ -351,9 +354,15 @@ public sealed partial class MainViewModel : ObservableObject
             var account = PrintAccountContext.Create(settings);
             var items = await _receiptService.GetReceiptsAsync(from, to, token);
             token.ThrowIfCancellationRequested();
+            if (persistSnapshot && IsRefreshingAll) throw new BackgroundSourceSkippedException("Триває оновлення всіх даних");
             // A late response from the previous cashier must never enter the new profile.
             if (PrintAccountContext.Create(await _settingsService.LoadAsync(token)) != account) return;
             var printed = await _printHistoryStore.LoadAsync(account, token);
+            token.ThrowIfCancellationRequested();
+            if (persistSnapshot && IsRefreshingAll) throw new BackgroundSourceSkippedException("Триває оновлення всіх даних");
+            if (PrintAccountContext.Create(await _settingsService.LoadAsync(token)) != account) return;
+            token.ThrowIfCancellationRequested();
+            if (persistSnapshot && IsRefreshingAll) throw new BackgroundSourceSkippedException("Триває оновлення всіх даних");
             ApplyReceipts(items, printed, account, from, to, background: persistSnapshot);
             if (Marketplace is not null) Marketplace.ReceiptCoverageFresh = true;
             if (persistSnapshot && _receiptSnapshots is not null)
@@ -471,8 +480,9 @@ public sealed partial class MainViewModel : ObservableObject
         {
             var settings = await _settingsService.LoadAsync(_operationCancellation.Token);
             var accountContext = PrintAccountContext.Create(settings);
-            await BackgroundRefreshAsync(from, to, _operationCancellation.Token, persistSnapshot: false)
-                .WaitAsync(_operationCancellation.Token);
+            var receiptFlight = BackgroundRefreshAsync(from, to, _operationCancellation.Token, persistSnapshot: false);
+            if (IsRefreshingAll) await receiptFlight;
+            else await receiptFlight.WaitAsync(_operationCancellation.Token);
             refreshed = true;
         }
         catch (OperationCanceledException) { StatusText = "Операцію скасовано"; }

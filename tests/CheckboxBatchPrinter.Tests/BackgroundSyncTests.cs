@@ -17,6 +17,9 @@ internal static class BackgroundSyncTests
         ("recovery events during another source coalesce into one follow-up", InFlightRecoveryAsync),
         ("network recovery and manual refresh respect 429 Retry-After", RateLimitRecoveryAsync),
         ("authorization recovery waits for verified credentials", AuthorizationRecoveryAsync),
+        ("parallel background sources start together but apply orders only after receipt settlement", ParallelCycleAsync),
+        ("parallel background failures and source cooldowns remain independent", ParallelBackoffAsync),
+        ("parallel background shutdown drains every started source and skips reconciliation", ParallelShutdownAsync),
         ("protected receipt snapshot restores only matching account", SnapshotAsync),
         ("background receipt upsert preserves row selection and print state", UpsertAsync),
         ("concurrent F5 and background receipt refresh share one API request", ReceiptFlightAsync),
@@ -165,6 +168,149 @@ internal static class BackgroundSyncTests
         coordinator.CredentialsVerified("Checkbox");
         await coordinator.RefreshNowAsync(true);
         if (calls != 2) throw new Exception("Verified credentials did not release authorization pause.");
+    }
+
+    private static TaskCompletionSource CycleGate() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private static async Task ParallelCycleAsync()
+    {
+        var receiptEntered = CycleGate(); var orderEntered = CycleGate(); var waybillEntered = CycleGate();
+        var receiptRelease = CycleGate(); var orderRelease = CycleGate(); var waybillRelease = CycleGate();
+        var reconciliationEntered = CycleGate(); var reconciliationRelease = CycleGate();
+        var receiptCalls = 0; var orderCalls = 0; var waybillCalls = 0;
+        var beginCalls = 0; var applied = 0; var finishedSources = 0;
+        await using var coordinator = new BackgroundSyncCoordinator(async ct =>
+        {
+            receiptCalls++; receiptEntered.TrySetResult();
+            await receiptRelease.Task.WaitAsync(ct);
+            Interlocked.Increment(ref finishedSources);
+        }, _ => throw new Exception("Parallel mode called the legacy sequential order callback."),
+            _ => Task.FromResult(new AppSettings()), parallelOrders: async (receiptsSettled, ct) =>
+            {
+                orderCalls++; orderEntered.TrySetResult();
+                await orderRelease.Task.WaitAsync(ct);
+                Interlocked.Increment(ref finishedSources);
+                await receiptsSettled.WaitAsync(ct);
+                Interlocked.Increment(ref applied);
+            }, waybills: async ct =>
+            {
+                waybillCalls++; waybillEntered.TrySetResult();
+                await waybillRelease.Task.WaitAsync(ct);
+                Interlocked.Increment(ref finishedSources);
+            }, beginCycle: () => Interlocked.Increment(ref beginCalls), afterCycle: async ct =>
+            {
+                if (finishedSources != 3 || applied != 1)
+                    throw new Exception("Associations were reconciled before all sources and receipt-dependent matching settled.");
+                reconciliationEntered.TrySetResult();
+                await reconciliationRelease.Task.WaitAsync(ct);
+            });
+        var first = coordinator.RefreshNowAsync();
+        try
+        {
+            // No source is released until every independent network flight has entered.
+            await Task.WhenAll(receiptEntered.Task, orderEntered.Task, waybillEntered.Task).WaitAsync(TimeSpan.FromSeconds(5));
+            if (beginCalls != 1 || applied != 0 || coordinator.States.Count != 3 ||
+                coordinator.States.Any(source => source.Status != "Оновлюється") ||
+                !ReferenceEquals(first, coordinator.RefreshNowAsync()))
+                throw new Exception("Parallel startup lost the shared cycle or source state.");
+            orderRelease.TrySetResult(); waybillRelease.TrySetResult();
+            for (var i = 0; i < 100 && Volatile.Read(ref finishedSources) < 2; i++) await Task.Yield();
+            if (applied != 0 || first.IsCompleted || reconciliationEntered.Task.IsCompleted)
+                throw new Exception("Order application or reconciliation escaped the receipt barrier.");
+            receiptRelease.TrySetResult();
+            await reconciliationEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (!ReferenceEquals(first, coordinator.RefreshNowAsync()) || receiptCalls != 1 || orderCalls != 1 || waybillCalls != 1)
+                throw new Exception("Post-fetch reconciliation allowed a duplicate refresh flight.");
+            reconciliationRelease.TrySetResult();
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
+            if (coordinator.States.Any(source => source.Status != "Оновлено") || beginCalls != 1 || applied != 1)
+                throw new Exception("Parallel cycle did not finish each source exactly once.");
+        }
+        finally
+        {
+            receiptRelease.TrySetResult(); orderRelease.TrySetResult(); waybillRelease.TrySetResult(); reconciliationRelease.TrySetResult();
+            coordinator.Stop(); await first.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    private static async Task ParallelBackoffAsync()
+    {
+        var clock = new ManualClock(); var receiptCalls = 0; var orderCalls = 0; var waybillCalls = 0;
+        var beginCalls = 0; var reconciliations = 0; var receiptFresh = true;
+        await using var coordinator = new BackgroundSyncCoordinator(_ =>
+        {
+            receiptCalls++;
+            throw new ApiException("synthetic limit", System.Net.HttpStatusCode.TooManyRequests, retryAfter: TimeSpan.FromMinutes(10));
+        }, _ => throw new Exception("Legacy order callback was used."), _ => Task.FromResult(new AppSettings()), clock,
+            parallelOrders: async (receiptsSettled, ct) =>
+            {
+                orderCalls++; await receiptsSettled.WaitAsync(ct);
+                if (receiptFresh) throw new Exception("Failed or cooling Checkbox certified stale rows for matching.");
+            }, waybills: _ =>
+            {
+                waybillCalls++;
+                if (waybillCalls == 1) throw new HttpRequestException("synthetic delivery unavailable");
+                if (waybillCalls == 2) throw new ApiException("synthetic delivery denied", System.Net.HttpStatusCode.Forbidden);
+                return Task.CompletedTask;
+            }, beginCycle: () => { beginCalls++; receiptFresh = false; },
+            afterCycle: _ => { reconciliations++; return Task.CompletedTask; });
+        await coordinator.RefreshNowAsync();
+        var receipts = coordinator.States.Single(source => source.Name == "Checkbox");
+        var waybills = coordinator.States.Single(source => source.Name == "Накладні");
+        if (receipts.CooldownReason != BackgroundCooldownReason.RateLimited || receipts.NextAttemptUtc != clock.GetUtcNow().AddMinutes(10) ||
+            waybills.CooldownReason != BackgroundCooldownReason.Transient ||
+            coordinator.States.Single(source => source.Name == "Маркетплейси").Status != "Оновлено")
+            throw new Exception("One failed source changed the independent successful source or shortened Retry-After.");
+        receiptFresh = true;
+        await coordinator.RefreshNowAsync();
+        if (receiptCalls != 1 || waybillCalls != 1 || orderCalls != 2 || receiptFresh)
+            throw new Exception("A cooldown blocked unrelated marketplace work or skipped the freshness reset.");
+        await coordinator.RefreshNowAsync(true);
+        if (receiptCalls != 1 || waybillCalls != 2 || orderCalls != 3 ||
+            coordinator.States.Single(source => source.Name == "Накладні").CooldownReason != BackgroundCooldownReason.Authorization)
+            throw new Exception("Explicit retry bypassed a server cooldown or missed independent carrier authorization pause.");
+        await coordinator.RefreshNowAsync(true);
+        if (waybillCalls != 2 || orderCalls != 4) throw new Exception("Carrier authorization pause caused retry or blocked marketplaces.");
+        coordinator.CredentialsVerified("Накладні");
+        await coordinator.RefreshNowAsync(true);
+        if (receiptCalls != 1 || waybillCalls != 3 || orderCalls != 5 || beginCalls != 5 || reconciliations != 5 ||
+            coordinator.States.Single(source => source.Name == "Накладні").Status != "Оновлено")
+            throw new Exception("Verified carrier credentials did not resume only that source or reconcile each settled cycle.");
+    }
+
+    private static async Task ParallelShutdownAsync()
+    {
+        var receiptEntered = CycleGate(); var orderEntered = CycleGate(); var waybillEntered = CycleGate();
+        var receiptRelease = CycleGate(); var orderRelease = CycleGate(); var waybillRelease = CycleGate();
+        var reconciliations = 0;
+        await using var coordinator = new BackgroundSyncCoordinator(async _ =>
+        {
+            receiptEntered.TrySetResult(); await receiptRelease.Task; // Non-cooperative response.
+        }, _ => throw new Exception("Legacy order callback was used."), _ => Task.FromResult(new AppSettings()),
+            parallelOrders: async (receiptsSettled, ct) =>
+            {
+                orderEntered.TrySetResult(); await orderRelease.Task;
+                await receiptsSettled.WaitAsync(ct);
+            }, waybills: async _ => { waybillEntered.TrySetResult(); await waybillRelease.Task; },
+            afterCycle: _ => { reconciliations++; return Task.CompletedTask; });
+        var cycle = coordinator.RefreshNowAsync();
+        try
+        {
+            await Task.WhenAll(receiptEntered.Task, orderEntered.Task, waybillEntered.Task).WaitAsync(TimeSpan.FromSeconds(5));
+            coordinator.Stop();
+            receiptRelease.TrySetResult(); orderRelease.TrySetResult();
+            for (var i = 0; i < 30; i++) await Task.Yield();
+            if (cycle.IsCompleted || reconciliations != 0) throw new Exception("Shutdown forgot a still-running carrier flight.");
+            waybillRelease.TrySetResult();
+            await cycle.WaitAsync(TimeSpan.FromSeconds(5));
+            if (reconciliations != 0 || coordinator.States.Any(source => source.Status != "Пауза"))
+                throw new Exception("Canceled responses were certified successful or reconciled after shutdown.");
+        }
+        finally
+        {
+            receiptRelease.TrySetResult(); orderRelease.TrySetResult(); waybillRelease.TrySetResult();
+            coordinator.Stop(); await cycle.WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
     private static async Task SnapshotAsync()

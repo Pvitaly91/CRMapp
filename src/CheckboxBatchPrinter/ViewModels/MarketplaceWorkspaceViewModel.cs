@@ -9,7 +9,7 @@ using CheckboxBatchPrinter.Services;
 
 namespace CheckboxBatchPrinter.ViewModels;
 
-public sealed class MarketplaceWorkspaceViewModel : ObservableObject
+public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
 {
     private readonly IMarketplaceSettingsStore _settings;
     private readonly MarketplaceSyncService _sync;
@@ -135,7 +135,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     public string Status { get => _status; private set => SetProperty(ref _status, value); }
     private string _fiscalSummary = "";
     public string FiscalSummary { get => _fiscalSummary; private set => SetProperty(ref _fiscalSummary, value); }
-    public bool IsBusy { get => _busy || _attaching; private set { _busy = value; OnPropertyChanged(); RaiseCommands(); } }
+    public bool IsBusy { get => _busy || _attaching || _parallelBusy; private set { _busy = value; OnPropertyChanged(); RaiseCommands(); } }
     public bool IsWorkspaceRefreshing
     {
         get => _workspaceRefreshing;
@@ -146,6 +146,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
             {
                 _automaticCancel?.Cancel();
                 _cancel?.Cancel();
+                _parallelCancellation?.Cancel();
             }
             RaiseCommands();
         }
@@ -246,6 +247,8 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     // Settings changes require a fresh local attachment without losing the visible archive or marks.
     public void InvalidateConfiguration()
     {
+        _configurationVersion++;
+        _parallelCancellation?.Cancel();
         // Invalidate before cancellation: a backend may finish while cancellation is being signaled.
         _generation++;
         _automaticCancel?.Cancel();
@@ -332,6 +335,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     }
     public void CancelPendingOperations()
     {
+        _parallelCancellation?.Cancel();
         _cancel?.Cancel();
         _automaticCancel?.Cancel();
         _scopeCancel.Cancel();
@@ -621,6 +625,8 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
 
     public void InvalidateAccount()
     {
+        _parallelAccountVersion++;
+        _parallelCancellation?.Cancel();
         SetReceiptScope(_rows, "", _from, _to);
         foreach (var row in _rows) row.OrderMatch = null;
         SelectedReceipt = null; Status = "Касира змінено. Оновіть список чеків."; RaiseCommands();
@@ -888,6 +894,7 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     private void ApplyMatches(bool? backgroundOnly = null)
     {
         if (!_canApply) return;
+        if (_parallelPublishing && Labels?.IsPrintOperationActive == true) return;
         var backgroundMode = backgroundOnly ?? _backgroundSyncing;
         var orders = ActiveOrders;
         var decisions = ActiveDecisions;

@@ -28,7 +28,9 @@ internal static class WaybillServiceTests
         ("all waybills retain one carrier document across overlapping state and date windows", DeliveryDeduplication),
         ("all waybills offset timestamps use Kyiv dates and out-of-range dates are excluded", DateOffsets),
         ("all waybills reject malformed identity metadata without showing response secrets", InvalidData),
-        ("all waybills cancellation propagates before and during carrier reads", Cancellation)
+        ("all waybills cancellation propagates before and during carrier reads", Cancellation),
+        ("all waybills start NovaPoshta and Delivery in parallel while provider pagination and failure statuses stay independent", ParallelCarriers),
+        ("all waybills cancellation reaches both already-started carriers without requesting more pages", ParallelCarrierCancellation)
     ];
 
     private sealed class Store(ShippingLabelSettings value) : IShippingSettingsStore
@@ -41,7 +43,7 @@ internal static class WaybillServiceTests
     {
         public int Calls;
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-        { Calls++; return read(request, ct); }
+        { Interlocked.Increment(ref Calls); return read(request, ct); }
     }
     private static HttpResponseMessage Json(object value) => new(HttpStatusCode.OK)
     { Content = new StringContent(JsonSerializer.Serialize(value), Encoding.UTF8, "application/json") };
@@ -292,6 +294,89 @@ internal static class WaybillServiceTests
             result.Documents.Single(d => d.TrackingNumber == "RD-2").CreatedLocal == new DateTime(2026, 10, 9, 12, 0, 0),
             "UTC timestamps shifted the selected Kyiv date or an outside-range document appeared.");
     }
+    private static async Task ParallelCarriers()
+    {
+        foreach (var failNovaPoshta in new[] { false, true })
+        {
+            var npEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var deliveryEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var npActive = 0; var deliveryActive = 0; var npMaximum = 0; var deliveryMaximum = 0;
+            var handler = new Handler(async (request, ct) =>
+            {
+                if (request.Method == HttpMethod.Post)
+                {
+                    npMaximum = Math.Max(npMaximum, Interlocked.Increment(ref npActive));
+                    try
+                    {
+                        npEntered.TrySetResult(); await release.Task.WaitAsync(ct);
+                        Check(NpQuery(request).Page == 1, "A verified NP total triggered another page.");
+                        return failNovaPoshta ? new(HttpStatusCode.Forbidden) { Content = new StringContent(Key) }
+                            : NpTotal([NpRow(1)], 1);
+                    }
+                    finally { Interlocked.Decrement(ref npActive); }
+                }
+                deliveryMaximum = Math.Max(deliveryMaximum, Interlocked.Increment(ref deliveryActive));
+                try
+                {
+                    deliveryEntered.TrySetResult(); await release.Task.WaitAsync(ct);
+                    var q = Query(request);
+                    var active = q["is_archived"][0] == "false" && q["is_deleted"][0] == "false";
+                    return active ? Rd([RdRow("RD-parallel")], 1) : Rd([], 0);
+                }
+                finally { Interlocked.Decrement(ref deliveryActive); }
+            });
+            using var client = new HttpClient(handler);
+            var refreshing = Service(client, NpSettings() with { RozetkaDeliveryToken = Token }).FetchAsync(Day, Day);
+            try
+            {
+                await Task.WhenAll(npEntered.Task, deliveryEntered.Task).WaitAsync(TimeSpan.FromSeconds(5));
+                Check(handler.Calls == 2 && !refreshing.IsCompleted,
+                    "A carrier waited for another provider's result before sending its first request.");
+                release.TrySetResult();
+                var result = await refreshing.WaitAsync(TimeSpan.FromSeconds(5));
+                Check(handler.Calls == 5 && npMaximum == 1 && deliveryMaximum == 1,
+                    "Provider pages ran concurrently or a completed page was requested again.");
+                Check(result.Sources[0].Carrier == ShippingCarrier.NovaPoshta && result.Sources[0].Complete == !failNovaPoshta &&
+                    result.Sources[1].Carrier == ShippingCarrier.RozetkaDelivery && result.Sources[1].Complete &&
+                    result.Documents.Count == (failNovaPoshta ? 1 : 2), "Provider failure lost independent results or changed status ordering.");
+                NoSecrets(result);
+            }
+            finally { release.TrySetResult(); await refreshing; }
+        }
+    }
+
+    private static async Task ParallelCarrierCancellation()
+    {
+        var npEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var deliveryEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationToken npToken = default, deliveryToken = default;
+        var handler = new Handler(async (request, token) =>
+        {
+            if (request.Method == HttpMethod.Post) { npToken = token; npEntered.TrySetResult(); }
+            else { deliveryToken = token; deliveryEntered.TrySetResult(); }
+            await release.Task.WaitAsync(token);
+            return request.Method == HttpMethod.Post ? Np() : Rd([], 0);
+        });
+        using var client = new HttpClient(handler); using var cancellation = new CancellationTokenSource();
+        var refreshing = Service(client, NpSettings() with { RozetkaDeliveryToken = Token }).FetchAsync(Day, Day, cancellation.Token);
+        try
+        {
+            await Task.WhenAll(npEntered.Task, deliveryEntered.Task).WaitAsync(TimeSpan.FromSeconds(5));
+            cancellation.Cancel();
+            try { await refreshing.WaitAsync(TimeSpan.FromSeconds(5)); throw new Exception("Parallel carrier cancellation ignored."); }
+            catch (OperationCanceledException) { }
+            Check(npToken.IsCancellationRequested && deliveryToken.IsCancellationRequested && handler.Calls == 2,
+                "Cancellation did not stop every started carrier or allowed another page request.");
+        }
+        finally
+        {
+            cancellation.Cancel(); release.TrySetResult();
+            try { await refreshing; } catch (OperationCanceledException) { }
+        }
+    }
+
     private static async Task Cancellation()
     {
         using var cancel = new CancellationTokenSource(); cancel.Cancel();

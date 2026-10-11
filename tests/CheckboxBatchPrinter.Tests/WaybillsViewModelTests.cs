@@ -87,11 +87,15 @@ internal static class WaybillsViewModelTests
              new(ShippingCarrier.RozetkaDelivery, "Кабінет RD", false, 0, "API-ключ не встановлений.")]));
         await model.RefreshAsync();
         Check(model.Rows.Single().TrackingNumber == "NP-NEW", "Failed source inherited stale documents from an earlier account snapshot.");
+        Check(model.LastRefreshSucceeded && model.LastSourceStatuses.Count == 2 &&
+              model.LastSourceStatuses.Any(sourceStatus => sourceStatus.Carrier == ShippingCarrier.RozetkaDelivery && !sourceStatus.Complete),
+            "Background synchronization cannot distinguish a completed partial response from successful configured sources.");
         Check(model.Status.Contains("Нова пошта") && model.Status.Contains("Rozetka Delivery") &&
               model.Status.Contains("неповне") && model.Status.Contains("API-ключ не встановлений"), "Per-source availability is hidden.");
         source.Handler = (_, _, _) => Task.FromException<WaybillFetchResult>(new Exception("Synthetic-secret-must-not-be-displayed"));
         await model.RefreshAsync();
         Check(model.Rows.Single().TrackingNumber == "NP-NEW" && model.Status.Contains("раніше завантажені"), "Total transport failure should identify retained same-period documents.");
+        Check(!model.LastRefreshSucceeded && model.LastSourceStatuses.Count == 0, "Failed refresh retained a previous request's success proof.");
         Check(!model.Status.Contains("Synthetic-secret") && !model.IsBusy, "Transport exception text leaked or tab stayed busy.");
     }
 
@@ -144,6 +148,7 @@ internal static class WaybillsViewModelTests
         using var model = Create(source);
         var oldFetch = model.RefreshAsync();
         Check(model.IsBusy, "Initial fetch did not mark the tab busy.");
+        Check(!model.LastRefreshSucceeded && model.LastSourceStatuses.Count == 0, "In-flight request inherited completed-source proof.");
         model.SetDisplayDates(Day.AddDays(-1), Day.AddDays(-1));
         Check(source.Calls[0].Token.IsCancellationRequested && !model.IsBusy && model.Rows.Count == 0, "Date change did not clear/cancel the old snapshot.");
         var newFetch = model.RefreshAsync();
@@ -151,10 +156,13 @@ internal static class WaybillsViewModelTests
         current.SetResult(Result(Document("CURRENT") with { CreatedLocal = Day.AddDays(-1).ToDateTime(new(14, 0)) }));
         await newFetch;
         var status = model.Status;
+        var sourceStatuses = model.LastSourceStatuses;
         old.SetResult(Result(Document("STALE")));
         await oldFetch;
         Check(model.Rows.Single().TrackingNumber == "CURRENT" && model.Status == status && !model.IsBusy,
             "Late old-range completion overwrote the current snapshot or status.");
+        Check(model.LastRefreshSucceeded && ReferenceEquals(sourceStatuses, model.LastSourceStatuses),
+            "Late old-range completion overwrote or cleared the current request's completed-source proof.");
     }
 
     private static async Task CancelAndRestart()
@@ -176,6 +184,7 @@ internal static class WaybillsViewModelTests
         second.SetResult(Result(Document("CANCELLED-REQUEST")));
         await secondFetch;
         Check(model.Rows.Count == 0 && model.Status.Contains("скасовано"), "Non-cooperative cancelled API published its result.");
+        Check(!model.LastRefreshSucceeded && model.LastSourceStatuses.Count == 0, "Canceled carrier response certified successful sources.");
         source.Handler = (_, _, _) => Task.FromResult(Result(Document("FRESH")));
         await model.RefreshAsync();
         Check(model.Rows.Single().TrackingNumber == "FRESH", "Cancelled tab cannot refresh again.");

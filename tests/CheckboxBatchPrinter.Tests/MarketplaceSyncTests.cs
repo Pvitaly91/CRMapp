@@ -25,6 +25,9 @@ internal static class MarketplaceSyncTests
         ("sync: durable outside-range order failures still block completeness", DurableHistoryFailureAsync),
         ("sync: relevant unknown-date and durable order safety limit stays incomplete", SafetyLimitAsync),
         ("sync: cancellation releases gate; concurrent duplicate sync is rejected", CancellationAndConcurrencyAsync),
+        ("sync: Prom and Rozetka lanes overlap while their account reads and merged cache writes stay serial", ParallelProviderLanesAsync),
+        ("sync: a failed parallel provider preserves the other provider and sanitized individual checkpoints", ParallelProviderFailureAsync),
+        ("sync: canceled late provider results cannot overwrite the other completed provider cache", ParallelProviderCancellationAsync),
         ("sync: Kyiv day boundaries honor DST and configurable lookback", DateRangeAsync),
         ("transport: only documented read/auth requests reach HTTP handler", ReadOnlyWhitelistAsync),
         ("transport: Retry-After delta/date control injected delay", RetryAfterAsync),
@@ -246,6 +249,138 @@ internal static class MarketplaceSyncTests
         Equal(2, client.FetchCount);
     }
 
+    private static async Task ParallelProviderLanesAsync()
+    {
+        var promEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var rozetkaEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var activeProm = 0; var activeRozetka = 0; var maxProm = 0; var maxRozetka = 0;
+        var prom = new FakeClient(MarketplaceKind.Prom)
+        {
+            Fetch = async (connection, token) =>
+            {
+                maxProm = Math.Max(maxProm, Interlocked.Increment(ref activeProm));
+                try
+                {
+                    promEntered.TrySetResult(); await release.Task.WaitAsync(token);
+                    return new([Order("42", "prom", connection.Id)], true);
+                }
+                finally { Interlocked.Decrement(ref activeProm); }
+            }
+        };
+        var rozetka = new FakeClient(MarketplaceKind.Rozetka)
+        {
+            Fetch = async (connection, token) =>
+            {
+                maxRozetka = Math.Max(maxRozetka, Interlocked.Increment(ref activeRozetka));
+                try
+                {
+                    rozetkaEntered.TrySetResult(); await release.Task.WaitAsync(token);
+                    return new([Order("42", "rozetka", connection.Id, MarketplaceKind.Rozetka)], true);
+                }
+                finally { Interlocked.Decrement(ref activeRozetka); }
+            }
+        };
+        var config = Settings(both: true);
+        config.Connections.Add(new() { Id = "prom-second", Marketplace = MarketplaceKind.Prom, Enabled = true });
+        config.Connections.Add(new() { Id = "rozetka-second", Marketplace = MarketplaceKind.Rozetka, Enabled = true });
+        var cache = new ParallelCommitCache();
+        var service = new MarketplaceSyncService([prom, rozetka], new MemorySecrets(), cache, new Clock());
+        var refreshing = service.SynchronizeAsync(config, Range, []);
+        try
+        {
+            await Task.WhenAll(promEntered.Task, rozetkaEntered.Task).WaitAsync(TimeSpan.FromSeconds(5));
+            Equal(1, prom.FetchCount); Equal(1, rozetka.FetchCount); Equal(0, cache.Snapshots.Count);
+            True(!refreshing.IsCompleted);
+            release.TrySetResult();
+            var result = await refreshing.WaitAsync(TimeSpan.FromSeconds(5));
+            Equal(2, prom.FetchCount); Equal(2, rozetka.FetchCount); Equal(1, maxProm); Equal(1, maxRozetka);
+            Equal(4, result.Orders.Count); Equal(4, result.Orders.Select(o => o.Key).Distinct().Count());
+            True(result.States.All(s => s.Complete)); Equal(4, result.States.Count);
+            Equal(1, cache.MaximumConcurrentSaves);
+            Equal(4, cache.Snapshots.Count); Equal(4, cache.Snapshots.Last().Orders.Count);
+            Equal(4, cache.Snapshots.Last().States.Count);
+            var snapshots = cache.Snapshots.ToArray();
+            for (var i = 0; i < snapshots.Length; i++)
+            {
+                Equal(i + 1, snapshots[i].Orders.Count); Equal(i + 1, snapshots[i].States.Count);
+                if (i > 0) True(snapshots[i - 1].Orders.All(previous => snapshots[i].Orders.Any(current => current.Key == previous.Key)));
+            }
+        }
+        finally { release.TrySetResult(); await refreshing; }
+    }
+
+    private static async Task ParallelProviderFailureAsync()
+    {
+        var promEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var rozetkaEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var prom = new FakeClient(MarketplaceKind.Prom)
+        {
+            Fetch = async (_, token) =>
+            { promEntered.TrySetResult(); await release.Task.WaitAsync(token); throw new HttpRequestException("Synthetic private buyer marker."); }
+        };
+        var rozetka = new FakeClient(MarketplaceKind.Rozetka)
+        {
+            Fetch = async (_, token) =>
+            { rozetkaEntered.TrySetResult(); await release.Task.WaitAsync(token); return new([Order("42", "good", RozetkaId, MarketplaceKind.Rozetka)], true); }
+        };
+        var cache = new ParallelCommitCache();
+        var service = new MarketplaceSyncService([prom, rozetka], new MemorySecrets(), cache, new Clock());
+        var refreshing = service.SynchronizeAsync(Settings(both: true), Range, []);
+        try
+        {
+            await Task.WhenAll(promEntered.Task, rozetkaEntered.Task).WaitAsync(TimeSpan.FromSeconds(5));
+            release.TrySetResult();
+            var result = await refreshing.WaitAsync(TimeSpan.FromSeconds(5));
+            Equal(RozetkaId, result.Orders.Single().Key.ConnectionId);
+            True(result.States.Single(s => s.ConnectionId == RozetkaId).Complete);
+            True(!result.States.Single(s => s.ConnectionId == PromId).Complete);
+            True(result.States.All(s => !s.Message.Contains("private buyer", StringComparison.Ordinal)));
+            Equal(1, cache.MaximumConcurrentSaves); Equal(2, cache.Snapshots.Last().States.Count);
+            Equal(RozetkaId, cache.Snapshots.Last().Orders.Single().Key.ConnectionId);
+        }
+        finally { release.TrySetResult(); await refreshing; }
+    }
+
+    private static async Task ParallelProviderCancellationAsync()
+    {
+        var promEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var rozetkaEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var late = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var rozetkaRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var prom = new FakeClient(MarketplaceKind.Prom)
+        {
+            Fetch = async (_, _) =>
+            { promEntered.TrySetResult(); await late.Task; return new([Order("old", "late")], true); }
+        };
+        var rozetka = new FakeClient(MarketplaceKind.Rozetka)
+        {
+            Fetch = async (_, token) =>
+            { rozetkaEntered.TrySetResult(); await rozetkaRelease.Task.WaitAsync(token); return new([Order("good", "good", RozetkaId, MarketplaceKind.Rozetka)], true); }
+        };
+        var cache = new ParallelCommitCache();
+        using var cancellation = new CancellationTokenSource();
+        var refreshing = new MarketplaceSyncService([prom, rozetka], new MemorySecrets(), cache, new Clock())
+            .SynchronizeAsync(Settings(both: true), Range, [], cancellation.Token);
+        try
+        {
+            await Task.WhenAll(promEntered.Task, rozetkaEntered.Task).WaitAsync(TimeSpan.FromSeconds(5));
+            rozetkaRelease.TrySetResult();
+            await cache.FirstSaved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            cancellation.Cancel(); late.TrySetResult();
+            await ThrowsAsync<OperationCanceledException>(async () => await refreshing.WaitAsync(TimeSpan.FromSeconds(5)));
+            Equal(1, cache.Snapshots.Count); Equal(1, cache.MaximumConcurrentSaves);
+            Equal(RozetkaId, cache.Snapshots.Last().Orders.Single().Key.ConnectionId);
+            Equal(RozetkaId, cache.Snapshots.Last().States.Single().ConnectionId);
+        }
+        finally
+        {
+            cancellation.Cancel(); rozetkaRelease.TrySetResult(); late.TrySetResult();
+            try { await refreshing; } catch (OperationCanceledException) { }
+        }
+    }
+
     private static Task DateRangeAsync()
     {
         var spring = MarketplaceSyncService.BuildRange(new DateOnly(2024, 3, 31), new DateOnly(2024, 3, 31), 0);
@@ -446,6 +581,30 @@ internal static class MarketplaceSyncTests
             Saves++;
             _value = snapshot;
             return Task.CompletedTask;
+        }
+    }
+    private sealed class ParallelCommitCache : IMarketplaceCacheStore
+    {
+        private MarketplaceSnapshot _value = new([], []);
+        private int _active;
+        public int MaximumConcurrentSaves;
+        public System.Collections.Concurrent.ConcurrentQueue<MarketplaceSnapshot> Snapshots { get; } = new();
+        public TaskCompletionSource FirstSaved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task<MarketplaceSnapshot> LoadAsync(int retentionDays, CancellationToken cancellationToken = default)
+        { cancellationToken.ThrowIfCancellationRequested(); return Task.FromResult(_value); }
+        public async Task SaveAsync(MarketplaceSnapshot snapshot, CancellationToken cancellationToken = default)
+        {
+            var active = Interlocked.Increment(ref _active);
+            int observed;
+            do { observed = MaximumConcurrentSaves; }
+            while (active > observed && Interlocked.CompareExchange(ref MaximumConcurrentSaves, active, observed) != observed);
+            try
+            {
+                // Yield inside the commit to expose overlapping writes deterministically.
+                await Task.Yield(); cancellationToken.ThrowIfCancellationRequested();
+                _value = snapshot; Snapshots.Enqueue(snapshot); FirstSaved.TrySetResult();
+            }
+            finally { Interlocked.Decrement(ref _active); }
         }
     }
     private sealed class MemorySecrets : IMarketplaceSecretStore

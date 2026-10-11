@@ -15,6 +15,10 @@ public sealed class BackgroundSyncCoordinator : IAsyncDisposable
     private readonly Func<CancellationToken, Task> _receipts;
     private readonly Func<CancellationToken, Task> _orders;
     private readonly Func<CancellationToken, Task<AppSettings>> _settings;
+    private readonly Func<Task, CancellationToken, Task>? _parallelOrders;
+    private readonly Func<CancellationToken, Task>? _waybills;
+    private readonly Action? _beginCycle;
+    private readonly Func<CancellationToken, Task>? _afterCycle;
     private readonly TimeProvider _clock;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Dictionary<string, BackgroundSourceState> _states = [];
@@ -26,12 +30,17 @@ public sealed class BackgroundSyncCoordinator : IAsyncDisposable
 
     public BackgroundSyncCoordinator(Func<CancellationToken, Task> receipts,
         Func<CancellationToken, Task> orders, Func<CancellationToken, Task<AppSettings>> settings,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null, Func<Task, CancellationToken, Task>? parallelOrders = null,
+        Func<CancellationToken, Task>? waybills = null, Action? beginCycle = null,
+        Func<CancellationToken, Task>? afterCycle = null)
     {
         _receipts = receipts; _orders = orders; _settings = settings;
+        _parallelOrders = parallelOrders; _waybills = waybills;
+        _beginCycle = beginCycle; _afterCycle = afterCycle;
         _clock = clock ?? TimeProvider.System;
         _states["Checkbox"] = new("Checkbox", "Очікує");
         _states["Маркетплейси"] = new("Маркетплейси", "Очікує");
+        if (waybills is not null) _states["Накладні"] = new("Накладні", "Очікує");
     }
 
     public event EventHandler? StateChanged;
@@ -122,8 +131,26 @@ public sealed class BackgroundSyncCoordinator : IAsyncDisposable
 
     private async Task CycleAsync(CancellationToken token, bool explicitRetry, bool recovery)
     {
-        await RunSourceAsync("Checkbox", _receipts, token, explicitRetry, recovery);
-        await RunSourceAsync("Маркетплейси", _orders, token, explicitRetry, recovery);
+        if (token.IsCancellationRequested) return;
+        if (_parallelOrders is null)
+        {
+            // Existing callers may depend on receipt application before order synchronization.
+            await RunSourceAsync("Checkbox", _receipts, token, explicitRetry, recovery);
+            await RunSourceAsync("Маркетплейси", _orders, token, explicitRetry, recovery);
+            if (_waybills is not null) await RunSourceAsync("Накладні", _waybills, token, explicitRetry, recovery);
+        }
+        else
+        {
+            _beginCycle?.Invoke();
+            var receiptsSettled = RunSourceAsync("Checkbox", _receipts, token, explicitRetry, recovery);
+            // The order callback starts network reads immediately, but receives a barrier
+            // that completes after Checkbox has applied or recorded its own failure.
+            var orders = RunSourceAsync("Маркетплейси", ct => _parallelOrders(receiptsSettled, ct), token, explicitRetry, recovery);
+            var waybills = _waybills is null ? Task.CompletedTask :
+                RunSourceAsync("Накладні", _waybills, token, explicitRetry, recovery);
+            await Task.WhenAll(receiptsSettled, orders, waybills);
+        }
+        if (!token.IsCancellationRequested && _afterCycle is not null) await _afterCycle(token);
     }
 
     private async Task RunSourceAsync(string key, Func<CancellationToken, Task> action, CancellationToken token, bool explicitRetry, bool recovery)
@@ -144,6 +171,7 @@ public sealed class BackgroundSyncCoordinator : IAsyncDisposable
         try
         {
             await action(token);
+            token.ThrowIfCancellationRequested();
             lock (_gate) _failures[key] = 0;
             SetState(key, "Оновлено", _clock.GetUtcNow());
         }

@@ -1,6 +1,6 @@
 # Checkbox Batch Printer
 
-Актуальна робоча версія — **1.0.44** у гілці [`codex/checkbox-marketplace-orders`](https://github.com/Pvitaly91/CRMapp/tree/codex/checkbox-marketplace-orders). Вихідний код, ресурси, тести та скрипти для повного відновлення програми з GitHub збережені в цій гілці. [Відновлення, збірка й прибирання](docs/RECOVERY_AND_CLEANUP.md).
+Актуальна робоча версія — **1.0.45** у гілці [`codex/checkbox-marketplace-orders`](https://github.com/Pvitaly91/CRMapp/tree/codex/checkbox-marketplace-orders). Checkbox, Prom, Rozetka та накладні Нової пошти завантажуються паралельно під час «Оновити все» й фонового циклу. Вихідний код, ресурси, тести та скрипти для повного відновлення програми з GitHub збережені в цій гілці. [Відновлення, збірка й прибирання](docs/RECOVERY_AND_CLEANUP.md).
 
 Чеки, видані через Rozetka, отримують точний зв’язок за UUID з документованого PRRO-посилання, включно з форматом `html` і старим API-доменом Checkbox. [Реалізація й перевірка на робочій парі](docs/ROZETKA_EXACT_RECEIPT_ID_REPORT.md).
 
