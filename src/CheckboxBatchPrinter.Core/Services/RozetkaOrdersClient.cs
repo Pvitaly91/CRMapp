@@ -13,6 +13,8 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
     private const string BaseUrl = "https://api-seller.rozetka.com.ua";
     private const string ListExpand = "delivery,user,purchases,status_data,prro,carrier";
     private const string DetailExpand = "delivery,user,purchases,item_details,status_data";
+    private const string FiscalLinkSource = "GET /prro/receipt/{order_id}?type=link: content.url";
+    private const string FiscalHtmlSource = "GET /prro/receipt/{order_id}?type=html: content.url";
     private const int PageLimit = 1000;
     private static readonly TimeZoneInfo Kyiv = TimeZoneInfo.FindSystemTimeZoneById("FLE Standard Time");
     public MarketplaceKind Marketplace => MarketplaceKind.Rozetka;
@@ -84,7 +86,7 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
                     }
                     var fiscal = await ReadFiscalUrlAsync(data, order.Key.OrderId, session, credentials, cancellationToken);
                     orders[order.Key.OrderId] = MarketplaceFiscalEvidence.Preserve(
-                        ParseOrder(data, connection, fiscal.Url) with { FiscalDataStatus = fiscal.Status },
+                        ParseOrder(data, connection, fiscal.Url, fiscal.Source) with { FiscalDataStatus = fiscal.Status },
                         MarketplaceFiscalEvidence.Preserve(order, previous));
                 }
                 if (currentPage != page || pageCount is null or < 0)
@@ -113,13 +115,13 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
         var data = Field(detail.RootElement, "content");
         if (Text(data, "id") != orderId) throw new InvalidDataException("Rozetka повернула інше замовлення.");
         var fiscal = await ReadFiscalUrlAsync(data, orderId, session, credentials, cancellationToken);
-        return ParseOrder(data, connection, fiscal.Url) with { FiscalDataStatus = fiscal.Status };
+        return ParseOrder(data, connection, fiscal.Url, fiscal.Source) with { FiscalDataStatus = fiscal.Status };
     }
 
-    private async Task<(string? Url, string Status)> ReadFiscalUrlAsync(JsonElement data, string orderId,
+    private async Task<(string? Url, string Status, string Source)> ReadFiscalUrlAsync(JsonElement data, string orderId,
         Session session, MarketplaceCredentials credentials, CancellationToken cancellationToken)
     {
-        if (!session.CanReadPrro) return (null, "Немає права prro_access для читання посилання. Це не означає, що чека немає.");
+        if (!session.CanReadPrro) return (null, "Немає права prro_access для читання посилання. Це не означає, що чека немає.", "");
         try
         {
             var status = Integer(Field(data, "prro"), "prro_receipt_status");
@@ -129,20 +131,63 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
                 using var state = await ReadAsync($"/prro/receipt-status/{orderId}", session, credentials, cancellationToken);
                 status = Integer(Field(state.RootElement, "content"), "status");
             }
-            if (status == 0) return (null, "Rozetka повідомляє: чек ще не фіскалізований.");
-            if (status != 1) return (null, "Статус PRRO невідомий; наявність чека не встановлена.");
-            using var receipt = await ReadAsync($"/prro/receipt/{orderId}?type=link", session, credentials, cancellationToken);
-            var candidate = Text(Field(receipt.RootElement, "content"), "url");
-            // Keep a safe display-only reference even when its domain/format is not evidence.
-            // Never follow it; only the strict Checkbox parser can turn it into an exact key.
-            if (Uri.TryCreate(candidate, UriKind.Absolute, out var uri) && uri.Scheme == "https" &&
-                uri.UserInfo.Length == 0 && !candidate.Any(char.IsControl))
-                return (candidate, CheckboxReceiptReference.TryParseUrl(candidate, out _) ? "" : "Формат посилання PRRO не підтверджений як Checkbox; автоприв’язку за ним не виконано.");
-            return (null, "PRRO не повернув перевіреного посилання на чек.");
+            if (status == 0) return (null, "Rozetka повідомляє: чек ще не фіскалізований.", "");
+            if (status != 1) return (null, "Статус PRRO невідомий; наявність чека не встановлена.", "");
+            string? displayUrl = null;
+            var displaySource = "";
+            var authorizationFailed = false;
+            var warning = "PRRO не повернув перевіреного посилання на чек.";
+            try
+            {
+                using var receipt = await ReadAsync($"/prro/receipt/{orderId}?type=link", session, credentials, cancellationToken);
+                var candidate = Text(Field(receipt.RootElement, "content"), "url");
+                if (IsSafeDisplayUrl(candidate))
+                {
+                    if (CheckboxReceiptReference.TryParseUrl(candidate, out _)) return (candidate, "", FiscalLinkSource);
+                    displayUrl = candidate;
+                    displaySource = FiscalLinkSource;
+                    warning = "Формат посилання PRRO не підтверджений як Checkbox; автоприв’язку за ним не виконано.";
+                }
+            }
+            catch (Exception exception) when (IsRecoverable(exception, cancellationToken))
+            {
+                authorizationFailed = IsUnauthorized(exception) ||
+                    exception is MarketplaceApiException { StatusCode: HttpStatusCode.Forbidden } ||
+                    exception is HttpRequestException { StatusCode: HttpStatusCode.Forbidden };
+                warning = "Читання наявного PRRO-документа недоступне; це не означає, що чека немає.";
+            }
+
+            // Some Seller accounts cannot return type=link but return the existing
+            // Checkbox document URL for type=html. Read the Seller response once;
+            // never navigate to the returned URL or create a new fiscal receipt.
+            if (!authorizationFailed && session.CanReadPrro)
+                try
+                {
+                    using var html = await ReadAsync($"/prro/receipt/{orderId}?type=html", session, credentials, cancellationToken);
+                    var candidate = Text(Field(html.RootElement, "content"), "url");
+                    if (IsSafeDisplayUrl(candidate))
+                    {
+                        if (CheckboxReceiptReference.TryParseUrl(candidate, out _)) return (candidate, "", FiscalHtmlSource);
+                        if (displayUrl is null)
+                        {
+                            displayUrl = candidate;
+                            displaySource = FiscalHtmlSource;
+                        }
+                    }
+                }
+                catch (Exception exception) when (IsRecoverable(exception, cancellationToken)) { }
+
+            // Keep a safe display-only reference and the primary failure status
+            // when neither response provides a strictly recognized Checkbox key.
+            return (displayUrl, warning, displaySource);
         }
         catch (Exception exception) when (IsRecoverable(exception, cancellationToken))
-        { return (null, "Читання наявного PRRO-документа недоступне; це не означає, що чека немає."); }
+        { return (null, "Читання наявного PRRO-документа недоступне; це не означає, що чека немає.", ""); }
     }
+
+    private static bool IsSafeDisplayUrl(string candidate) =>
+        Uri.TryCreate(candidate, UriKind.Absolute, out var uri) && uri.Scheme == "https" &&
+        uri.UserInfo.Length == 0 && !candidate.Any(char.IsControl);
 
     private async Task<Session> LoginAsync(MarketplaceCredentials credentials, CancellationToken cancellationToken)
     {
@@ -194,7 +239,8 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
         }
     }
 
-    private static MarketplaceOrder ParseOrder(JsonElement row, MarketplaceConnection connection, string? receiptUrl = null)
+    private static MarketplaceOrder ParseOrder(JsonElement row, MarketplaceConnection connection, string? receiptUrl = null,
+        string receiptUrlSource = FiscalLinkSource)
     {
         var id = Text(row, "id");
         if (id.Length == 0 || !id.All(char.IsAsciiDigit)) throw new InvalidDataException("Замовлення Rozetka без коректного ID.");
@@ -254,7 +300,7 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
             FiscalReceiptNumbers = fiscalNumber.Length == 0 ? [] : [fiscalNumber],
             FiscalReceiptUrls = receiptUrl is null ? [] : [receiptUrl], ReceiptIds = [],
             FiscalReferences = CheckboxReceiptReference.FromRozetka(key, fiscalNumber,
-                Text(Field(row, "prro"), "prro_receipt_service_name"), receiptUrl)
+                Text(Field(row, "prro"), "prro_receipt_service_name"), receiptUrl, receiptUrlSource)
         };
     }
 
@@ -288,7 +334,11 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
     private static void EnsureSuccess(JsonElement root)
     {
         if (Field(root, "success").ValueKind == JsonValueKind.True) return;
-        if (Integer(Field(root, "errors"), "code") is 1018 or 1020) throw new RozetkaTokenException();
+        var code = Integer(Field(root, "errors"), "code");
+        if (code is 1018 or 1020) throw new RozetkaTokenException();
+        if (code == 1010)
+            throw new MarketplaceApiException("Rozetka: доступ до запиту заборонено. Перевірте права читання підключення.",
+                HttpStatusCode.Forbidden);
         throw new InvalidDataException("Rozetka відхилила запит. Перевірте підключення та права доступу.");
     }
     private static bool IsUnauthorized(Exception exception) => exception is RozetkaTokenException ||

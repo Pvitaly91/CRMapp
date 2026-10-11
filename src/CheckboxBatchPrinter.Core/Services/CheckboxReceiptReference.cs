@@ -13,9 +13,11 @@ public static class CheckboxReceiptReference
         result = new("", "", "");
         if (string.IsNullOrWhiteSpace(value) || value.Any(char.IsControl) || value.Contains('\\') || value.Contains('%') ||
             !Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != "https" ||
-            !string.Equals(uri.Host, "api.checkbox.ua", StringComparison.OrdinalIgnoreCase) ||
+            !(string.Equals(uri.Host, "api.checkbox.ua", StringComparison.OrdinalIgnoreCase) ||
+              string.Equals(uri.Host, "api.checkbox.in.ua", StringComparison.OrdinalIgnoreCase)) ||
             !uri.IsDefaultPort || uri.UserInfo.Length != 0 || uri.Fragment.Length != 0) return false;
-        // Only the officially documented receipt HTML route. No redirect/short-link guessing.
+        // Both exact hosts are documented Checkbox API addresses. Parse locally;
+        // never navigate the legacy URL or forward the current cashier's token.
         var match = Regex.Match(uri.AbsolutePath, @"^/api/v1/receipts/([A-Za-z0-9_-]+)/html$");
         if (!match.Success || value.Contains("/../", StringComparison.Ordinal) || value.Contains("/./", StringComparison.Ordinal)) return false;
         var organization = "";
@@ -45,7 +47,8 @@ public static class CheckboxReceiptReference
         return true;
     }
 
-    public static IReadOnlyList<FiscalDocumentReference> FromRozetka(OrderKey key, string fiscalCode, string provider, string? url)
+    public static IReadOnlyList<FiscalDocumentReference> FromRozetka(OrderKey key, string fiscalCode, string provider, string? url,
+        string urlSource = "GET /prro/receipt/{order_id}?type=link: content.url")
     {
         const string document = "rozetka.prro";
         var references = new List<FiscalDocumentReference>();
@@ -55,7 +58,7 @@ public static class CheckboxReceiptReference
             references.Add(new(FiscalDocumentKeyKind.FiscalCode, fiscalCode, "prro.prro_receipt_fiscal_code", key,
                 normalizedProvider, document, OrganizationId: verifiedUrl ? parsed.OrganizationId : ""));
         if (verifiedUrl)
-            references.Add(new(FiscalDocumentKeyKind.CheckboxReceiptUrl, url!, "GET /prro/receipt/{order_id}?type=link: content.url",
+            references.Add(new(FiscalDocumentKeyKind.CheckboxReceiptUrl, url!, urlSource,
                 key, "Checkbox", document, OrganizationId: parsed.OrganizationId));
         return references;
     }

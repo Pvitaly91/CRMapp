@@ -14,6 +14,7 @@ internal static class FiscalLinkTests
     private const string Organization = "f2000000-0000-0000-0000-000000000001";
     private const string Code = "00Ab_Cd-123"; // Case, symbols and leading zeroes are significant.
     private const string Url = "https://api.checkbox.ua/api/v1/receipts/" + ReceiptId + "/html?simple=true&show_buttons=false";
+    private const string SellerHtmlUrl = "https://api.checkbox.in.ua/api/v1/receipts/" + ReceiptId + "/html";
     private static readonly MarketplaceConnection Connection = new()
         { Id = "f3000000000000000000000000000001", Marketplace = MarketplaceKind.Rozetka, Enabled = true };
     private static readonly MarketplaceCredentials Credentials = new(Login: "synthetic", Password: "synthetic");
@@ -34,7 +35,12 @@ internal static class FiscalLinkTests
         ("fiscal matching: same serial or code on another cash register is not a link", ContextIsolationAsync),
         ("fiscal matching: independent sale/return documents and manual decisions survive", MultipleAndManualAsync),
         ("fiscal cache: raw evidence persists but account verification does not", SerializationAsync),
-        ("fiscal Prom adapter: schema-only response or arbitrary comment UUID stays unlinked", PromReadShapeAsync)
+        ("fiscal Prom adapter: schema-only response or arbitrary comment UUID stays unlinked", PromReadShapeAsync),
+        ("fiscal Rozetka issued HTML fallback maps the exact Checkbox UUID ahead of equal amounts and changed products", SellerHtmlExactAsync),
+        ("fiscal Rozetka issued HTML fallback stays bounded and preserves unavailable documents", SellerHtmlFailuresAsync),
+        ("fiscal Rozetka HTML fallback requires PRRO permission and an issued receipt and propagates cancellation", SellerHtmlGuardsAsync),
+        ("fiscal URL parser: Seller legacy host accepts only the verified receipt HTML route", SellerHtmlUrlValidationAsync),
+        ("fiscal Rozetka HTML UUID retains code/context conflicts, explicit decisions and return document identity", SellerHtmlDecisionsAsync)
     ];
 
     private static object Row(string code = Code, bool complete = false) => new
@@ -307,6 +313,163 @@ internal static class FiscalLinkTests
         var order = await new PromOrdersClient(new MarketplaceHttpTransport(http)).GetOrderAsync(
             new() { Id = Connection.Id, Marketplace = MarketplaceKind.Prom }, new(Token: "fake-prom"), "100");
         Equal(0, order!.FiscalReferences.Count); Equal(ReceiptLinkState.Candidates, Match(order).State);
+    }
+
+    internal static async Task<MarketplaceOrder> FetchSellerHtml(string url = SellerHtmlUrl, string code = Code, bool list = false)
+    {
+        var reads = new List<string>();
+        using var http = new HttpClient(new Handler(request =>
+        {
+            Equal("api-seller.rozetka.com.ua", request.RequestUri!.Host);
+            var path = request.RequestUri.AbsolutePath;
+            if (path == "/sites") { Equal(HttpMethod.Post, request.Method); return Login(); }
+            Equal(HttpMethod.Get, request.Method); Equal("fake-session", request.Headers.Authorization?.Parameter);
+            reads.Add(path + request.RequestUri.Query);
+            if (path == "/orders/search") return Page(Row(code));
+            if (path == "/orders/100") return Detail(new { prro_receipt_status = 1, prro_receipt_service_name = "checkbox", prro_receipt_fiscal_code = code });
+            Equal("/prro/receipt/100", path);
+            if (request.RequestUri.Query == "?type=link") return Json(new { success = false, errors = new { code = 15005 } });
+            Equal("?type=html", request.RequestUri.Query);
+            return Json(new { success = true, content = new { url } });
+        }));
+        var client = new RozetkaOrdersClient(new MarketplaceHttpTransport(http));
+        var order = list ? (await client.FetchAsync(Connection, Credentials, Range)).Orders.Single()
+            : (await client.GetOrderAsync(Connection, Credentials, "100"))!;
+        Equal(list ? 4 : 3, reads.Count);
+        True(reads.TakeLast(2).SequenceEqual(["/prro/receipt/100?type=link", "/prro/receipt/100?type=html"]));
+        return order;
+    }
+
+    private static async Task SellerHtmlExactAsync()
+    {
+        foreach (var list in new[] { false, true })
+        {
+            var order = (await FetchSellerHtml(list: list)) with
+            { Total = 100m, Items = [new("Renamed after checkout", "new-sku", 1, 100, 100)], ItemsComplete = true };
+            var sameAmount = order with { Key = order.Key with { OrderId = "101" }, Number = "101",
+                FiscalReferences = [], FiscalReceiptNumbers = [], FiscalReceiptUrls = [] };
+            var receipt = Receipt(); var unrelated = Receipt(OtherId, "DIFFERENT");
+            var details = new Dictionary<string, ReceiptDetails>
+            { [receipt.Id] = new(receipt.Id, [new("Original product name", "old-sku", 1, 100, 100)]) };
+            var result = new ReceiptOrderMatchingService().MatchAll([receipt, unrelated], "account", [sameAmount, order], [], true, details);
+            Equal(ReceiptLinkState.Exact, result[receipt.Id].State); Equal(order.Key, result[receipt.Id].Order!.Key);
+            Equal("За посиланням на чек", result[receipt.Id].Explanation);
+            True(result[unrelated.Id].Order?.Key != order.Key);
+            Equal(0, order.ReceiptIds.Count); Equal(2, order.FiscalReferences.Count); Equal("", order.FiscalDataStatus);
+            True(order.FiscalReferences.Single(r => r.Kind == FiscalDocumentKeyKind.CheckboxReceiptUrl).Source.Contains("type=html"));
+        }
+    }
+
+    private static async Task SellerHtmlFailuresAsync()
+    {
+        foreach (var mode in new[] { "404", "403", "access-denied-1010", "json-error", "foreign", "numeric-order", "fiscal-code" })
+        {
+            var attempts = new List<string>();
+            using var http = new HttpClient(new Handler(request =>
+            {
+                if (request.RequestUri!.AbsolutePath == "/sites") return Login();
+                Equal(HttpMethod.Get, request.Method); Equal("api-seller.rozetka.com.ua", request.RequestUri.Host);
+                if (request.RequestUri.AbsolutePath == "/orders/100") return Detail(new { prro_receipt_status = 1, prro_receipt_service_name = "checkbox", prro_receipt_fiscal_code = Code });
+                Equal("/prro/receipt/100", request.RequestUri.AbsolutePath); attempts.Add(request.RequestUri.Query);
+                if (request.RequestUri.Query == "?type=link") return mode switch
+                {
+                    "403" => new(HttpStatusCode.Forbidden),
+                    "access-denied-1010" => Json(new { success = false, errors = new { code = 1010 } }),
+                    _ => new(HttpStatusCode.NotFound)
+                };
+                Equal("?type=html", request.RequestUri.Query);
+                return mode switch
+                {
+                    "404" or "403" => new(HttpStatusCode.NotFound),
+                    "json-error" => Json(new { success = false, errors = new { code = 15005 } }),
+                    "foreign" => Json(new { success = true, content = new { url = SellerHtmlUrl.Replace("api.checkbox.in.ua", "attacker.example") } }),
+                    "numeric-order" => Json(new { success = true, content = new { url = SellerHtmlUrl.Replace(ReceiptId, "100") } }),
+                    _ => Json(new { success = true, content = new { url = SellerHtmlUrl.Replace(ReceiptId, Code) } })
+                };
+            }));
+            var order = (await new RozetkaOrdersClient(new MarketplaceHttpTransport(http)).GetOrderAsync(Connection, Credentials, "100"))!;
+            True(attempts.SequenceEqual(mode is "403" or "access-denied-1010" ? ["?type=link"] : ["?type=link", "?type=html"])); Equal("100", order.Number);
+            if (mode == "fiscal-code") Equal("", order.FiscalDataStatus); else True(order.FiscalDataStatus.Length > 0);
+            True(Match(order).State != ReceiptLinkState.Exact);
+            if (mode != "fiscal-code") True(order.FiscalReferences.All(r => r.Kind != FiscalDocumentKeyKind.CheckboxReceiptUrl));
+        }
+    }
+
+    private static async Task SellerHtmlGuardsAsync()
+    {
+        foreach (var mode in new[] { "no-permission", "not-issued", "unknown", "terminal-401", "permission-lost", "cancel" })
+        {
+            using var stop = new CancellationTokenSource();
+            var reads = new List<string>();
+            var logins = 0;
+            using var http = new HttpClient(new Handler(request =>
+            {
+                var path = request.RequestUri!.AbsolutePath;
+                if (path == "/sites")
+                {
+                    logins++;
+                    return mode == "no-permission" || mode == "permission-lost" && logins > 1
+                        ? Json(new { success = true, content = new { access_token = "fake-session", permissions = Array.Empty<string>() } }) : Login();
+                }
+                Equal(HttpMethod.Get, request.Method);
+                reads.Add(path + request.RequestUri.Query);
+                if (path == "/orders/100") return Detail(new { prro_receipt_status = mode == "not-issued" ? 0 : mode == "unknown" ? 2 : 1,
+                    prro_receipt_service_name = "checkbox", prro_receipt_fiscal_code = Code });
+                if (mode is "terminal-401" or "permission-lost")
+                {
+                    Equal("/prro/receipt/100", path); Equal("?type=link", request.RequestUri.Query);
+                    return logins == 1 || mode == "terminal-401" ? new(HttpStatusCode.Unauthorized)
+                        : Json(new { success = false, errors = new { code = 15005 } });
+                }
+                Equal("cancel", mode); Equal("/prro/receipt/100", path);
+                if (request.RequestUri.Query == "?type=link") return Json(new { success = false, errors = new { code = 15005 } });
+                Equal("?type=html", request.RequestUri.Query);
+                stop.Cancel(); throw new OperationCanceledException(stop.Token);
+            }));
+            try
+            {
+                var order = await new RozetkaOrdersClient(new MarketplaceHttpTransport(http)).GetOrderAsync(Connection, Credentials, "100", stop.Token);
+                True(mode != "cancel"); Equal(mode is "terminal-401" or "permission-lost" ? 3 : 1, reads.Count);
+                Equal(mode is "terminal-401" or "permission-lost" ? 2 : 1, logins);
+                True(Match(order!).State != ReceiptLinkState.Exact);
+            }
+            catch (OperationCanceledException) { Equal("cancel", mode); Equal(3, reads.Count); True(stop.IsCancellationRequested); }
+        }
+    }
+
+    private static Task SellerHtmlUrlValidationAsync()
+    {
+        True(CheckboxReceiptReference.TryParseUrl(SellerHtmlUrl, out var parsed)); Equal(ReceiptId, parsed.ReceiptId);
+        True(CheckboxReceiptReference.TryParseUrl(SellerHtmlUrl.Replace(ReceiptId, Code), out var code));
+        Equal("", code.ReceiptId); Equal(Code, code.FiscalCode);
+        foreach (var invalid in new[]
+        {
+            SellerHtmlUrl.Replace("https:", "http:"), SellerHtmlUrl.Replace("api.checkbox.in.ua", "api.checkbox.in.ua.evil.test"),
+            SellerHtmlUrl.Replace("api.checkbox.in.ua", "api.checkbox.in.ua:444"), SellerHtmlUrl.Replace("api.checkbox.in.ua", "user@api.checkbox.in.ua"),
+            SellerHtmlUrl + "#" + ReceiptId, SellerHtmlUrl + "?redirect=https://evil.test",
+            SellerHtmlUrl.Replace(ReceiptId, "100"), SellerHtmlUrl.Replace("/html", "/pdf"), SellerHtmlUrl.Replace("/api/", "/other/../api/"),
+            SellerHtmlUrl.Replace("/api/", "/./api/"), SellerHtmlUrl.Replace("/html", "/html/"),
+            "https://api.checkbox.in.ua/?receipt_id=" + ReceiptId
+        }) True(!CheckboxReceiptReference.TryParseUrl(invalid, out _));
+        return Task.CompletedTask;
+    }
+
+    private static async Task SellerHtmlDecisionsAsync()
+    {
+        var sale = await FetchSellerHtml();
+        var mismatch = await FetchSellerHtml(code: "OTHER-CODE"); Equal(ReceiptLinkState.Conflict, Match(mismatch).State);
+        var wrongAccount = await FetchSellerHtml(SellerHtmlUrl + "?organization_id=" + OtherId);
+        Equal(ReceiptLinkState.Conflict, Match(wrongAccount).State);
+        True(Match(sale, decisions: [new() { AccountContext = "account", ReceiptId = ReceiptId, RejectedOrders = [sale.Key] }]).State != ReceiptLinkState.Exact);
+        True(Match(sale, decisions: [new() { AccountContext = "account", ReceiptId = ReceiptId, SuppressAutomatic = true }]).State != ReceiptLinkState.Exact);
+        Equal(ReceiptLinkState.Manual, Match(mismatch, decisions: [new() { AccountContext = "account", ReceiptId = ReceiptId, ConfirmedOrder = sale.Key }]).State);
+        True(Match(sale, Receipt(OtherId, "RETURN-CODE", type: "RETURN")).State != ReceiptLinkState.Exact);
+        var returned = await FetchSellerHtml(SellerHtmlUrl.Replace(ReceiptId, OtherId), "RETURN-CODE");
+        var both = sale with { FiscalReferences = sale.FiscalReferences.Concat(returned.FiscalReferences.Select(r => r with { DocumentId = "return" })).ToArray() };
+        Equal(ReceiptLinkState.Exact, Match(both).State); Equal(ReceiptLinkState.Exact, Match(both, Receipt(OtherId, "RETURN-CODE", type: "RETURN")).State);
+        var otherOrder = sale with { Key = sale.Key with { OrderId = "101" }, Number = "101" };
+        var badContext = otherOrder with { FiscalReferences = sale.FiscalReferences }; // A URL from another order is never transplanted implicitly.
+        True(Match(badContext).State != ReceiptLinkState.Exact);
     }
 
     private static HttpResponseMessage ReceiptPage(params ReceiptRecord[] receipts) => Json(new { results = receipts.Select(r => new

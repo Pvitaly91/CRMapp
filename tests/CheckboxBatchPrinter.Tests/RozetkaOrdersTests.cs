@@ -91,8 +91,10 @@ internal static class RozetkaOrdersTests
     private static async Task DetailAsync()
     {
         var paths = new List<string>();
+        var formats = new List<string>();
         var handler = new Handler(request =>
         {
+            Equal("api-seller.rozetka.com.ua", request.RequestUri!.Host); // Returned display URL is never followed.
             var path = request.RequestUri!.AbsolutePath;
             paths.Add(path);
             if (request.Method == HttpMethod.Post) return Task.FromResult(Login());
@@ -106,7 +108,8 @@ internal static class RozetkaOrdersTests
                     prro = new { prro_receipt_status = 1, prro_receipt_fiscal_code = "TEST-FISCAL" }
                 }
             }));
-            Equal("/prro/receipt/100", path); Equal("?type=link", request.RequestUri.Query);
+            Equal("/prro/receipt/100", path); True(request.RequestUri.Query is "?type=link" or "?type=html");
+            formats.Add(request.RequestUri.Query);
             return Task.FromResult(Json(new { success = true, content = new { url = "https://kasa.example/c/TEST-FISCAL" } }));
         });
         using var http = new HttpClient(handler);
@@ -119,6 +122,8 @@ internal static class RozetkaOrdersTests
         Equal("TEST-FISCAL", detail!.FiscalReceiptNumbers.Single());
         Equal("https://kasa.example/c/TEST-FISCAL", detail.FiscalReceiptUrls.Single());
         Equal(0, detail.ReceiptIds.Count);
+        True(detail.FiscalDataStatus.Length > 0);
+        True(formats.SequenceEqual(["?type=link", "?type=html", "?type=link", "?type=html"]));
         True(paths.All(p => p is "/sites" or "/orders/search" or "/orders/100" or "/prro/receipt/100"));
     }
 
