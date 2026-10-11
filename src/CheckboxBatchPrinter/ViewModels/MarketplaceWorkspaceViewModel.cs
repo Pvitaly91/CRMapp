@@ -243,6 +243,41 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
         ApplyMatches(background);
     }
 
+    // Settings changes require a fresh local attachment without losing the visible archive or marks.
+    public void InvalidateConfiguration()
+    {
+        // Invalidate before cancellation: a backend may finish while cancellation is being signaled.
+        _generation++;
+        _automaticCancel?.Cancel();
+        _cancel?.Cancel();
+        _scopeCancel.Cancel();
+        _scopeCancel.Dispose();
+        _scopeCancel = new();
+        _automaticCancel = null;
+        _cancel = null;
+        _attachment = null;
+        _attachedGeneration = -1;
+        _automaticGeneration = -1;
+        _activeSyncGeneration = -1;
+        // Retain old task references so the next sync can wait for a canceled backend to finish.
+        _attaching = false;
+        _configurationLoaded = false;
+        _canApply = false;
+        _coverageComplete = false;
+        _orderCoverage.Clear();
+        _deduplication = new();
+        _allowCachedRestore = false;
+        _legacyCoverageVerified = false;
+        _showingCachedMatches = false;
+        _cacheNotice = "";
+        _basketAttempted.Clear();
+        _loadingDetails.Clear();
+        _backgroundSyncing = false;
+        IsBusy = false;
+        Status = "Налаштування маркетплейсів збережено; дані підключень буде оновлено.";
+        NotifyConfiguration();
+    }
+
     public void InvalidateReceiptDetails(string receiptId)
     {
         _receiptDetails.Remove(receiptId);

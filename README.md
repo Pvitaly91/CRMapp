@@ -1,6 +1,6 @@
 # Checkbox Batch Printer
 
-Актуальна робоча версія — **1.0.39** у гілці [`codex/checkbox-marketplace-orders`](https://github.com/Pvitaly91/CRMapp/tree/codex/checkbox-marketplace-orders). Вихідний код, ресурси, тести та скрипти для повного відновлення програми з GitHub збережені в цій гілці. [Відновлення, збірка й прибирання](docs/RECOVERY_AND_CLEANUP.md).
+Актуальна робоча версія — **1.0.40** у гілці [`codex/checkbox-marketplace-orders`](https://github.com/Pvitaly91/CRMapp/tree/codex/checkbox-marketplace-orders). Вихідний код, ресурси, тести та скрипти для повного відновлення програми з GitHub збережені в цій гілці. [Відновлення, збірка й прибирання](docs/RECOVERY_AND_CLEANUP.md).
 
 Локальна WPF-програма для Windows 10/11, яка завантажує **вже існуючі** фіскальні чеки через офіційний Checkbox API й пакетно друкує їх офіційні PNG-копії.
 

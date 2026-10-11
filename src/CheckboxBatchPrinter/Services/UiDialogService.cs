@@ -41,7 +41,7 @@ public sealed class UiDialogService(
             await viewModel.EnsureMarketplaceLoadedAsync();
             window.ShowMarketplaceTab();
         }
-        return window.ShowDialog() == true;
+        return window.ShowDialog() == true || viewModel.HasSavedChanges;
     }
 
     public void ShowPreview(byte[] png, ReceiptRowViewModel receipt)

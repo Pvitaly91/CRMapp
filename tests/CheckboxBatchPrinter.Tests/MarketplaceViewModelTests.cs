@@ -146,6 +146,7 @@ internal static partial class MarketplaceViewModelTests
                 await OrdersDashboardAsync();
                 await PrintCandidatesDashboardAsync();
                 await CredentialIndicatorsXamlAsync();
+                await RozetkaSettingsWindowRoundTripAsync();
                 await WaybillsDashboardAsync();
                 await DashboardTextSelectionAsync();
                 await WaybillPrintingDashboardAsync();
@@ -703,7 +704,7 @@ internal static partial class MarketplaceViewModelTests
         Equal("seller-A", fixture.Settings.Secrets[first.Id].Login);
         Equal("old-synthetic-B", fixture.Settings.Secrets[second.Id].Password);
         Equal(1, fixture.Settings.SecretSaves);
-        Equal("", vm.Password); Equal("", vm.Login);
+        Equal("", vm.Password); Equal("seller-A", vm.Login);
 
         vm.Login = "different-seller";
         vm.Password = "different-password";
@@ -2742,12 +2743,13 @@ internal static partial class MarketplaceViewModelTests
         public bool AcceptPrint = true;
         public string? PreviewId;
         public bool SettingsOpenedForMarketplace;
+        public bool SettingsChanged;
         public bool ConfirmPrint(PrintBatchConfirmation batch)
         { Confirmation = batch; DuringConfirmation?.Invoke(); return AcceptPrint; }
         public void ShowInfo(string message, string title = "") { }
         public void ShowError(string message, string title = "") => Errors.Add(message);
         public Task<bool> OpenSettingsAsync(bool marketplace = false)
-        { SettingsOpenedForMarketplace = marketplace; AfterSettings?.Invoke(); return Task.FromResult(false); }
+        { SettingsOpenedForMarketplace = marketplace; AfterSettings?.Invoke(); return Task.FromResult(SettingsChanged); }
         public void ShowPreview(byte[] png, ReceiptRowViewModel receipt) => PreviewId = receipt.Id;
         public OrderLinkChoice? ChooseOrder(ReceiptRowViewModel receipt, ReceiptDetails? details, IReadOnlyList<MarketplaceOrder> orders, IReadOnlyList<MarketplaceOrder> candidates)
         { ChoiceCalls++; ChoiceReceiptId = receipt.Id; ChoiceOrderKeys = orders.Select(o => o.Key).ToArray(); return Choice; }

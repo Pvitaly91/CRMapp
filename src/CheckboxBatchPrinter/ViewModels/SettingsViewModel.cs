@@ -25,6 +25,8 @@ public sealed class SettingsViewModel : ObservableObject
     private bool _separatePrintJob;
     private string _diagnosticStatus = "Готово";
     private bool _isBusy;
+    private bool _isSaving;
+    private bool _hasSavedChanges;
     private string _originalLogin = string.Empty;
     private Task? _marketplaceLoad;
     private readonly Func<AppSettings, bool, bool, Task>? _backgroundSettingsSaved;
@@ -78,6 +80,8 @@ public sealed class SettingsViewModel : ObservableObject
     public int[] BackgroundIntervals { get; } = [1, 2, 5, 10];
     public string AutostartWarning { get; }
     public bool IsBusy { get => _isBusy; private set => SetProperty(ref _isBusy, value); }
+    public bool IsSaving { get => _isSaving; private set => SetProperty(ref _isSaving, value); }
+    public bool HasSavedChanges { get => _hasSavedChanges; private set => SetProperty(ref _hasSavedChanges, value); }
     public string AppVersion => AppEnvironment.DisplayVersion;
     public string DataDirectory => AppEnvironment.DataRoot;
     public string ApiVersion => "Checkbox API 2.107.0+7e00a4c6 (перевірено 21.09.2026)";
@@ -112,9 +116,11 @@ public sealed class SettingsViewModel : ObservableObject
 
     public async Task SaveAsync()
     {
+        if (IsBusy) throw new InvalidOperationException("Збереження налаштувань уже виконується. Дочекайтеся завершення.");
         if (Marketplace?.IsBusy == true) throw new InvalidOperationException("Дочекайтеся завершення перевірки маркетплейсу.");
         ValidatePrintSettings();
         IsBusy = true;
+        IsSaving = true;
         try
         {
             ApplyToSettings();
@@ -127,20 +133,28 @@ public sealed class SettingsViewModel : ObservableObject
                     throw new InvalidOperationException("Для зміни логіна введіть пароль Checkbox.");
             }
             await _settingsService.SaveAsync(_settings);
-            if (_backgroundSettingsSaved is not null) await _backgroundSettingsSaved(_settings, credentialsVerified, false);
+            var marketplaceCredentialsSaved = false;
             if (_marketplaceLoad is not null && Marketplace is not null)
             {
                 await _marketplaceLoad;
-                var marketplaceCredentialsSaved = await Marketplace.SaveAsync();
-                if (marketplaceCredentialsSaved && _backgroundSettingsSaved is not null)
-                    await _backgroundSettingsSaved(_settings, false, true);
+                marketplaceCredentialsSaved = await Marketplace.SaveAsync();
             }
             _originalLogin = _settings.Login;
             Password = string.Empty;
             NotifyCredentialStatus();
             DiagnosticStatus = "Налаштування збережено";
+            HasSavedChanges = true;
+            if (_backgroundSettingsSaved is not null)
+            {
+                try { await _backgroundSettingsSaved(_settings, credentialsVerified, marketplaceCredentialsSaved); }
+                catch (Exception exception)
+                {
+                    _logger.Error("settings.background.apply", exception);
+                    throw new InvalidOperationException("Налаштування збережено, але не вдалося застосувати фоновий режим або автозапуск. Перевірте їхні налаштування.");
+                }
+            }
         }
-        finally { IsBusy = false; }
+        finally { IsSaving = false; IsBusy = false; }
     }
 
     public async Task TestApiAsync()

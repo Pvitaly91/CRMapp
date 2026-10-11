@@ -5,10 +5,22 @@
         WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip">
     <DockPanel Margin="12">
         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
-            <Button Content="Скасувати" IsCancel="True" />
-            <Button Content="Зберегти" Click="Save_Click" IsDefault="True" Background="#1769AA" Foreground="White" />
+            <Button Content="Скасувати" IsCancel="True">
+                <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Style.Triggers>
+                    <DataTrigger Binding="{Binding IsSaving}" Value="True"><Setter Property="IsEnabled" Value="False" /></DataTrigger>
+                </Style.Triggers></Style></Button.Style>
+            </Button>
+            <Button x:Name="SaveSettingsButton" Content="Зберегти" Click="Save_Click" IsDefault="True" Background="#1769AA" Foreground="White">
+                <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Style.Triggers>
+                    <DataTrigger Binding="{Binding IsBusy}" Value="True"><Setter Property="IsEnabled" Value="False" /></DataTrigger>
+                    <DataTrigger Binding="{Binding Marketplace.IsBusy}" Value="True"><Setter Property="IsEnabled" Value="False" /></DataTrigger>
+                </Style.Triggers></Style></Button.Style>
+            </Button>
         </StackPanel>
         <TabControl x:Name="SettingsTabs" SelectionChanged="SettingsTabs_SelectionChanged">
+            <TabControl.Style><Style TargetType="TabControl"><Style.Triggers>
+                <DataTrigger Binding="{Binding IsBusy}" Value="True"><Setter Property="IsEnabled" Value="False" /></DataTrigger>
+            </Style.Triggers></Style></TabControl.Style>
             <TabItem Header="Checkbox">
                 <Grid Margin="16">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="170" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
@@ -86,11 +98,11 @@
                         </StackPanel>
                         <StackPanel Visibility="{Binding IsRozetka, Converter={StaticResource BoolToVisibility}}">
                             <TextBlock Text="Логін продавця Rozetka" Margin="6,3" />
-                            <TextBox Text="{Binding Login, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBox x:Name="RozetkaLoginInput" Text="{Binding Login, UpdateSourceTrigger=PropertyChanged}" />
                             <TextBlock Text="Пароль продавця Rozetka" Margin="6,3" />
                             <PasswordBox x:Name="RozetkaPasswordInput" PasswordChanged="RozetkaPasswordInput_PasswordChanged" Margin="3" Padding="6,4" />
                         </StackPanel>
-                        <TextBlock Text="Порожні поля облікових даних зберігають попередні значення. Секрети вводьте тільки тут, локально. Пароль Checkbox зберігається окремо."
+                        <TextBlock Text="Збережений логін Rozetka показано в полі. Збережені пароль і токен не показуються: порожні поля залишають попередні значення. Введені чернетки зберігаються при перемиканні магазинів; для запису на диск натисніть «Зберегти»."
                                    TextWrapping="Wrap" Foreground="#667085" Margin="6,5" />
                         <Button Content="Перевірити підключення" Command="{Binding TestCommand}" HorizontalAlignment="Left" />
                         <WrapPanel Margin="0,6">

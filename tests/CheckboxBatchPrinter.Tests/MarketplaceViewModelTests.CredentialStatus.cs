@@ -23,6 +23,7 @@ internal static partial class MarketplaceViewModelTests
         vm.Token = "synthetic_new_prom_secret"; Equal("Draft", vm.CredentialStatusKind);
         vm.Selected = vm.Connections.Single(c => c.Id == "rz-status"); await vm.CredentialStatusRefresh;
         Equal("Saved", vm.CredentialStatusKind); True(vm.CredentialStatus.Contains("Облікові дані Rozetka збережено"));
+        Equal("synthetic_login", vm.Login);
         Equal("", vm.Password); True(!vm.CredentialStatus.Contains("synthetic_saved_rz_secret"));
         vm.Selected = vm.Connections.Single(c => c.Id == "prom-test"); await vm.CredentialStatusRefresh;
         Equal("Draft", vm.CredentialStatusKind); await vm.SaveAsync(); Equal("Saved", vm.CredentialStatusKind);

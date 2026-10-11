@@ -7,14 +7,36 @@ namespace CheckboxBatchPrinter.Views;
 
 public partial class SettingsWindow : Window
 {
+    private MarketplaceSettingsViewModel? _credentialViewModel;
+    private bool _synchronizingCredentialFields;
     public SettingsWindow()
     {
         InitializeComponent();
         DataContextChanged += (_, _) =>
         {
-            if (DataContext is SettingsViewModel { Marketplace: { } marketplace })
-                marketplace.CredentialsCleared += (_, _) => { PromTokenInput.Clear(); RozetkaPasswordInput.Clear(); };
+            if (_credentialViewModel is not null) _credentialViewModel.CredentialFieldsChanged -= CredentialFieldsChanged;
+            _credentialViewModel = (DataContext as SettingsViewModel)?.Marketplace;
+            if (_credentialViewModel is not null) _credentialViewModel.CredentialFieldsChanged += CredentialFieldsChanged;
+            SynchronizeCredentialFields();
         };
+        Closing += (_, e) => { if (DataContext is SettingsViewModel { IsSaving: true }) e.Cancel = true; };
+        Closed += (_, _) =>
+        {
+            if (_credentialViewModel is not null) _credentialViewModel.CredentialFieldsChanged -= CredentialFieldsChanged;
+            _credentialViewModel = null;
+        };
+    }
+
+    private void CredentialFieldsChanged(object? sender, EventArgs e) => SynchronizeCredentialFields();
+    private void SynchronizeCredentialFields()
+    {
+        _synchronizingCredentialFields = true;
+        try
+        {
+            PromTokenInput.Password = _credentialViewModel?.Token ?? "";
+            RozetkaPasswordInput.Password = _credentialViewModel?.Password ?? "";
+        }
+        finally { _synchronizingCredentialFields = false; }
     }
 
     public void ShowMarketplaceTab() => MarketplaceTab.IsSelected = true;
@@ -30,10 +52,12 @@ public partial class SettingsWindow : Window
 
     private void PromTokenInput_PasswordChanged(object sender, RoutedEventArgs e)
     {
+        if (_synchronizingCredentialFields) return;
         if (DataContext is SettingsViewModel { Marketplace: { } marketplace }) marketplace.Token = PromTokenInput.Password;
     }
     private void RozetkaPasswordInput_PasswordChanged(object sender, RoutedEventArgs e)
     {
+        if (_synchronizingCredentialFields) return;
         if (DataContext is SettingsViewModel { Marketplace: { } marketplace }) marketplace.Password = RozetkaPasswordInput.Password;
     }
 
@@ -44,7 +68,7 @@ public partial class SettingsWindow : Window
 
     private async void Save_Click(object sender, RoutedEventArgs e)
     {
-        if (DataContext is not SettingsViewModel viewModel) return;
+        if (DataContext is not SettingsViewModel viewModel || viewModel.IsBusy) return;
         try { await viewModel.SaveAsync(); DialogResult = true; }
         catch (ApiException ex) { ShowError(ex.ToUserMessage()); }
         catch (Exception ex) { ShowError(ex.Message); }

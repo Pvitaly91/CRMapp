@@ -689,6 +689,7 @@ public sealed partial class MainViewModel : ObservableObject
     private async Task OpenSettingsAsync(bool marketplace = false)
     {
         var changed = await _dialogs.OpenSettingsAsync(marketplace);
+        if (changed) Marketplace?.InvalidateConfiguration();
         Waybills?.Invalidate();
         await UpdateWaybillOrderAssociationsAsync();
         if (changed && _authentication.HasStoredCredentials) StatusText = "Налаштування збережено";
