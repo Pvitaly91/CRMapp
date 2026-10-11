@@ -283,7 +283,7 @@ internal static partial class MarketplaceViewModelTests
 
             await Realize(rows[0], trackingColumn);
             var trackingCell = trackingColumn.GetCellContent(rows[0]);
-            var trackingLink = VisualChildren<DashboardTextBox>(trackingCell).Single();
+            var trackingLink = VisualChildren<DashboardTextBox>(trackingCell).Single(text => Equals(text.Tag, "OrderTrackingNumber"));
             True(ReferenceEquals(workspace.Labels.PreviewShipmentCommand, trackingLink.Command));
             True(trackingLink.Text == rows[0].ShipmentLinks.Single().TrackingNumber);
             await ExecuteAsync(trackingLink.Command!, parameter: trackingLink.CommandParameter);

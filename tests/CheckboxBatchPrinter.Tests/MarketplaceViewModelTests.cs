@@ -27,6 +27,11 @@ internal static partial class MarketplaceViewModelTests
 
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
+        ("STA queued parcel tracking coalesces and never blocks unified refresh or receipt printing", () => StaAsync(ShipmentTrackingDoesNotBlockPrintingAsync)),
+        ("STA failed and canceled parcel refresh retains the previous status with a stale timestamp explanation", () => StaAsync(ShipmentTrackingFailureKeepsLastStatusAsync)),
+        ("STA an uncancellable old tracking response never replaces a changed TTN status", () => StaAsync(ShipmentTrackingLateOldTtnAsync)),
+        ("STA settings reset invalidates late parcel tracking results from the old credential scope", () => StaAsync(ShipmentTrackingSettingsResetAsync)),
+        ("STA per-TTN carrier statuses reuse loaded waybills with account alias Ref and ambiguity checks", () => StaAsync(ShipmentTrackingWaybillReuseAsync)),
         ("STA combined label and receipt printing follows sorted order rows and preserves receipt marks", () => StaAsync(CombinedPrintOrderSortAsync)),
         ("STA combined printing groups multiple receipts by order and fiscal date before serial", () => StaAsync(CombinedPrintMultipleReceiptsAsync)),
         ("STA combined printing freezes visible marks through filter tab link and settings changes", () => StaAsync(CombinedPrintFrozenViewAsync)),
@@ -164,6 +169,7 @@ internal static partial class MarketplaceViewModelTests
                 await DashboardTextSelectionAsync();
                 await WaybillPrintingDashboardAsync();
                 await CombinedPrintPreviewUiAsync();
+                await ShipmentTrackingUiAsync();
                 Console.WriteLine("XAML assertions and binding cleanup completed.");
                 await DrainDispatcherAsync();
                 Console.WriteLine("XAML final dispatcher drain completed.");

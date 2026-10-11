@@ -501,11 +501,16 @@
                                                 <ItemsControl ItemsSource="{Binding ShipmentLinks}">
                                                     <ItemsControl.ItemTemplate>
                                                         <DataTemplate>
-                                                            <controls:DashboardTextBox Style="{StaticResource DashboardLinkTextStyle}" Margin="4,3" VerticalAlignment="Center"
+                                                            <StackPanel Margin="4,3">
+                                                                <controls:DashboardTextBox Tag="OrderTrackingNumber" Style="{StaticResource DashboardLinkTextStyle}" Margin="0" VerticalAlignment="Center"
                                                                     Text="{Binding TrackingNumber, Mode=OneWay}"
                                                                     ToolTip="Виділіть текст мишкою; клік відкриває наклейку цієї ТТН"
                                                                     Command="{Binding DataContext.Marketplace.Labels.PreviewShipmentCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                                     CommandParameter="{Binding}" />
+                                                                <controls:DashboardTextBox Tag="OrderTrackingStatus" Style="{StaticResource DashboardTextStyle}"
+                                                                    Margin="0,2,0,0" FontSize="11" FontWeight="Normal" TextWrapping="Wrap" MaxLines="2"
+                                                                    Text="{Binding TrackingStatus, Mode=OneWay}" ToolTip="{Binding TrackingStatusToolTip}" />
+                                                            </StackPanel>
                                                         </DataTemplate>
                                                     </ItemsControl.ItemTemplate>
                                                 </ItemsControl>

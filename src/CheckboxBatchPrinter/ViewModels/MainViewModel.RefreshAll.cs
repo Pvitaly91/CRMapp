@@ -142,6 +142,7 @@ public sealed partial class MainViewModel
             if (Waybills is not null) Waybills.IsWorkspaceRefreshing = false;
             _refreshAllCancellation = null;
             IsRefreshingAll = false;
+            if (!token.IsCancellationRequested) QueueShipmentTrackingRefresh(force: true);
             completion.TrySetResult();
             if (ReferenceEquals(_refreshAllTask, completion.Task)) _refreshAllTask = null;
         }

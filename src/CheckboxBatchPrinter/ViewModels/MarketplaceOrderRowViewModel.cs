@@ -17,6 +17,7 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
     public string TotalDisplay => Model.Total is { } total ? $"{total:N2} {(Model.Currency.Length > 0 ? Model.Currency : "(валюта не надана)")}" : "Сума не надана";
     public string BuyerDisplay => Model.Buyer?.Name ?? "";
     public string TrackingDisplay => Model.TrackingDisplay;
+    private readonly Dictionary<(ShippingCarrier Carrier, string TrackingNumber, string ShipmentId), OrderShipmentTrackingStatus> _trackingStatuses = [];
     public IReadOnlyList<OrderShipmentLink> ShipmentLinks => Model.Shipments
         .Where(s => !string.IsNullOrWhiteSpace(s.TrackingNumber))
         .DistinctBy(s => (s.Carrier, TrackingNumber: s.TrackingNumber.Trim(), s.ShipmentId))
@@ -40,6 +41,28 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
     public bool HasConfirmedLink { get; private set; }
     public bool HasSuggestedLink { get; private set; }
 
+    public void UpdateTrackingStatuses(IEnumerable<OrderShipmentTrackingStatus> statuses)
+    {
+        var shipments = Model.Shipments.Select(TrackingIdentity).ToHashSet();
+        var replacement = new Dictionary<(ShippingCarrier Carrier, string TrackingNumber, string ShipmentId), OrderShipmentTrackingStatus>();
+        foreach (var status in statuses)
+        {
+            var identity = TrackingIdentity(status.Shipment);
+            if (shipments.Contains(identity) && identity.TrackingNumber.Length > 0) replacement[identity] = status;
+        }
+        if (replacement.Count == _trackingStatuses.Count && replacement.All(pair =>
+            _trackingStatuses.TryGetValue(pair.Key, out var current) && current == pair.Value)) return;
+        _trackingStatuses.Clear();
+        foreach (var pair in replacement) _trackingStatuses.Add(pair.Key, pair.Value);
+        OnPropertyChanged(nameof(ShipmentLinks));
+    }
+
+    internal OrderShipmentTrackingStatus? TrackingStatusFor(OrderShipment shipment) =>
+        _trackingStatuses.GetValueOrDefault(TrackingIdentity(shipment));
+
+    private static (ShippingCarrier Carrier, string TrackingNumber, string ShipmentId) TrackingIdentity(OrderShipment shipment) =>
+        (ShippingCarrierNames.FromDocumentedDeliveryField(shipment.Carrier), shipment.TrackingNumber.Trim(), shipment.ShipmentId);
+
     public void ApplyLabelHistory(IEnumerable<LabelPrintAttempt> history, Func<OrderKey, OrderKey>? normalizeOrder = null)
     {
         var shipments = ShippingCarrierNames.ForOrder(Model);
@@ -59,9 +82,13 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
 
     public void Update(MarketplaceOrder order, IReadOnlyList<ReceiptRowViewModel> receipts, IReadOnlyList<ReceiptOrderDecision> decisions)
     {
+        if (Model.Key != order.Key) _trackingStatuses.Clear();
         if (!ShippingCarrierNames.ForOrder(Model).SequenceEqual(ShippingCarrierNames.ForOrder(order)))
         { LabelStatus = "Не завантажено"; LabelPrintStatus = "Не передано"; HasPrintedLabel = false; HasLabelSubmission = false; }
         Model = order;
+        var shipmentIdentities = Model.Shipments.Select(TrackingIdentity).ToHashSet();
+        foreach (var identity in _trackingStatuses.Keys.Where(identity => !shipmentIdentities.Contains(identity)).ToArray())
+            _trackingStatuses.Remove(identity);
         var linked = receipts.Where(r => r.OrderMatch?.Order?.Key == Key).ToArray();
         LinkedReceipts = linked;
         var durable = decisions.GroupBy(d => d.ReceiptId, StringComparer.OrdinalIgnoreCase)
@@ -83,7 +110,26 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
     }
 }
 
+// A carrier status projection, deliberately separate from the cached marketplace order.
+public sealed record OrderShipmentTrackingStatus(OrderShipment Shipment, string Status, string Source = "",
+    DateTimeOffset? CheckedAtUtc = null, bool IsStale = false);
+
 public sealed record OrderShipmentLink(MarketplaceOrderRowViewModel Row, OrderShipment Shipment)
 {
     public string TrackingNumber => Shipment.TrackingNumber.Trim();
+    public string TrackingStatus => Row.TrackingStatusFor(Shipment)?.Status is { } status && !string.IsNullOrWhiteSpace(status)
+        ? status : "Статус не завантажено";
+    public string TrackingStatusToolTip
+    {
+        get
+        {
+            var status = Row.TrackingStatusFor(Shipment);
+            if (status is null) return "Статус доставки цієї ТТН ще не завантажено. Натисніть «Оновити все».";
+            var source = string.IsNullOrWhiteSpace(status.Source) ? "" : $"\nДжерело: {status.Source}";
+            var time = status.CheckedAtUtc is { } checkedAt ?
+                $"\nОновлено: {TimeZoneInfo.ConvertTime(checkedAt, DateRangeBuilder.KyivZone):dd.MM.yyyy HH:mm}" : "";
+            var stale = status.IsStale ? "\nПоказано попередній статус. Актуальні дані не отримано." : "";
+            return TrackingStatus + source + time + stale;
+        }
+    }
 }

@@ -96,7 +96,9 @@ internal static class Program
         Tests.AddRange(OrderHeaderPrintTests.All);
         Tests.AddRange(ShippingLabelsTests.All);
         Tests.AddRange(SellerRozetkaDeliveryLabelTests.All);
+        Tests.AddRange(RozetkaSellerTrackingTests.All);
         Tests.AddRange(WaybillServiceTests.All);
+        Tests.AddRange(ShipmentTrackingTests.All);
         Tests.AddRange(WaybillsViewModelTests.All);
         Tests.AddRange(WaybillLabelPreparationTests.All);
         Tests.AddRange(WaybillPrintingViewModelTests.All);

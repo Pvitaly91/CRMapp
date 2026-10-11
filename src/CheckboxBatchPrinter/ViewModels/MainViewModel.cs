@@ -52,7 +52,8 @@ public sealed partial class MainViewModel : ObservableObject
         IUiDialogService dialogs,
         IAppLogger logger,
         MarketplaceWorkspaceViewModel? marketplace = null, IReceiptSnapshotStore? receiptSnapshots = null,
-        WaybillsViewModel? waybills = null, IShippingSettingsStore? waybillShippingSettings = null)
+        WaybillsViewModel? waybills = null, IShippingSettingsStore? waybillShippingSettings = null,
+        IShipmentTrackingService? shipmentTracking = null)
     {
         _receiptService = receiptService;
         _imageService = imageService;
@@ -65,6 +66,7 @@ public sealed partial class MainViewModel : ObservableObject
         Marketplace = marketplace;
         Waybills = waybills;
         _waybillShippingSettings = waybillShippingSettings;
+        _shipmentTracking = shipmentTracking;
         _receiptSnapshots = receiptSnapshots;
         if (Waybills is not null) Waybills.PropertyChanged += (_, e) =>
         {
@@ -91,6 +93,12 @@ public sealed partial class MainViewModel : ObservableObject
         {
             OrdersReceiptsTab.View.Refresh();
             _ = UpdateWaybillOrderAssociationsAsync();
+            QueueShipmentTrackingRefresh();
+        };
+        if (Marketplace is not null) ((System.Collections.Specialized.INotifyCollectionChanged)Marketplace.Orders).CollectionChanged += (_, _) =>
+        {
+            PublishShipmentTrackingStatuses();
+            QueueShipmentTrackingRefresh();
         };
 
         RefreshCommand = new AsyncRelayCommand(_ => RefreshActiveAsync(), _ => !IsBusy);
@@ -179,7 +187,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     public async Task UpdateWaybillOrderAssociationsAsync()
     {
-        if (Waybills is null) return;
+        if (Waybills is null) { PublishShipmentTrackingStatuses(); return; }
         var version = ++_waybillAssociationVersion;
         try
         {
@@ -189,11 +197,17 @@ public sealed partial class MainViewModel : ObservableObject
             var orders = Marketplace?.AllOrderRows.Select(row => row.Model).ToArray() ?? [];
             Waybills.UpdateAssociatedOrders(document => WaybillOrderAssociations.Find(document, orders, config)
                 .Select(order => $"{order.Key.Marketplace} №{order.Number}").Distinct(StringComparer.Ordinal).ToArray());
+            ImportWaybillTrackingStatuses(config);
         }
         catch (Exception)
         {
             // Carrier loading and printing remain independent of an unavailable order cache or settings.
-            if (version == _waybillAssociationVersion) Waybills.UpdateAssociatedOrders(_ => []);
+            if (version == _waybillAssociationVersion)
+            {
+                Waybills.UpdateAssociatedOrders(_ => []);
+                _waybillTracking.Clear();
+                PublishShipmentTrackingStatuses();
+            }
         }
     }
 
@@ -389,6 +403,7 @@ public sealed partial class MainViewModel : ObservableObject
     }
     public void CancelPendingOperations()
     {
+        ResetShipmentTracking();
         CancelGlobalRefresh();
         _waybillAssociationVersion++;
         Waybills?.SetActive(false);
@@ -700,6 +715,7 @@ public sealed partial class MainViewModel : ObservableObject
     private async Task OpenSettingsAsync(bool marketplace = false)
     {
         var changed = await _dialogs.OpenSettingsAsync(marketplace);
+        ResetShipmentTracking();
         if (changed) Marketplace?.InvalidateConfiguration();
         Waybills?.Invalidate();
         await UpdateWaybillOrderAssociationsAsync();
@@ -729,6 +745,7 @@ public sealed partial class MainViewModel : ObservableObject
                 if (SelectedTabIndex == 1) await PrepareOrdersAsync();
             }
         }
+        QueueShipmentTrackingRefresh();
     }
 
     private void OnSelectionChanged(object? sender, EventArgs e)

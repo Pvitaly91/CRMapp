@@ -126,7 +126,9 @@ public partial class App : Application
                 printHistoryStore, printService, dialogs, _logger, marketplace, receiptSnapshots,
                 new WaybillsViewModel(new WaybillService(shippingTransport, shippingSettings),
                     new WaybillLabelPreparation(shippingSettings, shippingTransport, npClient, pdfInspector, new WindowsShippingLabelRenderer()),
-                    shippingSettings, labelHistory, labelPrinter, labelDialogs), shippingSettings);
+                    shippingSettings, labelHistory, labelPrinter, labelDialogs), shippingSettings,
+                new CombinedShipmentTrackingService(new ShipmentTrackingService(shippingTransport),
+                    new RozetkaSellerTrackingService(shippingTransport, marketplaceSettings, marketplaceSecrets)));
             _viewModel = viewModel;
             viewModel.CoordinatorManaged = true;
             marketplace.CoordinatorManaged = true;
@@ -230,7 +232,11 @@ public partial class App : Application
                 afterCycle: async token =>
                 {
                     if (_exiting || viewModel.IsRefreshingAll || token.IsCancellationRequested) return;
-                    try { await viewModel.UpdateWaybillOrderAssociationsAsync(); }
+                    try
+                    {
+                        await viewModel.UpdateWaybillOrderAssociationsAsync();
+                        viewModel.QueueShipmentTrackingRefresh(force: true);
+                    }
                     catch (OperationCanceledException) when (token.IsCancellationRequested) { }
                     catch (Exception exception)
                     {

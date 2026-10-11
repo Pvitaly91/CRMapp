@@ -31,11 +31,15 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
                  uri.AbsolutePath == "/api/track/label" || Regex.IsMatch(uri.AbsolutePath, @"^/api/track/[0-9A-Za-z-]+$")),
             "api-seller.rozetka.com.ua" => request.Method == HttpMethod.Post && uri.AbsolutePath == "/sites" && uri.Query.Length == 0 ||
                 request.Method == HttpMethod.Get && uri.AbsolutePath is "/ttns/ttn-list" or "/ttns/ttn-print/zebra" ||
-                RozetkaSellerDeliveryReadOnlyContract.ValidRoute(request),
+                RozetkaSellerDeliveryReadOnlyContract.ValidRoute(request) || RozetkaSellerTrackingReadOnlyContract.ValidRoute(request),
             _ => false
         };
         if (!allowed) throw new InvalidOperationException("Дозволено лише читання наявних накладних та їхніх копій.");
-        if (uri.Host == "api.novaposhta.ua") NovaPoshtaReadOnlyContract.ValidateBody(request);
+        if (uri.Host == "api.novaposhta.ua")
+        {
+            if (NovaPoshtaTrackingReadOnlyContract.IsTrackingModel(request)) NovaPoshtaTrackingReadOnlyContract.ValidateBody(request);
+            else NovaPoshtaReadOnlyContract.ValidateBody(request);
+        }
     }
     private static bool ValidRozetkaDeliveryListQuery(Uri uri)
     {
@@ -136,7 +140,8 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
         if (request.RequestUri!.Host == "my.novaposhta.ua") return request.RequestUri.AbsolutePath.Split('/')[^1];
         if (request.RequestUri.Host != "api.novaposhta.ua") return null;
         using var body = JsonDocument.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
-        return body.RootElement.GetProperty("apiKey").GetString()!;
+        return NovaPoshtaTrackingReadOnlyContract.IsTrackingModel(request)
+            ? NovaPoshtaTrackingReadOnlyContract.PolicyScope : body.RootElement.GetProperty("apiKey").GetString()!;
     }
     private static TimeSpan? RetryDelay(HttpResponseMessage response, DateTimeOffset now) => response.Headers.RetryAfter?.Delta ??
         (response.Headers.RetryAfter?.Date is { } retryAt ? retryAt - now : null);

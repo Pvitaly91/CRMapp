@@ -5,6 +5,7 @@ public sealed record WaybillRecord(ShippingCarrier Carrier, string ConnectionId,
     string DocumentId, string TrackingNumber, DateTime? CreatedLocal, string Status,
     string Recipient, string City, decimal? DeclaredValue, int? Places, bool IsDeleted = false)
 {
+    public DateTimeOffset RetrievedAtUtc { get; init; } = DateTimeOffset.UtcNow;
     // Operation-local proof of the account used to read this document; never displayed or persisted.
     public string CredentialFingerprint { get; init; } = "";
 }
