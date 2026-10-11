@@ -1,6 +1,6 @@
 # Checkbox Batch Printer
 
-Актуальна робоча версія — **1.0.42** у гілці [`codex/checkbox-marketplace-orders`](https://github.com/Pvitaly91/CRMapp/tree/codex/checkbox-marketplace-orders). Вихідний код, ресурси, тести та скрипти для повного відновлення програми з GitHub збережені в цій гілці. [Відновлення, збірка й прибирання](docs/RECOVERY_AND_CLEANUP.md).
+Актуальна робоча версія — **1.0.43** у гілці [`codex/checkbox-marketplace-orders`](https://github.com/Pvitaly91/CRMapp/tree/codex/checkbox-marketplace-orders). Вихідний код, ресурси, тести та скрипти для повного відновлення програми з GitHub збережені в цій гілці. [Відновлення, збірка й прибирання](docs/RECOVERY_AND_CLEANUP.md).
 
 Накладні Rozetka Delivery із замовлень Rozetka можна отримувати й друкувати через збережене підключення Seller без окремого ключа Delivery. [Джерело, перевірки та межі доступу](docs/ROZETKA_SELLER_DELIVERY_REPORT.md).
 

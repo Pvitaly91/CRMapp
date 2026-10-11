@@ -16,7 +16,7 @@ internal static partial class MarketplaceViewModelTests
         ("STA receipt headers disable during a frozen print and follow submitted mark clearing", () => StaAsync(ReceiptHeaderPrintingAsync)),
         ("STA order header excludes missing TTNs and default-hidden cancellations", () => StaAsync(OrderHeaderEligibilityAsync)),
         ("STA order header follows filters dates sort and clears hidden label marks", () => StaAsync(OrderHeaderFiltersAsync)),
-        ("STA order header disables during marketplace refresh and observes changed shipments", () => StaAsync(OrderHeaderRefreshAsync)),
+        ("STA order header remains usable during marketplace refresh and observes changed shipments", () => StaAsync(OrderHeaderRefreshAsync)),
         ("STA order header disables throughout fake label submission and follows cleared marks", () => StaAsync(OrderHeaderPrintingAsync)),
         ("STA waybill header selects eligible visible documents and clears hidden marks", () => StaAsync(WaybillHeaderFiltersAsync)),
         ("STA waybill header disables during refresh and handles deleted replaced and empty rows", () => StaAsync(WaybillHeaderRefreshAsync)),
@@ -240,7 +240,10 @@ internal static partial class MarketplaceViewModelTests
         var refreshing = workspace.SyncAsync();
         try
         {
-            True(workspace.IsBusy && !labels.CanToggleHeaderSelection);
+            True(workspace.IsBusy && labels.CanToggleHeaderSelection);
+            labels.ToggleHeaderSelectionCommand.Execute(null);
+            True(workspace.AllOrderRows.All(r => !r.IsSelectedForLabels),
+                "A marketplace-only refresh must not prevent clearing reversible label marks.");
             labels.ToggleHeaderSelectionCommand.Execute(null);
             True(workspace.AllOrderRows.All(r => r.IsSelectedForLabels));
         }
@@ -279,7 +282,9 @@ internal static partial class MarketplaceViewModelTests
         source.OnLoad = dialogs.OnPreview = () =>
         {
             True(labels.IsBusy && !labels.CanToggleHeaderSelection && !labels.ToggleHeaderSelectionCommand.CanExecute(null));
+            True(!labels.CanSelectPrintCandidates && !labels.SelectPrintCandidatesCommand.CanExecute(null));
             labels.ToggleHeaderSelectionCommand.Execute(null);
+            labels.SelectPrintCandidatesCommand.Execute(null);
             True(workspace.AllOrderRows.All(r => r.IsSelectedForLabels));
         };
         await labels.RunAsync(null, true);

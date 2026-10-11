@@ -65,8 +65,8 @@ public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
     public ICommand ClearCommand { get; }
     public ICommand ToggleHeaderSelectionCommand { get; }
     public ICommand SelectPrintCandidatesCommand { get; }
-    public bool CanSelectPrintCandidates => CanOperate && !_workspace.IsBusy && Visible().Length > 0;
-    public bool CanToggleHeaderSelection => CanOperate && !_workspace.IsBusy &&
+    public bool CanSelectPrintCandidates => CanOperate && Visible().Length > 0;
+    public bool CanToggleHeaderSelection => CanOperate &&
         (Visible().Any(CanSelectForLabels) || _workspace.AllOrderRows.Any(r => r.IsSelectedForLabels));
     public bool? HeaderSelectionState
     {
@@ -90,11 +90,12 @@ public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
     private async Task SelectPrintCandidatesAsync()
     {
         if (!CanSelectPrintCandidates) return;
+        var selectionScope = _workspace.SelectionScope;
         IsBusy = true;
         try
         {
             var history = await _history.LoadAsync();
-            if (_disposed || _workspace.IsBusy || _workspace.IsWorkspaceRefreshing) return;
+            if (_disposed || _workspace.IsWorkspaceRefreshing || selectionScope != _workspace.SelectionScope) return;
             _changingHeaderSelection = true;
             try
             {

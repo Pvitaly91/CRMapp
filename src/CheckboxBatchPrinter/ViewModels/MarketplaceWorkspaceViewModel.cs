@@ -627,6 +627,8 @@ public sealed class MarketplaceWorkspaceViewModel : ObservableObject
     }
 
     internal OrderKey NormalizeOrderKey(OrderKey key) => _deduplication.NormalizeKey(key);
+    internal (int Generation, string Account, DateOnly From, DateOnly To, DateOnly? DisplayFrom, DateOnly? DisplayTo) SelectionScope =>
+        (_generation, _account, _from, _to, _displayFrom, _displayTo);
     private IReadOnlyList<MarketplaceOrder> ActiveOrders => _deduplication.Merge(_snapshot.Orders.Where(o =>
         _config.Connections.Any(c => c.Enabled && c.Id == o.Key.ConnectionId && c.Marketplace == o.Key.Marketplace)));
 

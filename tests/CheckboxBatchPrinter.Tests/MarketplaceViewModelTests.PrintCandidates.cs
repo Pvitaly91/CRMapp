@@ -276,12 +276,16 @@ internal static partial class MarketplaceViewModelTests
         var (workspace, fixture) = await LabelWorkspace();
         var history = new CandidateHistory();
         using var labels = CandidateLabels(workspace, history, new());
+        workspace.IsWorkspaceRefreshing = true;
+        True(!labels.CanSelectPrintCandidates && !labels.SelectPrintCandidatesCommand.CanExecute(null));
+        labels.SelectPrintCandidatesCommand.Execute(null); Equal(0, history.Loads);
+        workspace.IsWorkspaceRefreshing = false;
         fixture.Source.Gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
         var refreshing = workspace.SyncAsync();
         try
         {
-            True(!labels.CanSelectPrintCandidates && !labels.SelectPrintCandidatesCommand.CanExecute(null));
-            labels.SelectPrintCandidatesCommand.Execute(null); Equal(0, history.Loads);
+            True(workspace.IsBusy && labels.CanSelectPrintCandidates && labels.SelectPrintCandidatesCommand.CanExecute(null));
+            await ExecuteAsync(labels.SelectPrintCandidatesCommand); Equal(1, history.Loads);
         }
         finally { fixture.Source.Gate.TrySetResult(true); }
         await refreshing;
@@ -290,7 +294,7 @@ internal static partial class MarketplaceViewModelTests
         True(workspace.AllOrderRows.All(r => r.IsSelectedForLabels));
         labels.Dispose();
         True(!labels.CanSelectPrintCandidates && !labels.SelectPrintCandidatesCommand.CanExecute(null));
-        labels.SelectPrintCandidatesCommand.Execute(null); Equal(1, history.Loads);
+        labels.SelectPrintCandidatesCommand.Execute(null); Equal(2, history.Loads);
         var lateHistory = new CandidateHistory { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
         using var disposedWhileLoading = CandidateLabels(workspace, lateHistory, new());
         workspace.AllOrderRows.First().IsSelectedForLabels = false;
