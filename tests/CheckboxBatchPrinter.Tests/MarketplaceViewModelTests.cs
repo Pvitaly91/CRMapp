@@ -27,6 +27,14 @@ internal static partial class MarketplaceViewModelTests
 
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
+        ("STA combined label and receipt printing follows sorted order rows and preserves receipt marks", () => StaAsync(CombinedPrintOrderSortAsync)),
+        ("STA combined printing groups multiple receipts by order and fiscal date before serial", () => StaAsync(CombinedPrintMultipleReceiptsAsync)),
+        ("STA combined printing freezes visible marks through filter tab link and settings changes", () => StaAsync(CombinedPrintFrozenViewAsync)),
+        ("STA combined printing reserves both workflows until both printer jobs finish", () => StaAsync(CombinedPrintBusyUntilBothJobsAsync)),
+        ("STA incomplete paired batches and stale labels never submit either printer job", () => StaAsync(CombinedPrintPreparationFailuresAsync)),
+        ("STA shared combined preview cancellation preserves marks status and print history", () => StaAsync(CombinedPrintCanceledPreviewAsync)),
+        ("STA failed combined label transmission preserves duplicate risk independently of printed receipt history", () => StaAsync(CombinedPrintLabelFailureAsync)),
+        ("STA combined receipt failure and history warnings retain successful label history", () => StaAsync(CombinedPrintReceiptFailureAsync)),
         ("STA selected Prom hidden by Rozetka filter never enters printer backend", () => StaAsync(FilteredPrintAsync)),
         ("STA clear all selection includes hidden rows and hidden-only selection disables print", () => StaAsync(HiddenSelectionAsync)),
         ("STA Today button resets filters and requests today's Kyiv receipts without marketplace API", () => StaAsync(TodayReceiptsAsync)),
@@ -155,6 +163,7 @@ internal static partial class MarketplaceViewModelTests
                 await WaybillsDashboardAsync();
                 await DashboardTextSelectionAsync();
                 await WaybillPrintingDashboardAsync();
+                await CombinedPrintPreviewUiAsync();
                 Console.WriteLine("XAML assertions and binding cleanup completed.");
                 await DrainDispatcherAsync();
                 Console.WriteLine("XAML final dispatcher drain completed.");
@@ -2120,6 +2129,8 @@ internal static partial class MarketplaceViewModelTests
             True(ReferenceEquals(selectAll.Command, main.AllReceiptsTab.ToggleHeaderSelectionCommand));
             True(ReferenceEquals(todayReceipts.Command, main.TodayCommand));
             var refreshAll = (Button)mainWindow.FindName("RefreshAllButton");
+            var combinedPrint = (Button)mainWindow.FindName("PrintOrdersWithReceiptsButton");
+            True(ReferenceEquals(combinedPrint.Command, main.PrintOrdersWithReceiptsCommand));
             True(ReferenceEquals(refreshAll.Command, main.RefreshAllCommand));
             Equal("Оновити все", refreshAll.Content?.ToString());
             True(mainWindow.FindName("MatchProductsButton") is null);

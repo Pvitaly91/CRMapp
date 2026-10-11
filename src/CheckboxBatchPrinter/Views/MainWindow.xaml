@@ -335,6 +335,8 @@
                                       VerticalScrollBarVisibility="Disabled">
                         <StackPanel x:Name="OrdersWorkspaceToolbar" Orientation="Horizontal">
                             <Button Content="Друк наклейок" Command="{Binding Marketplace.Labels.PrintCommand}" />
+                            <Button x:Name="PrintOrdersWithReceiptsButton" Content="Друк наклейок і чеків" Command="{Binding PrintOrdersWithReceiptsCommand}"
+                                    ToolTip="Друк наклейок і пов’язаних чеків вибраних видимих замовлень у порядку цієї таблиці." />
                             <TextBlock Text="ⓘ" Margin="6" VerticalAlignment="Center" ToolTip="{Binding Marketplace.Labels.Status}" />
                             <CheckBox x:Name="ExtraOrderColumns" Content="Покупець, статус у таблиці" VerticalAlignment="Center" Margin="12,0" />
                             <CheckBox x:Name="ShowCanceledOrdersCheck" Content="Показувати скасовані" VerticalAlignment="Center" Margin="8,0"

@@ -31,6 +31,9 @@ public sealed class LabelDialogs(IShippingSettingsStore settings, IMarketplaceSe
     }
     public bool Preview(LabelPrintBatch batch, LabelPrinterGeometry geometry, IReadOnlyList<LabelPrintAttempt> previous, bool allowPrint) =>
         new LabelPreviewWindow(batch, geometry, previous, allowPrint) { Owner = Application.Current.MainWindow }.ShowDialog() == true;
+    public bool PreviewCombined(LabelPrintBatch batch, LabelPrinterGeometry geometry, IReadOnlyList<LabelPrintAttempt> previous,
+        CombinedPrintConfirmation confirmation) =>
+        new LabelPreviewWindow(batch, geometry, previous, true, confirmation) { Owner = Application.Current.MainWindow }.ShowDialog() == true;
     public async Task SettingsAsync() => new LabelSettingsWindow(settings, printer, await settings.LoadAsync(), await marketplaces.LoadAsync(), diagnostics, session, currentOrder, marketplaceSecrets)
         { Owner = Application.Current.MainWindow }.ShowDialog();
     public void Error(string message) => MessageBox.Show(Application.Current.MainWindow, message, "Наклейки", MessageBoxButton.OK, MessageBoxImage.Warning);

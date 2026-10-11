@@ -1,6 +1,6 @@
 # Відновлення CRMapp із GitHub
 
-Основний локальний репозиторій — `D:\DEV\CPP\checkbox`. Актуальний код знаходиться в гілці [`codex/checkbox-marketplace-orders`](https://github.com/Pvitaly91/CRMapp/tree/codex/checkbox-marketplace-orders), а не в старій `main`. Версія програми — 1.0.47. Ревізія та контрольні суми поточного пакета вказані в його `build-info.json` і `SHA256SUMS.txt`.
+Основний локальний репозиторій — `D:\DEV\CPP\checkbox`. Актуальний код знаходиться в гілці [`codex/checkbox-marketplace-orders`](https://github.com/Pvitaly91/CRMapp/tree/codex/checkbox-marketplace-orders), а не в старій `main`. Версія програми — 1.0.48. Ревізія та контрольні суми поточного пакета вказані в його `build-info.json` і `SHA256SUMS.txt`.
 
 ## Чиста копія та збірка
 

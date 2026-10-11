@@ -3,6 +3,8 @@ namespace CheckboxBatchPrinter.Services;
 public sealed record PrintBatchItem(int Position, string ReceiptId, string ReceiptNumber, string Marketplace,
     string OrderNumber, string TrackingText = "");
 
+public sealed record CombinedPrintConfirmation(PrintBatchConfirmation Receipts, int PreviouslyPrintedReceipts);
+
 /// <summary>Detached, immutable confirmation data, never bound to live receipt/order rows.</summary>
 public sealed class PrintBatchConfirmation(string printerName, int hiddenSelectedCount, IEnumerable<PrintBatchItem> items)
 {

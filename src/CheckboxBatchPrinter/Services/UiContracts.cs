@@ -10,6 +10,8 @@ public interface IPrintService
 {
     IReadOnlyList<string> GetInstalledPrinters();
     bool PrinterExists(string printerName);
+    // Preflight both combined batches before sending either one to a printer.
+    void ValidateReceiptsForPrint(IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings) { }
     Task PrintReceiptAsync(PrintReceiptDocument receipt, AppSettings settings, CancellationToken cancellationToken = default);
     Task PrintReceiptsAsSingleJobAsync(IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings,
         CancellationToken cancellationToken = default);

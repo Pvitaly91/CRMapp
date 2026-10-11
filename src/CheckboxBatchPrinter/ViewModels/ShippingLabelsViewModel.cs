@@ -11,11 +11,13 @@ namespace CheckboxBatchPrinter.ViewModels;
 public interface ILabelDialogs
 {
     bool Preview(LabelPrintBatch batch, LabelPrinterGeometry geometry, IReadOnlyList<LabelPrintAttempt> previous, bool allowPrint);
+    bool PreviewCombined(LabelPrintBatch batch, LabelPrinterGeometry geometry, IReadOnlyList<LabelPrintAttempt> previous,
+        CombinedPrintConfirmation confirmation) => Preview(batch, geometry, previous, true);
     Task SettingsAsync();
     void Error(string message);
     MarketplaceOrder? ChoosePreviewShipment(MarketplaceOrder order) => order;
 }
-public sealed class ShippingLabelsViewModel : ObservableObject, IDisposable
+public sealed partial class ShippingLabelsViewModel : ObservableObject, IDisposable
 {
     private readonly MarketplaceWorkspaceViewModel _workspace;
     private readonly IShippingSettingsStore _settings;

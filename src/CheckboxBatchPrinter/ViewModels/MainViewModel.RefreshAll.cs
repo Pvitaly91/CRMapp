@@ -46,7 +46,7 @@ public sealed partial class MainViewModel
     }
     private void RefreshLabelsChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(ShippingLabelsViewModel.IsBusy)) RaiseCommands();
+        if (e.PropertyName is nameof(ShippingLabelsViewModel.IsBusy) or nameof(ShippingLabelsViewModel.HeaderSelectionState)) RaiseCommands();
     }
     private void CancelGlobalRefreshForDateChange()
     {

@@ -109,6 +109,7 @@ public sealed partial class MainViewModel : ObservableObject
             _ => !IsBusy && (IsWaybillsTab ? Waybills?.ClearSelectionCommand.CanExecute(null) == true && SelectedCount > 0 : SelectedCount > 0));
         PrintSelectedCommand = new AsyncRelayCommand(_ => IsWaybillsTab && Waybills is not null ? Waybills.RunAsync(null, true) : PrintSelectedAsync(),
             _ => !IsBusy && (IsWaybillsTab ? Waybills?.PrintSelectedCommand.CanExecute(null) == true : VisibleSelectedCount > 0));
+        PrintOrdersWithReceiptsCommand = new AsyncRelayCommand(_ => PrintOrdersWithReceiptsAsync(), _ => CanPrintOrdersWithReceipts);
         RetryFailedCommand = new AsyncRelayCommand(_ => IsWaybillsTab && Waybills is not null ? Waybills.RunAsync(null, true, true) : RetryFailedAsync(),
             _ => !IsBusy && (IsWaybillsTab ? Waybills?.RetryFailedCommand.CanExecute(null) == true : FailedCount > 0));
         PreviewCommand = new AsyncRelayCommand(p => IsWaybillsTab && Waybills is not null ?
@@ -742,7 +743,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void RaiseCommands()
     {
-        foreach (var command in new ICommand[] { RefreshCommand, RefreshAllCommand, CancelRefreshAllCommand, TodayCommand, SelectAllCommand, ClearSelectionCommand, PrintSelectedCommand, RetryFailedCommand, PreviewCommand, SettingsCommand, MarketplaceSettingsCommand })
+        foreach (var command in new ICommand[] { RefreshCommand, RefreshAllCommand, CancelRefreshAllCommand, TodayCommand, SelectAllCommand, ClearSelectionCommand, PrintSelectedCommand, PrintOrdersWithReceiptsCommand, RetryFailedCommand, PreviewCommand, SettingsCommand, MarketplaceSettingsCommand })
         {
             if (command is RelayCommand relay) relay.RaiseCanExecuteChanged();
             if (command is AsyncRelayCommand asyncRelay) asyncRelay.RaiseCanExecuteChanged();

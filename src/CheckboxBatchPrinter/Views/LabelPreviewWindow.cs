@@ -5,22 +5,44 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using CheckboxBatchPrinter.Core.Models;
 using CheckboxBatchPrinter.Core.Services;
+using CheckboxBatchPrinter.Services;
 
 namespace CheckboxBatchPrinter.Views;
 
 public sealed class LabelPreviewWindow : Window
 {
-    public LabelPreviewWindow(LabelPrintBatch batch, LabelPrinterGeometry geometry, IReadOnlyList<LabelPrintAttempt> previous, bool allowPrint)
+    public LabelPreviewWindow(LabelPrintBatch batch, LabelPrinterGeometry geometry, IReadOnlyList<LabelPrintAttempt> previous, bool allowPrint,
+        CombinedPrintConfirmation? combined = null)
     {
-        Title = "Етикетки — перегляд і підтвердження пакета"; Width = 1000; Height = 760; MinWidth = 700; MinHeight = 500;
+        Title = combined is null ? "Етикетки — перегляд і підтвердження пакета" : "Друк наклейок і чеків";
+        Width = 1000; Height = 760; MinWidth = 700; MinHeight = 500;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         var root = new DockPanel { Margin = new Thickness(12), Background = Brushes.White };
         var header = new StackPanel(); DockPanel.SetDock(header, Dock.Top);
-        header.Children.Add(new TextBlock { Text = $"Принтер: {batch.Settings.PrinterName}\nНосій драйвера: {batch.Settings.WidthMm:0.##} × {batch.Settings.HeightMm:0.##} мм · {geometry.DpiX:0} × {geometry.DpiY:0} DPI · масштаб {batch.Settings.ScalePercent:0.##}% · копій {batch.Settings.Copies}\nGDI-рамка: {geometry.WidthMm:0.##} × {geometry.HeightMm:0.##} мм; область друку: {geometry.PrintableWidthMm:0.##} × {geometry.PrintableHeightMm:0.##} мм", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6) });
+        var printers = combined is null ? $"Принтер: {batch.Settings.PrinterName}" :
+            $"Принтер наклейок: {batch.Settings.PrinterName}\nПринтер чеків: {combined.Receipts.PrinterName}";
+        header.Children.Add(new TextBlock { Text = $"{printers}\nНосій драйвера: {batch.Settings.WidthMm:0.##} × {batch.Settings.HeightMm:0.##} мм · {geometry.DpiX:0} × {geometry.DpiY:0} DPI · масштаб {batch.Settings.ScalePercent:0.##}% · копій {batch.Settings.Copies}\nGDI-рамка: {geometry.WidthMm:0.##} × {geometry.HeightMm:0.##} мм; область друку: {geometry.PrintableWidthMm:0.##} × {geometry.PrintableHeightMm:0.##} мм", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6) });
         var count = batch.IsWaybillBatch ? $"Накладних: {batch.SelectedWaybillCount}" :
             $"Замовлень: {(batch.SelectedOrderCount > 0 ? batch.SelectedOrderCount : batch.Pages.Select(p => p.Shipment.Order).OfType<OrderKey>().Distinct().Count())}";
-        header.Children.Add(new TextBlock { Text = $"{count} · ТТН: {batch.Pages.Select(p => (p.Shipment.Carrier, p.ConnectionId, p.Shipment.TrackingNumber)).Distinct().Count()} · етикеток: {batch.Pages.Count} · сторінок з копіями: {batch.Pages.Count * batch.Settings.Copies}", FontWeight = FontWeights.SemiBold });
-        header.Children.Add(new TextBlock { Text = "Одна етикетка — одна сторінка. Один Windows job. Фізичний вихід не гарантується статусом черги.", Margin = new Thickness(0, 6, 0, 8) });
+        header.Children.Add(new TextBlock { Text = $"{count} · ТТН: {batch.Pages.Select(p => (p.Shipment.Carrier, p.ConnectionId, p.Shipment.TrackingNumber)).Distinct().Count()} · етикеток: {batch.Pages.Count} · сторінок з копіями: {batch.Pages.Count * batch.Settings.Copies}" +
+            (combined is null ? "" : $" · чеків: {combined.Receipts.Count}"), FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
+        header.Children.Add(new TextBlock { Text = combined is null
+            ? "Одна етикетка — одна сторінка. Один Windows job. Фізичний вихід не гарантується статусом черги."
+            : "Наклейки й чеки друкуються в порядку вибраних замовлень. Друкуються копії існуючих чеків, без повторної фіскалізації.",
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 8) });
+        if (combined is not null)
+        {
+            if (combined.Receipts.HiddenSelectedCount > 0)
+                header.Children.Add(new TextBlock { Text = $"Прихованих вибраних замовлень (не включені): {combined.Receipts.HiddenSelectedCount}",
+                    Foreground = Brushes.DarkGoldenrod, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6) });
+            var order = new StackPanel();
+            foreach (var item in combined.Receipts.Items)
+                order.Children.Add(new TextBlock { Text = $"{item.Position}. {item.Marketplace} · замовлення №{item.OrderNumber} · чек №{item.ReceiptNumber} · ТТН {(string.IsNullOrWhiteSpace(item.TrackingText) ? "—" : item.TrackingText)}",
+                    TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 2) });
+            header.Children.Add(new Expander { Header = "Порядок друку: замовлення, ТТН і чеки", IsExpanded = true,
+                Content = new ScrollViewer { MaxHeight = 150, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = order },
+                Margin = new Thickness(0, 0, 0, 8) });
+        }
         if (batch.SkippedShipments.Count > 0)
         {
             header.Children.Add(new TextBlock { Text = $"Пропущено без ключа: {batch.SkippedShipments.Count} відправлень. Друкуватимуться тільки доступні наклейки.",
@@ -37,13 +59,23 @@ public sealed class LabelPreviewWindow : Window
         root.Children.Add(header);
         var footer = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         DockPanel.SetDock(footer, Dock.Bottom);
-        var repeat = new CheckBox { Content = "Розумію ризик дублювання всього пакета", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6), Visibility = previous.Count > 0 && allowPrint ? Visibility.Visible : Visibility.Collapsed };
+        var hasPrevious = previous.Count > 0 || combined?.PreviouslyPrintedReceipts > 0;
+        var repeat = new CheckBox { Content = combined is null ? "Розумію ризик дублювання всього пакета" : "Підтверджую повторний друк наклейок і чеків",
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6), Visibility = hasPrevious && allowPrint ? Visibility.Visible : Visibility.Collapsed };
         if (previous.Count > 0)
         {
             header.Children.Add(new TextBlock { Text = "УВАГА: ці етикетки вже передавалися або могли передатися Windows. Частина пакета могла надрукуватися. Повтор потребує окремого підтвердження ризику дублювання.", Foreground = Brushes.DarkRed, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) });
-            header.Children.Add(new TextBlock { Text = string.Join("\n", previous.Select(a => $"{a.TimeUtc.LocalDateTime:g}: {a.State}, принтер {a.PrinterName}, job {a.WindowsJobId?.ToString() ?? "невідомий"}, {a.JobName}")), FontSize = 11, TextWrapping = TextWrapping.Wrap });
+            var attempts = new TextBlock { Text = string.Join("\n", previous.Select(a => $"{a.TimeUtc.LocalDateTime:g}: {a.State}, принтер {a.PrinterName}, job {a.WindowsJobId?.ToString() ?? "невідомий"}, {a.JobName}")), FontSize = 11, TextWrapping = TextWrapping.Wrap };
+            if (combined is null) header.Children.Add(attempts);
+            else header.Children.Add(new Expander { Header = "Попередні спроби друку наклейок",
+                Content = new ScrollViewer { MaxHeight = 80, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = attempts },
+                Margin = new Thickness(0, 0, 0, 8) });
         }
-        var print = new Button { Content = batch.SkippedShipments.Count > 0 ? "Підтверджую — друк доступних наклейок" : "Підтверджую — друк усього пакета", Padding = new Thickness(10, 6, 10, 6), IsEnabled = previous.Count == 0, Visibility = allowPrint ? Visibility.Visible : Visibility.Collapsed };
+        if (combined?.PreviouslyPrintedReceipts > 0)
+            header.Children.Add(new TextBlock { Text = $"УВАГА: чеків, що вже передавалися або могли передатися на друк: {combined.PreviouslyPrintedReceipts}. Підтвердьте повторний друк наклейок і чеків.",
+                Foreground = Brushes.DarkRed, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) });
+        var print = new Button { Content = combined is not null ? "Друк наклейок і чеків" :
+            batch.SkippedShipments.Count > 0 ? "Підтверджую — друк доступних наклейок" : "Підтверджую — друк усього пакета", Padding = new Thickness(10, 6, 10, 6), IsEnabled = !hasPrevious, Visibility = allowPrint ? Visibility.Visible : Visibility.Collapsed };
         repeat.Checked += (_, _) => print.IsEnabled = true; repeat.Unchecked += (_, _) => print.IsEnabled = false;
         print.Click += (_, _) => DialogResult = true;
         var close = new Button { Content = allowPrint ? "Скасувати" : "Закрити", Padding = new Thickness(10, 6, 10, 6), Margin = new Thickness(8), IsCancel = true };

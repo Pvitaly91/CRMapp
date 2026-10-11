@@ -26,6 +26,9 @@ public sealed class WindowsPrintService : IPrintService
     public bool PrinterExists(string printerName) =>
         GetInstalledPrinters().Contains(printerName, StringComparer.CurrentCultureIgnoreCase);
 
+    public void ValidateReceiptsForPrint(IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings) =>
+        _ = BuildBatchPage(receipts, settings, out _, out _);
+
     public Task PrintReceiptAsync(PrintReceiptDocument receipt, AppSettings settings, CancellationToken cancellationToken = default) =>
         Application.Current.Dispatcher.InvokeAsync(() =>
         {
