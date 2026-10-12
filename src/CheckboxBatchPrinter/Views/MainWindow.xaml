@@ -232,7 +232,7 @@
                 <WrapPanel Grid.Row="1" Grid.ColumnSpan="2" Margin="0,5,0,0">
                     <TextBlock Text="Пошук:" VerticalAlignment="Center" Margin="3" />
                     <TextBox x:Name="ReceiptSearchInput" Width="330" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
-                             ToolTip="Пошук у поточній вкладці за номером та даними документа." />
+                             ToolTip="Пошук у поточній вкладці за номером та даними документа. Для чеків також: ID або точна сума, наприклад 320, 320.00 чи 320,00." />
                     <ComboBox Width="180" ItemsSource="{Binding ReceiptTypes}" SelectedItem="{Binding SelectedType}"
                               Visibility="{Binding IsReceiptTab, Converter={StaticResource BoolToVisibility}}" />
                     <Button x:Name="TodayReceiptsButton" Content="Чеки за сьогодні" Command="{Binding TodayCommand}"

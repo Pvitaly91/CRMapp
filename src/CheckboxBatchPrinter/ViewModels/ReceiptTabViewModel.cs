@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Globalization;
+using System.Text.RegularExpressions;
 using System.Windows.Data;
 using System.Windows.Input;
 using CheckboxBatchPrinter.Core.Models;
@@ -16,6 +18,16 @@ public sealed class ReceiptTabViewModel : ObservableObject, IDisposable
     private readonly HashSet<ReceiptRowViewModel> _observedRows = [];
     private bool _headerSelectionBusy, _changingHeaderSelection, _disposed;
     private string _searchText = "";
+    private decimal? _searchAmount;
+    private static readonly Regex PlainAmount = new(
+        @"\A[+-]?(?:[0-9]+|[0-9]{1,3}(?:[ \u00a0\u202f][0-9]{3})+)(?:[.,][0-9]{1,2})?\z",
+        RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
+    private static readonly Regex EnglishAmount = new(
+        @"\A[+-]?[0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?\z",
+        RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
+    private static readonly Regex EuropeanAmount = new(
+        @"\A[+-]?[0-9]{1,3}(?:\.[0-9]{3})+(?:,[0-9]{1,2})?\z",
+        RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
     private ReceiptTypeOption? _selectedType;
     private ReceiptRowViewModel? _selectedReceipt;
     private readonly MarketplaceWorkspaceViewModel? _marketplace;
@@ -64,7 +76,12 @@ public sealed class ReceiptTabViewModel : ObservableObject, IDisposable
     public string SearchText
     {
         get => _searchText;
-        set { if (SetProperty(ref _searchText, value)) View.Refresh(); }
+        set
+        {
+            if (!SetProperty(ref _searchText, value ?? "")) return;
+            _searchAmount = ParseSearchAmount(_searchText);
+            View.Refresh();
+        }
     }
     public ReceiptTypeOption? SelectedType
     {
@@ -188,11 +205,27 @@ public sealed class ReceiptTabViewModel : ObservableObject, IDisposable
             return false;
         if (string.IsNullOrWhiteSpace(SearchText)) return true;
         var query = SearchText.Trim();
-        return row.FiscalCode.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
+        return row.Id.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+               (_searchAmount is { } amount && row.Model.TotalKnown && row.Total == amount) ||
+               row.FiscalCode.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
                row.Serial.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
                row.Payment.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
                row.CashRegister.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
                row.Type.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
                (UsesOrders && row.MatchesOrderSearch(query));
+    }
+
+    private static decimal? ParseSearchAmount(string query)
+    {
+        if (query.Length > 128) return null;
+        var text = query.Trim();
+        string normalized;
+        if (PlainAmount.IsMatch(text))
+            normalized = text.Replace(" ", "").Replace("\u00a0", "").Replace("\u202f", "").Replace(',', '.');
+        else if (EnglishAmount.IsMatch(text)) normalized = text.Replace(",", "");
+        else if (EuropeanAmount.IsMatch(text)) normalized = text.Replace(".", "").Replace(',', '.');
+        else return null;
+        return decimal.TryParse(normalized, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
+            CultureInfo.InvariantCulture, out var amount) ? amount : null;
     }
 }
