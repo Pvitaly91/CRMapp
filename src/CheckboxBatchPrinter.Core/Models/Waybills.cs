@@ -6,6 +6,10 @@ public sealed record WaybillRecord(ShippingCarrier Carrier, string ConnectionId,
     string Recipient, string City, decimal? DeclaredValue, int? Places, bool IsDeleted = false)
 {
     public DateTimeOffset RetrievedAtUtc { get; init; } = DateTimeOffset.UtcNow;
+    // Cabinet/API print markers describe the provider's form history, independently of local
+    // Windows submission. Null means no supported print marker was supplied by the carrier.
+    public bool? CabinetPrinted { get; init; }
+    public string CabinetLastPrint { get; init; } = "";
     // Operation-local proof of the account used to read this document; never displayed or persisted.
     public string CredentialFingerprint { get; init; } = "";
 }

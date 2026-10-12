@@ -242,6 +242,7 @@ public sealed partial class ShippingLabelsViewModel : ObservableObject, IDisposa
             }
             var history = await _history.LoadAsync(_cancel.Token);
             foreach (var row in rows) row.ApplyLabelHistory(history, _workspace.NormalizeOrderKey);
+            batch = AddCabinetPrintEvidence(batch, rows);
             var previous = history.Where(a => a.State != LabelSubmissionState.NotSubmitted && a.Pages.Any(old => batch.Pages.Any(p =>
                 old.Matches(p.Shipment, _workspace.NormalizeOrderKey) && old.PageNumber == p.PageNumber))).ToArray();
             _cancel.Token.ThrowIfCancellationRequested();
@@ -254,6 +255,7 @@ public sealed partial class ShippingLabelsViewModel : ObservableObject, IDisposa
                     throw new InvalidOperationException("ТТН замінено або замовлення оновлено. Підготуйте й підтвердьте актуальний пакет заново.");
             }
             var currentGeometry = _printer.Inspect(settings);
+            ValidateCabinetPrintDisclosure(batch, rows);
             if (currentGeometry != geometry) throw new InvalidOperationException("Параметри драйвера змінилися. Підготуйте пакет заново.");
             var result = await new LabelPrintCoordinator(_history, _printer).SubmitAsync(batch, _cancel.Token);
             var omittedOrders = batch.SkippedShipments.Select(s => s.Shipment.Order).ToHashSet();

@@ -128,7 +128,7 @@ public sealed partial class MainViewModel
     {
         _waybillTracking.Clear();
         if (Marketplace is null || Waybills is null) return;
-        var documents = Waybills.Rows.Select(row => row.Model).Where(document => !string.IsNullOrWhiteSpace(document.Status)).ToArray();
+        var documents = Waybills.Rows.Select(row => row.Model).ToArray();
         var byNumber = documents.GroupBy(document => (document.Carrier, document.TrackingNumber))
             .ToDictionary(group => group.Key, group => group.ToArray());
         var byId = documents.Where(document => document.Carrier == ShippingCarrier.RozetkaDelivery)
@@ -143,8 +143,16 @@ public sealed partial class MainViewModel
                     candidates = candidates.Concat(byId.GetValueOrDefault(shipment.ShipmentId) ?? []).Distinct().ToArray();
                 var matching = candidates.Where(document => WaybillOrderAssociations.Find(document,
                     [row.Model with { Shipments = [shipment] }], settings).Count > 0).ToArray();
-                if (matching.Length == 0 || matching.Select(document => document.Status).Distinct(StringComparer.Ordinal).Count() != 1) continue;
-                var latest = matching.MaxBy(document => document.RetrievedAtUtc)!;
+                if (matching.Length == 0) continue;
+                var cabinet = matching.Where(document => document.Carrier == ShippingCarrier.NovaPoshta && document.CabinetPrinted.HasValue).ToArray();
+                if (cabinet.Length > 0 && cabinet.Select(document => document.CabinetPrinted).Distinct().Count() == 1)
+                {
+                    var print = cabinet.MaxBy(document => document.RetrievedAtUtc)!;
+                    row.UpdateCabinetPrintStatuses([new(shipment, print.CabinetPrinted, "Кабінет НП", print.CabinetLastPrint, print.RetrievedAtUtc)]);
+                }
+                var tracking = matching.Where(document => !string.IsNullOrWhiteSpace(document.Status)).ToArray();
+                if (tracking.Length == 0 || tracking.Select(document => document.Status).Distinct(StringComparer.Ordinal).Count() != 1) continue;
+                var latest = tracking.MaxBy(document => document.RetrievedAtUtc)!;
                 _waybillTracking[(carrier, number, row.Key)] = new(carrier, number, latest.Status,
                     ShippingCarrierNames.Display(carrier) + " · список накладних", latest.RetrievedAtUtc, shipment.ShipmentId)
                     { Order = row.Key };
@@ -176,6 +184,7 @@ public sealed partial class MainViewModel
         _trackingCancellation?.Cancel();
         _trackingCancellation = null; _trackingTask = null; _trackingScope = "";
         _liveTracking.Clear(); _waybillTracking.Clear(); _trackingFailures.Clear(); _trackingAttempts.Clear();
+        if (Marketplace is not null) foreach (var row in Marketplace.AllOrderRows) row.ClearCabinetPrintStatuses();
         PublishShipmentTrackingStatuses();
     }
 }

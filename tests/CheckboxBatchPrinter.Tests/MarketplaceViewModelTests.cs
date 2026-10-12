@@ -27,6 +27,14 @@ internal static partial class MarketplaceViewModelTests
 
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
+        ("STA exact NP account cabinet markers publish independently of parcel tracking and local jobs", () => StaAsync(CabinetPrintPublicationAsync)),
+        ("STA prepared label preview discloses cabinet marks only for ready selected shipment pages", () => StaAsync(CabinetPrintPreparedLabelsAsync)),
+        ("STA a newly discovered cabinet print mark after label preview requires fresh confirmation", () => StaAsync(CabinetPrintLateMarkerBlocksLabelsAsync)),
+        ("STA a newly discovered cabinet print mark after combined preview blocks both transfers", () => StaAsync(CabinetPrintLateMarkerBlocksCombinedAsync)),
+        ("STA NP cabinet waybill print markers remain separate from local Windows job history", () => StaAsync(WaybillCabinetPrintUnionAsync)),
+        ("STA same-document waybill restoration preserves fresh cabinet flags and independent local submission", () => StaAsync(WaybillCabinetPrintRestoreAsync)),
+        ("STA manual waybill reprint carries only selected positive cabinet evidence without fabricating history", () => StaAsync(WaybillCabinetPrintPreviewAsync)),
+        ("STA waybill automatic retry excludes externally printed labels while local retries remain durable", () => StaAsync(WaybillCabinetPrintRetryAsync)),
         ("STA queued parcel tracking coalesces and never blocks unified refresh or receipt printing", () => StaAsync(ShipmentTrackingDoesNotBlockPrintingAsync)),
         ("STA failed and canceled parcel refresh retains the previous status with a stale timestamp explanation", () => StaAsync(ShipmentTrackingFailureKeepsLastStatusAsync)),
         ("STA an uncancellable old tracking response never replaces a changed TTN status", () => StaAsync(ShipmentTrackingLateOldTtnAsync)),
@@ -170,6 +178,7 @@ internal static partial class MarketplaceViewModelTests
                 await WaybillPrintingDashboardAsync();
                 await CombinedPrintPreviewUiAsync();
                 await ShipmentTrackingUiAsync();
+                await ShipmentCabinetPrintUiAsync();
                 Console.WriteLine("XAML assertions and binding cleanup completed.");
                 await DrainDispatcherAsync();
                 Console.WriteLine("XAML final dispatcher drain completed.");

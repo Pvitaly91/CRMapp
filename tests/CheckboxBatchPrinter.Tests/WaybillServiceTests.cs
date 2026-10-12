@@ -16,6 +16,8 @@ internal static class WaybillServiceTests
     [
         ("all waybills enumerate NP beyond ten pages without any marketplace orders or bindings", NovaPoshtaPagination),
         ("all waybills NP verified stable total avoids an unnecessary next-page request", NovaPoshtaTotals),
+        ("NP waybill list preserves exact cabinet print flags and raw last-print dates without extra requests", NovaPoshtaCabinetPrintMetadata),
+        ("NP unsupported cabinet print metadata remains unknown and delivery or registry states never infer printing", NovaPoshtaCabinetPrintUnknown),
         ("all waybills NP invalid totals, overlap and changing counts preserve an incomplete source", NovaPoshtaBadTotals),
         ("all waybills query every NP account and split inclusive ranges into seven-day windows", AccountsAndPeriods),
         ("all waybills NP aliases sharing one key enumerate one account only", AccountAliases),
@@ -62,6 +64,75 @@ internal static class WaybillServiceTests
         id, created_at = date, last_status_name = "Створено", places = 1, insurance_cost = 210m, is_archived = archived, is_deleted = deleted,
         recipient = new { first_name = "Ім'я", last_name = "Прізвище", middle_name = "По батькові", department = new { name = "Київ", public_name = "Київ, відділення" } }
     };
+    private static Dictionary<string, object?> WithFields(object original, params (string Name, object? Value)[] fields)
+    {
+        var row = JsonSerializer.SerializeToElement(original).EnumerateObject()
+            .ToDictionary(property => property.Name, property => (object?)property.Value.Clone(), StringComparer.Ordinal);
+        foreach (var (name, value) in fields) row[name] = value;
+        return row;
+    }
+
+    private static async Task NovaPoshtaCabinetPrintMetadata()
+    {
+        (object Printed, bool Expected)[] flags = [(true, true), (false, false), (1, true), (0, false), ("1", true), ("0", false)];
+        const string lastPrint = "2026-10-12 01:13:55";
+        var rows = flags.Select((flag, index) => (object)WithFields(NpRow(index + 1),
+            ("Printed", flag.Printed), ("DateLastPrint", " \t" + lastPrint + " \r\n"),
+            ("StateName", "Одержано"), ("ScanSheetPrinted", flag.Expected ? "0" : "1"))).ToArray();
+        var handler = new Handler((request, _) =>
+        {
+            var query = NpQuery(request);
+            Check(query.Page == 1, "Cabinet print metadata caused an additional document lookup.");
+            return Task.FromResult(NpTotal(rows, rows.Length));
+        });
+        using var client = new HttpClient(handler);
+        var started = DateTimeOffset.UtcNow;
+        var result = await Service(client, NpSettings()).FetchAsync(Day, Day);
+        Check(handler.Calls == 1 && result.Documents.Count == flags.Length && result.Sources[0].Complete,
+            "Cabinet print metadata caused new requests or made the source incomplete.");
+        for (var index = 0; index < flags.Length; index++)
+        {
+            var number = (20400000000001L + index).ToString();
+            var record = result.Documents.Single(row => row.TrackingNumber == number);
+            Check(record.CabinetPrinted == flags[index].Expected && record.CabinetLastPrint == lastPrint &&
+                record.Status == "Одержано" && record.RetrievedAtUtc >= started,
+                "Cabinet marker, raw provider time or local retrieval timestamp changed semantics.");
+        }
+        NoSecrets(result);
+    }
+
+    private static async Task NovaPoshtaCabinetPrintUnknown()
+    {
+        object?[] unsupported = [null, "", "yes", "true", "false", " 1 ", "01", 2, -1, new { value = true }, new[] { 1 }];
+        var rows = unsupported.Select((flag, index) => (object)WithFields(NpRow(index + 1),
+            ("Printed", flag), ("DateLastPrint", "2026-10-12 00:00:00"), ("ScanSheetPrinted", "1"),
+            ("StateName", "Одержано"))).ToList();
+        // An absent print flag and a provider date/registry flag still do not establish document printing.
+        rows.Add(WithFields(NpRow(20), ("DateLastPrint", "2026-10-12 00:00:00"), ("ScanSheetPrinted", "1")));
+        rows.Add(WithFields(NpRow(21), ("Printed", "1"), ("DateLastPrint", new { invalid = "date" })));
+        rows.Add(WithFields(NpRow(22), ("Printed", "1"), ("DateLastPrint", new string('x', 70) + "\u0000\r\n")));
+        var handler = new Handler((_, _) => Task.FromResult(NpTotal(rows.ToArray(), rows.Count)));
+        using (var client = new HttpClient(handler))
+        {
+            var result = await Service(client, NpSettings()).FetchAsync(Day, Day);
+            Check(handler.Calls == 1 && result.Documents.Count == rows.Count && result.Sources[0].Complete,
+                "Malformed optional print metadata rejected otherwise valid waybills.");
+            Check(result.Documents.Where(row => row.TrackingNumber != "20400000000021" && row.TrackingNumber != "20400000000022")
+                .All(row => row.CabinetPrinted is null), "A missing/unsupported flag, date, registry or parcel state inferred printing.");
+            var malformedDate = result.Documents.Single(row => row.TrackingNumber == "20400000000021");
+            var boundedDate = result.Documents.Single(row => row.TrackingNumber == "20400000000022");
+            Check(malformedDate.CabinetPrinted == true && malformedDate.CabinetLastPrint == "" &&
+                boundedDate.CabinetPrinted == true && boundedDate.CabinetLastPrint == new string('x', 64) &&
+                result.Documents.All(row => !row.CabinetLastPrint.Any(char.IsControl)),
+                "Optional date metadata was parsed as a timezone, left unbounded or retained control characters.");
+        }
+        var rdHandler = new Handler((_, _) => Task.FromResult(Rd(
+            [WithFields(RdRow("RD-PRINT-TEST"), ("Printed", "1"), ("DateLastPrint", "2026-10-12 00:00:00"))], 1)));
+        using var rdClient = new HttpClient(rdHandler);
+        var delivery = await Service(rdClient, new() { RozetkaDeliveryToken = Token }).FetchAsync(Day, Day);
+        Check(delivery.Documents.Single().CabinetPrinted is null && delivery.Documents.Single().CabinetLastPrint == "" && rdHandler.Calls == 4,
+            "RD guessed a print contract from NP-specific field names or introduced extra requests.");
+    }
     private static Dictionary<string, string[]> Query(HttpRequestMessage request) => request.RequestUri!.Query.TrimStart('?').Split('&')
         .Select(s => s.Split('=', 2)).GroupBy(s => Uri.UnescapeDataString(s[0]), StringComparer.Ordinal)
         .ToDictionary(g => g.Key, g => g.Select(s => Uri.UnescapeDataString(s[1])).ToArray(), StringComparer.Ordinal);

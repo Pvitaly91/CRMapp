@@ -209,8 +209,24 @@ public sealed class WaybillService(ShippingLabelHttp http, IShippingSettingsStor
         var deleted = Flag(item, "DeletionMark");
         return new(ShippingCarrier.NovaPoshta, connectionId, name, reference.Length == 0 ? "ttn:" + number : reference, number,
             Date(item, "DateTime"), deleted ? "Видалена" : Text(item, "StateName"), Text(item, "RecipientContactPerson"),
-            Text(item, "CityRecipientDescription"), Money(item, "Cost"), NullableInt(item, "SeatsAmount", 1, 1000), deleted);
+            Text(item, "CityRecipientDescription"), Money(item, "Cost"), NullableInt(item, "SeatsAmount", 1, 1000), deleted)
+        {
+            CabinetPrinted = CabinetPrinted(item),
+            CabinetLastPrint = Field(item, "DateLastPrint") is { ValueKind: JsonValueKind.String } lastPrint
+                ? SafeText(lastPrint.GetString()!, 64).Trim() : ""
+        };
     }
+
+    private static bool? CabinetPrinted(JsonElement item) => Field(item, "Printed") switch
+    {
+        { ValueKind: JsonValueKind.True } => true,
+        { ValueKind: JsonValueKind.False } => false,
+        { ValueKind: JsonValueKind.String } value when value.GetString() == "1" => true,
+        { ValueKind: JsonValueKind.String } value when value.GetString() == "0" => false,
+        { ValueKind: JsonValueKind.Number } value when value.TryGetInt32(out var number) && number == 1 => true,
+        { ValueKind: JsonValueKind.Number } value when value.TryGetInt32(out var number) && number == 0 => false,
+        _ => null
+    };
 
     private static WaybillRecord ParseDelivery(JsonElement item, string connectionId)
     {

@@ -59,7 +59,7 @@ public sealed class LabelPreviewWindow : Window
         root.Children.Add(header);
         var footer = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         DockPanel.SetDock(footer, Dock.Bottom);
-        var hasPrevious = previous.Count > 0 || combined?.PreviouslyPrintedReceipts > 0;
+        var hasPrevious = previous.Count > 0 || combined?.PreviouslyPrintedReceipts > 0 || batch.CabinetPrintedLabels.Count > 0;
         var repeat = new CheckBox { Content = combined is null ? "Розумію ризик дублювання всього пакета" : "Підтверджую повторний друк наклейок і чеків",
             VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6), Visibility = hasPrevious && allowPrint ? Visibility.Visible : Visibility.Collapsed };
         if (previous.Count > 0)
@@ -74,6 +74,17 @@ public sealed class LabelPreviewWindow : Window
         if (combined?.PreviouslyPrintedReceipts > 0)
             header.Children.Add(new TextBlock { Text = $"УВАГА: чеків, що вже передавалися або могли передатися на друк: {combined.PreviouslyPrintedReceipts}. Підтвердьте повторний друк наклейок і чеків.",
                 Foreground = Brushes.DarkRed, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) });
+        if (batch.CabinetPrintedLabels.Count > 0)
+        {
+            header.Children.Add(new TextBlock { Text = $"УВАГА: у кабінеті НП позначено надрукованими {batch.CabinetPrintedLabels.Count} накладних із цього пакета. Підтвердьте повторний друк.",
+                Foreground = Brushes.DarkRed, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) });
+            header.Children.Add(new Expander { Header = "Накладні з ознакою друку в кабінеті",
+                Content = new ScrollViewer { MaxHeight = 100, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    Content = new TextBlock { Text = string.Join("\n", batch.CabinetPrintedLabels.Select(evidence =>
+                        $"ТТН {evidence.Shipment.TrackingNumber} · {evidence.Source}" +
+                        (string.IsNullOrWhiteSpace(evidence.PrintedAtText) ? "" : $" · дата з кабінету: {evidence.PrintedAtText} (часовий пояс не надано)"))),
+                        TextWrapping = TextWrapping.Wrap } }, Margin = new Thickness(0, 0, 0, 8) });
+        }
         var print = new Button { Content = combined is not null ? "Друк наклейок і чеків" :
             batch.SkippedShipments.Count > 0 ? "Підтверджую — друк доступних наклейок" : "Підтверджую — друк усього пакета", Padding = new Thickness(10, 6, 10, 6), IsEnabled = !hasPrevious, Visibility = allowPrint ? Visibility.Visible : Visibility.Collapsed };
         repeat.Checked += (_, _) => print.IsEnabled = true; repeat.Unchecked += (_, _) => print.IsEnabled = false;

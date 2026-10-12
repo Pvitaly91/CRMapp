@@ -78,7 +78,7 @@ public sealed partial class ShippingLabelsViewModel
                 batch.Pages.Any(p => p.CoveredShipments.Append(p.Shipment).Any(s =>
                     old.Matches(s, _owner._workspace.NormalizeOrderKey) && old.PageNumber == p.PageNumber)))).ToArray();
             Token.ThrowIfCancellationRequested();
-            _batch = batch;
+            _batch = AddCabinetPrintEvidence(batch, CurrentRows());
             _geometry = geometry;
         }
 
@@ -96,6 +96,7 @@ public sealed partial class ShippingLabelsViewModel
         {
             EnsureActive();
             _ = Batch;
+            ValidateCabinetPrintDisclosure(Batch, CurrentRows());
             foreach (var frozen in _orders)
             {
                 var current = _owner._workspace.AllOrderRows.FirstOrDefault(r => r.Key == frozen.Key)?.Model;

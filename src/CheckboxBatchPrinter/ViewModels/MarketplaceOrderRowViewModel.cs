@@ -18,6 +18,8 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
     public string BuyerDisplay => Model.Buyer?.Name ?? "";
     public string TrackingDisplay => Model.TrackingDisplay;
     private readonly Dictionary<(ShippingCarrier Carrier, string TrackingNumber, string ShipmentId), OrderShipmentTrackingStatus> _trackingStatuses = [];
+    private readonly Dictionary<(ShippingCarrier Carrier, string TrackingNumber, string ShipmentId), OrderShipmentCabinetPrintStatus> _cabinetPrintStatuses = [];
+    private readonly HashSet<(ShippingCarrier Carrier, string TrackingNumber, string ShipmentId)> _locallyPrintedShipments = [];
     public IReadOnlyList<OrderShipmentLink> ShipmentLinks => Model.Shipments
         .Where(s => !string.IsNullOrWhiteSpace(s.TrackingNumber))
         .DistinctBy(s => (s.Carrier, TrackingNumber: s.TrackingNumber.Trim(), s.ShipmentId))
@@ -26,10 +28,38 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
     private bool _selectedForLabels;
     private bool _hasPrintedLabel;
     private bool _hasLabelSubmission;
+    private bool _localHasLabelSubmission;
+    private string _localLabelPrintStatus = "Не передано";
     private string _labelStatus = "Не завантажено", _labelPrintStatus = "Не передано";
     public bool IsSelectedForLabels { get => _selectedForLabels; set => SetProperty(ref _selectedForLabels, value); }
     public string LabelStatus { get => _labelStatus; set => SetProperty(ref _labelStatus, value); }
-    public string LabelPrintStatus { get => _labelPrintStatus; set => SetProperty(ref _labelPrintStatus, value); }
+    public string LabelPrintStatus { get => _labelPrintStatus; set { _localLabelPrintStatus = value; RefreshLabelPrintState(); } }
+    public string LabelPrintStatusToolTip
+    {
+        get
+        {
+            var details = new List<string> { $"Локальна історія: {_localLabelPrintStatus}" };
+            foreach (var shipment in Model.Shipments.Where(s => !string.IsNullOrWhiteSpace(s.TrackingNumber)))
+            {
+                if (_cabinetPrintStatuses.TryGetValue(TrackingIdentity(shipment), out var status))
+                {
+                    details.Add($"ТТН {shipment.TrackingNumber.Trim()} · {status.Source}: " +
+                        (status.Printed == true ? "позначено надрукованою" : "не позначено надрукованою"));
+                    if (!string.IsNullOrWhiteSpace(status.PrintedAtText))
+                        details.Add($"Дата друку з кабінету: {status.PrintedAtText} (часовий пояс не надано)");
+                    if (status.CheckedAtUtc is { } checkedAt)
+                        details.Add($"Перевірено: {TimeZoneInfo.ConvertTime(checkedAt, DateRangeBuilder.KyivZone):dd.MM.yyyy HH:mm}");
+                    details.Add("Ознака кабінету не підтверджує фізичний вихід наклейки з принтера.");
+                }
+                else
+                {
+                    var carrier = ShippingCarrierNames.FromDocumentedDeliveryField(shipment.Carrier);
+                    details.Add($"ТТН {shipment.TrackingNumber.Trim()} · {ShippingCarrierNames.Display(carrier)}: ознаку друку з кабінету не надано.");
+                }
+            }
+            return string.Join("\n", details);
+        }
+    }
     public bool HasPrintedLabel { get => _hasPrintedLabel; private set => SetProperty(ref _hasPrintedLabel, value); }
     public bool HasLabelSubmission { get => _hasLabelSubmission; private set => SetProperty(ref _hasLabelSubmission, value); }
     public string DeliveryDisplay => !Model.Shipments.Any(s => !string.IsNullOrWhiteSpace(s.TrackingNumber)) ? "Накладну не створено" :
@@ -63,17 +93,68 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
     private static (ShippingCarrier Carrier, string TrackingNumber, string ShipmentId) TrackingIdentity(OrderShipment shipment) =>
         (ShippingCarrierNames.FromDocumentedDeliveryField(shipment.Carrier), shipment.TrackingNumber.Trim(), shipment.ShipmentId);
 
+    public void UpdateCabinetPrintStatuses(IEnumerable<OrderShipmentCabinetPrintStatus> statuses)
+    {
+        var shipments = Model.Shipments.Select(TrackingIdentity).ToHashSet();
+        var changed = false;
+        foreach (var status in statuses)
+        {
+            var identity = TrackingIdentity(status.Shipment);
+            if (status.Printed is null || identity.TrackingNumber.Length == 0 || !shipments.Contains(identity)) continue;
+            if (_cabinetPrintStatuses.TryGetValue(identity, out var previous) && previous == status) continue;
+            _cabinetPrintStatuses[identity] = status;
+            changed = true;
+        }
+        if (changed) RefreshLabelPrintState();
+    }
+
+    public void ClearCabinetPrintStatuses()
+    {
+        if (_cabinetPrintStatuses.Count == 0) return;
+        _cabinetPrintStatuses.Clear();
+        RefreshLabelPrintState();
+    }
+
+    public IReadOnlyList<CoreCabinetLabelPrintEvidence> GetCabinetPrintEvidence() => ShippingCarrierNames.ForOrder(Model)
+        .Where(shipment => _cabinetPrintStatuses.TryGetValue((shipment.Carrier, shipment.TrackingNumber, shipment.ShipmentId), out var status) && status.Printed == true)
+        .Select(shipment =>
+        {
+            var status = _cabinetPrintStatuses[(shipment.Carrier, shipment.TrackingNumber, shipment.ShipmentId)];
+            return new CoreCabinetLabelPrintEvidence(shipment, status.Source, status.PrintedAtText, status.CheckedAtUtc);
+        }).ToArray();
+
+    private void RefreshLabelPrintState()
+    {
+        var shipments = ShippingCarrierNames.ForOrder(Model);
+        var external = GetCabinetPrintEvidence();
+        var externalIdentities = external.Select(evidence =>
+            (evidence.Shipment.Carrier, evidence.Shipment.TrackingNumber, evidence.Shipment.ShipmentId)).ToHashSet();
+        HasPrintedLabel = shipments.Count > 0 && shipments.All(shipment =>
+            _locallyPrintedShipments.Contains((shipment.Carrier, shipment.TrackingNumber, shipment.ShipmentId)) ||
+            externalIdentities.Contains((shipment.Carrier, shipment.TrackingNumber, shipment.ShipmentId)));
+        HasLabelSubmission = _localHasLabelSubmission || external.Count > 0;
+        var display = !_localHasLabelSubmission && external.Count > 0
+            ? HasPrintedLabel ? "НП: позначено надрукованою" : "НП: частину позначено надрукованою"
+            : _localLabelPrintStatus;
+        SetProperty(ref _labelPrintStatus, display, nameof(LabelPrintStatus));
+        OnPropertyChanged(nameof(LabelPrintStatusToolTip));
+    }
+
     public void ApplyLabelHistory(IEnumerable<LabelPrintAttempt> history, Func<OrderKey, OrderKey>? normalizeOrder = null)
     {
         var shipments = ShippingCarrierNames.ForOrder(Model);
         var attempts = history.Where(a => a.Pages.Any(p => shipments.Any(s => p.Matches(s, normalizeOrder)))).ToArray();
-        HasLabelSubmission = attempts.Any(a => a.State is LabelSubmissionState.Submitted or LabelSubmissionState.SubmissionUnknown);
-        HasPrintedLabel = shipments.Count > 0 && shipments.All(s => attempts.Any(a => a.State == LabelSubmissionState.Submitted &&
-            a.Pages.Any(p => p.Matches(s, normalizeOrder))));
+        _localHasLabelSubmission = attempts.Any(a => a.State is LabelSubmissionState.Submitted or LabelSubmissionState.SubmissionUnknown);
+        _locallyPrintedShipments.Clear();
+        foreach (var shipment in shipments.Where(s => attempts.Any(a => a.State == LabelSubmissionState.Submitted &&
+            a.Pages.Any(p => p.Matches(s, normalizeOrder)))))
+            _locallyPrintedShipments.Add((shipment.Carrier, shipment.TrackingNumber, shipment.ShipmentId));
+        var localComplete = shipments.Count > 0 && shipments.All(s =>
+            _locallyPrintedShipments.Contains((s.Carrier, s.TrackingNumber, s.ShipmentId)));
         var latest = attempts.MaxBy(a => a.TimeUtc);
         LabelPrintStatus = latest?.State switch
         {
-            LabelSubmissionState.Submitted => HasPrintedLabel ? $"Передано Windows, job {latest.WindowsJobId}" :
+            LabelSubmissionState.Submitted => localComplete ? $"Передано Windows, job {latest.WindowsJobId}" :
                 $"Частину наклейок передано Windows, job {latest.WindowsJobId}",
             LabelSubmissionState.SubmissionUnknown => "Передавання невідоме; можливий дубль",
             _ => "Не передано"
@@ -82,13 +163,19 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
 
     public void Update(MarketplaceOrder order, IReadOnlyList<ReceiptRowViewModel> receipts, IReadOnlyList<ReceiptOrderDecision> decisions)
     {
-        if (Model.Key != order.Key) _trackingStatuses.Clear();
+        if (Model.Key != order.Key) { _trackingStatuses.Clear(); _cabinetPrintStatuses.Clear(); }
         if (!ShippingCarrierNames.ForOrder(Model).SequenceEqual(ShippingCarrierNames.ForOrder(order)))
-        { LabelStatus = "Не завантажено"; LabelPrintStatus = "Не передано"; HasPrintedLabel = false; HasLabelSubmission = false; }
+        {
+            LabelStatus = "Не завантажено"; _localLabelPrintStatus = "Не передано";
+            _locallyPrintedShipments.Clear(); _localHasLabelSubmission = false;
+        }
         Model = order;
         var shipmentIdentities = Model.Shipments.Select(TrackingIdentity).ToHashSet();
         foreach (var identity in _trackingStatuses.Keys.Where(identity => !shipmentIdentities.Contains(identity)).ToArray())
             _trackingStatuses.Remove(identity);
+        foreach (var identity in _cabinetPrintStatuses.Keys.Where(identity => !shipmentIdentities.Contains(identity)).ToArray())
+            _cabinetPrintStatuses.Remove(identity);
+        RefreshLabelPrintState();
         var linked = receipts.Where(r => r.OrderMatch?.Order?.Key == Key).ToArray();
         LinkedReceipts = linked;
         var durable = decisions.GroupBy(d => d.ReceiptId, StringComparer.OrdinalIgnoreCase)
@@ -113,6 +200,8 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
 // A carrier status projection, deliberately separate from the cached marketplace order.
 public sealed record OrderShipmentTrackingStatus(OrderShipment Shipment, string Status, string Source = "",
     DateTimeOffset? CheckedAtUtc = null, bool IsStale = false);
+public sealed record OrderShipmentCabinetPrintStatus(OrderShipment Shipment, bool? Printed, string Source = "Кабінет НП",
+    string PrintedAtText = "", DateTimeOffset? CheckedAtUtc = null);
 
 public sealed record OrderShipmentLink(MarketplaceOrderRowViewModel Row, OrderShipment Shipment)
 {

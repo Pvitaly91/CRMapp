@@ -517,7 +517,13 @@
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
-                                    <controls:DashboardTextColumn Header="Друк наклейки" Binding="{Binding LabelPrintStatus}" Width="170" />
+                                    <controls:DashboardTextColumn Header="Друк наклейки" Binding="{Binding LabelPrintStatus}" Width="170">
+                                        <controls:DashboardTextColumn.ElementStyle>
+                                            <Style TargetType="controls:DashboardTextBox" BasedOn="{StaticResource DashboardTextStyle}">
+                                                <Setter Property="ToolTip" Value="{Binding LabelPrintStatusToolTip}" />
+                                            </Style>
+                                        </controls:DashboardTextColumn.ElementStyle>
+                                    </controls:DashboardTextColumn>
                                 </DataGrid.Columns>
                             </DataGrid>
                         </Grid>
@@ -654,7 +660,13 @@
                                     </Style>
                                 </controls:DashboardTextColumn.ElementStyle>
                             </controls:DashboardTextColumn>
-                            <controls:DashboardTextColumn Header="Друк" Binding="{Binding PrintStatusText}" Width="175" />
+                            <controls:DashboardTextColumn Header="Друк" Binding="{Binding PrintStatusText}" Width="175">
+                                <controls:DashboardTextColumn.ElementStyle>
+                                    <Style TargetType="controls:DashboardTextBox" BasedOn="{StaticResource DashboardTextStyle}">
+                                        <Setter Property="ToolTip" Value="{Binding PrintStatusToolTip}" />
+                                    </Style>
+                                </controls:DashboardTextColumn.ElementStyle>
+                            </controls:DashboardTextColumn>
                             <DataGridTemplateColumn Header="" Width="90" CanUserSort="False">
                                 <DataGridTemplateColumn.CellTemplate><DataTemplate>
                                     <Button Content="Перегляд" Padding="6,2"
