@@ -34,6 +34,11 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--receipt-driver-smoke")
+        {
+            try { ReceiptDriverSmoke.Run(args[1]); return 0; }
+            catch (Exception exception) { Console.Error.WriteLine(exception); return 1; }
+        }
         if (args.Length == 2 && args[0] == "--label-driver-smoke")
         {
             try

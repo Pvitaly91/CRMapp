@@ -33,12 +33,33 @@ public sealed partial class MainViewModel
                 order.Model.Number, ReceiptPrintHeader.TrackingFor(order.Model))))
             .Select((item, index) => item with { Position = index + 1 }).ToArray();
         ShippingLabelsViewModel.CombinedLabelPrintSession? session = null;
+        var batchId = Guid.NewGuid().ToString("N");
+        var labelPageCount = 0;
+        void LogBatch(string stage, Exception? error = null, bool includeReceipts = false)
+        {
+            // Diagnostics must never change the result of an accepted printer job.
+            try
+            {
+                var status = $"batch={batchId};orders={orders.Length};receipts={receipts.Length};label_pages={labelPageCount};hidden_orders={hiddenCount}";
+                if (error is null) _logger.Info("combined.print." + stage, printStatus: status);
+                else _logger.Error("combined.print." + stage, error, printStatus: status);
+                if (includeReceipts)
+                    foreach (var item in items)
+                    {
+                        var orderNumber = new string(item.OrderNumber.Where(c => char.IsLetterOrDigit(c) || c is '-' or '_').Take(80).ToArray());
+                        _logger.Info("combined.print." + stage + ".receipt", item.ReceiptId,
+                            printStatus: $"batch={batchId};position={item.Position};order={orderNumber};marketplace={item.Marketplace}");
+                    }
+            }
+            catch (Exception) { /* A failed diagnostic write must not cause a duplicate-print retry. */ }
+        }
         var waybillsWereReserved = Waybills?.IsWorkspaceRefreshing == true;
         IsBusy = true;
         IsPrinting = true;
         if (Waybills is not null) Waybills.IsWorkspaceRefreshing = true;
         try
         {
+            LogBatch("selected", includeReceipts: true);
             foreach (var order in orders)
             {
                 if (order.Model.IsCanceled)
@@ -78,12 +99,15 @@ public sealed partial class MainViewModel
             // Both complete packets must be ready before the single confirmation or any transfer.
             await Task.WhenAll(session.PrepareAsync(), PrepareReceiptsAsync());
             token.ThrowIfCancellationRequested();
+            labelPageCount = session.Batch.Pages.Count;
+            LogBatch("prepared");
             var history = await _printHistoryStore.LoadAsync(account, token);
             var previouslyPrinted = receipts.Count(row => row.PrintStatus == PrintItemStatus.Done || history.ContainsKey(row.Id) ||
                 _combinedReceiptTransferRisks.Contains((account, row.Id.ToUpperInvariant())));
             var confirmation = new CombinedPrintConfirmation(new(settings.PrinterName, hiddenCount, items), previouslyPrinted);
             if (!session.Confirm(confirmation))
             {
+                LogBatch("declined");
                 StatusText = "Спільний друк скасовано. Вибір замовлень збережено.";
                 return;
             }
@@ -98,10 +122,11 @@ public sealed partial class MainViewModel
             var warnings = new List<string>();
             async Task SubmitLabelsAsync()
             {
-                try { await session.SubmitAsync(); labelsSucceeded = true; }
+                LogBatch("labels.submit");
+                try { await session.SubmitAsync(); labelsSucceeded = true; LogBatch("labels.accepted"); }
                 catch (Exception exception)
                 {
-                    _logger.Error("combined.print.labels", exception);
+                    LogBatch("labels", exception);
                     warnings.Add("Наклейки: " + exception.Message);
                 }
             }
@@ -111,15 +136,17 @@ public sealed partial class MainViewModel
                 foreach (var item in items) _combinedReceiptTransferRisks.Add((account, item.ReceiptId.ToUpperInvariant()));
                 try
                 {
+                    LogBatch("receipts.submit");
                     if (documents.Length == 1) await _printService.PrintReceiptAsync(documents[0], settings, token);
                     else await _printService.PrintReceiptsAsSingleJobAsync(documents, settings, token);
                     receiptsSucceeded = true;
                     foreach (var row in receipts) row.PrintStatus = PrintItemStatus.Done;
+                    LogBatch("receipts.accepted", includeReceipts: true);
                 }
                 catch (Exception exception)
                 {
                     foreach (var row in receipts) { row.PrintStatus = PrintItemStatus.Error; row.PrintError = exception.Message; }
-                    _logger.Error("combined.print.receipts", exception);
+                    LogBatch("receipts", exception);
                     warnings.Add("Чеки: " + exception.Message + " Частина могла надрукуватися; перевірте перед повтором.");
                 }
                 if (!receiptsSucceeded) return;
@@ -130,7 +157,7 @@ public sealed partial class MainViewModel
                 }
                 catch (Exception exception)
                 {
-                    _logger.Error("combined.print.history", exception);
+                    LogBatch("history", exception);
                     const string warning = "Чеки передано, але не вдалося зберегти історію їх друку.";
                     warnings.Add(warning);
                     foreach (var row in receipts) row.PrintError = warning;
@@ -156,11 +183,12 @@ public sealed partial class MainViewModel
         }
         catch (OperationCanceledException)
         {
+            LogBatch("canceled");
             StatusText = "Підготовку спільного друку скасовано. Пакети не передано принтерам.";
         }
         catch (Exception exception)
         {
-            _logger.Error("combined.print.prepare", exception);
+            LogBatch("prepare", exception);
             StatusText = "Не вдалося підготувати спільний друк. Пакети не передано принтерам.";
             _dialogs.ShowError(exception is ShippingLabelException or InvalidOperationException ? exception.Message :
                 "Не вдалося підготувати наклейки й чеки. Перевірте підключення та налаштування принтерів.", "Спільний друк");

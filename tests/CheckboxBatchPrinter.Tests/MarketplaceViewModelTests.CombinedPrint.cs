@@ -35,6 +35,33 @@ internal static partial class MarketplaceViewModelTests
         Equal(1, fixture.Base.History.Saves); Equal(3, fixture.Base.History.Records.Count);
         Equal(LabelSubmissionState.Submitted, fixture.LabelHistory.Attempts.Single().State);
         Equal(0, fixture.Base.Dialogs.Errors.Count); Equal(0, fixture.Dialogs.StandalonePreviews);
+        var logs = fixture.PrintLogger.Entries;
+        var selected = logs.Single(entry => entry.Operation == "combined.print.selected");
+        var batch = selected.Status.Split(';')[0];
+        True(Guid.TryParseExact(batch["batch=".Length..], "N", out _));
+        True(logs.All(entry => entry.Status.StartsWith(batch + ";", StringComparison.Ordinal)));
+        True(logs.Single(entry => entry.Operation == "combined.print.prepared").Status.Contains("orders=3;receipts=3;label_pages=3;hidden_orders=0"));
+        foreach (var stage in new[] { "selected", "receipts.accepted" })
+        {
+            var manifest = logs.Where(entry => entry.Operation == "combined.print." + stage + ".receipt").ToArray();
+            True(manifest.Select(entry => entry.ReceiptId).SequenceEqual(expected));
+            for (var index = 0; index < manifest.Length; index++)
+                True(manifest[index].Status.Contains($"position={index + 1};order=ORDER-{(char)('A' + index)};marketplace=Prom"));
+        }
+        foreach (var stage in new[] { "labels.submit", "labels.accepted", "receipts.submit", "receipts.accepted" })
+            Equal(1, logs.Count(entry => entry.Operation == "combined.print." + stage));
+        True(logs.All(entry => !entry.Status.Contains("TTN-", StringComparison.Ordinal)),
+            "The print diagnostic manifest must not include shipping tracking data.");
+
+        using var logFailure = await CombinedFixture.CreateAsync();
+        logFailure.MarkOrders();
+        logFailure.PrintLogger.FailWrites = true;
+        await logFailure.Main.PrintOrdersWithReceiptsAsync();
+        Equal(1, logFailure.ReceiptPrinter.Calls); Equal(1, logFailure.LabelPrinter.Calls);
+        True(logFailure.Main.Receipts.All(row => row.PrintStatus == PrintItemStatus.Done));
+        True(logFailure.Workspace.AllOrderRows.All(row => !row.IsSelectedForLabels));
+        Equal(1, logFailure.Base.History.Saves);
+        Equal(0, logFailure.Base.Dialogs.Errors.Count);
     }
 
     private static async Task CombinedPrintMultipleReceiptsAsync()
@@ -216,6 +243,9 @@ internal static partial class MarketplaceViewModelTests
                 failure + " left the combined operation busy.");
             True(fixture.Main.Receipts.All(r => r.PrintStatus is not (PrintItemStatus.Downloading or PrintItemStatus.Printing)),
                 failure + " left transient receipt print states.");
+            True(fixture.PrintLogger.Entries.Any(entry => entry.Operation == "combined.print.prepare" && entry.IsError));
+            True(fixture.PrintLogger.Entries.All(entry => !entry.Operation.EndsWith(".accepted", StringComparison.Ordinal)),
+                failure + " reported a packet as accepted before submission.");
         }
     }
 
@@ -284,6 +314,9 @@ internal static partial class MarketplaceViewModelTests
                 "Accepted jobs may clear the paired marks despite a history-save warning; a failed receipt transfer may not.");
             True(fixture.Main.Receipts.All(r => r.PrintStatus == (historyFailure ? PrintItemStatus.Done : PrintItemStatus.Error)));
             True(!fixture.Main.IsBusy && !fixture.Labels.IsBusy);
+            Equal(1, fixture.PrintLogger.Entries.Count(entry => entry.Operation == "combined.print.labels.accepted"));
+            Equal(historyFailure ? 1 : 0, fixture.PrintLogger.Entries.Count(entry => entry.Operation == "combined.print.receipts.accepted"));
+            True(fixture.PrintLogger.Entries.Any(entry => entry.Operation == "combined.print." + (historyFailure ? "history" : "receipts") && entry.IsError));
             if (!historyFailure)
             {
                 fixture.Dialogs.Accept = false;
@@ -348,6 +381,7 @@ internal static partial class MarketplaceViewModelTests
         public ShippingLabelsTests.Stores LabelSettings { get; } = new();
         public ShippingLabelsTests.Source LabelSource { get; } = new();
         public CombinedLabelHistory LabelHistory { get; } = new();
+        public CombinedPrintLogger PrintLogger { get; } = new();
         public MainViewModel Main { get; }
         public MarketplaceWorkspaceViewModel Workspace { get; }
         public ShippingLabelsViewModel Labels { get; }
@@ -364,7 +398,7 @@ internal static partial class MarketplaceViewModelTests
             if (withWaybills) Waybills = new(new DashboardWaybillSource(), new DashboardWaybillPreparation(),
                 new DashboardWaybillSettings(), new DashboardWaybillHistory(), WaybillPrinter, new DashboardWaybillDialogs());
             Main = new(Base.ReceiptSource, Images, Base.Settings, Base.Authentication, Base.History,
-                ReceiptPrinter, Base.Dialogs, new Logger(), Workspace, waybills: Waybills) { DateFrom = new(2026, 9, 23), DateTo = new(2026, 9, 23) };
+                ReceiptPrinter, Base.Dialogs, PrintLogger, Workspace, waybills: Waybills) { DateFrom = new(2026, 9, 23), DateTo = new(2026, 9, 23) };
         }
 
         public static async Task<CombinedFixture> CreateAsync(IReadOnlyList<MarketplaceOrder>? orders = null,
@@ -386,6 +420,23 @@ internal static partial class MarketplaceViewModelTests
 
         public void MarkOrders() { foreach (var row in Workspace.AllOrderRows) row.IsSelectedForLabels = true; }
         public void Dispose() { Labels.Dispose(); Waybills?.Dispose(); }
+    }
+
+    private sealed class CombinedPrintLogger : IAppLogger
+    {
+        public string LogDirectory => "";
+        public bool FailWrites;
+        public List<(string Operation, string? ReceiptId, string Status, bool IsError)> Entries { get; } = [];
+        public void Info(string operation, string? receiptId = null, int? httpStatus = null, string? printStatus = null) =>
+            Record(operation, receiptId, printStatus, false);
+        public void Error(string operation, Exception exception, string? receiptId = null, int? httpStatus = null, string? printStatus = null) =>
+            Record(operation, receiptId, printStatus, true);
+        private void Record(string operation, string? receiptId, string? printStatus, bool isError)
+        {
+            if (FailWrites) throw new IOException("Synthetic diagnostic disk failure.");
+            if (operation.StartsWith("combined.print.", StringComparison.Ordinal))
+                Entries.Add((operation, receiptId, printStatus ?? "", isError));
+        }
     }
 
     private sealed class CombinedImages : IReceiptImageService

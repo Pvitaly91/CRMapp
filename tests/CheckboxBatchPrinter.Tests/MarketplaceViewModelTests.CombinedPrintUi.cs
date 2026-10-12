@@ -82,15 +82,15 @@ internal static partial class MarketplaceViewModelTests
         }
         finally { labelRepeat.Close(); }
 
-        // Validation renders the prepared documents without opening or enumerating any real printer.
-        var service = new WindowsPrintService();
+        // The pure builder checks every document without opening a real printer. Production
+        // preflight additionally checks these bounded pages against the selected driver.
         var settings = new AppSettings { PrinterName = "synthetic-nonexistent-printer" };
-        service.ValidateReceiptsForPrint([new(firstPng, ReceiptTwo, first.OrderNumber, first.TrackingNumber),
-            new(secondPng, ReceiptOne, second.OrderNumber, second.TrackingNumber)], settings);
+        _ = WindowsPrintService.BuildBatchDocument([new(firstPng, ReceiptTwo, first.OrderNumber, first.TrackingNumber),
+            new(secondPng, ReceiptOne, second.OrderNumber, second.TrackingNumber)], settings, 1000);
         var corruptRejected = false;
         try
         {
-            service.ValidateReceiptsForPrint([new(firstPng, ReceiptTwo), new([1, 2, 3], ReceiptOne)], settings);
+            _ = WindowsPrintService.BuildBatchDocument([new(firstPng, ReceiptTwo), new([1, 2, 3], ReceiptOne)], settings, 1000);
         }
         catch (Exception) { corruptRejected = true; }
         True(corruptRejected, "A corrupt prepared receipt must fail preflight before either printer job starts.");

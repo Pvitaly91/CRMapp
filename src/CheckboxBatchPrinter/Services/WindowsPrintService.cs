@@ -10,7 +10,7 @@ using CheckboxBatchPrinter.Core.Models;
 
 namespace CheckboxBatchPrinter.Services;
 
-public sealed class WindowsPrintService : IPrintService
+public sealed partial class WindowsPrintService : IPrintService
 {
     public IReadOnlyList<string> GetInstalledPrinters()
     {
@@ -26,8 +26,12 @@ public sealed class WindowsPrintService : IPrintService
     public bool PrinterExists(string printerName) =>
         GetInstalledPrinters().Contains(printerName, StringComparer.CurrentCultureIgnoreCase);
 
-    public void ValidateReceiptsForPrint(IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings) =>
-        _ = BuildBatchPage(receipts, settings, out _, out _);
+    public void ValidateReceiptsForPrint(IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings)
+    {
+        using var server = new LocalPrintServer();
+        using var queue = FindQueue(server, settings.PrinterName);
+        _ = PrepareBatchDocument(queue, receipts, settings);
+    }
 
     public Task PrintReceiptAsync(PrintReceiptDocument receipt, AppSettings settings, CancellationToken cancellationToken = default) =>
         Application.Current.Dispatcher.InvokeAsync(() =>
@@ -35,11 +39,9 @@ public sealed class WindowsPrintService : IPrintService
             cancellationToken.ThrowIfCancellationRequested();
             using var server = new LocalPrintServer();
             using var queue = FindQueue(server, settings.PrinterName);
-            var source = DecodeGrayscale(receipt.Png);
-            var page = BuildPage(source, settings, out var pageWidth, out var pageHeight, receipt.OrderNumber, receipt.TrackingText);
-            var ticket = BuildTicket(queue, pageWidth, pageHeight);
-            var dialog = new PrintDialog { PrintQueue = queue, PrintTicket = ticket };
-            dialog.PrintVisual(page, $"Checkbox чек {receipt.ReceiptId}");
+            var document = PrepareBatchDocument(queue, [receipt], settings);
+            cancellationToken.ThrowIfCancellationRequested();
+            WriteReceiptDocument(queue, document, $"Checkbox чек {receipt.ReceiptId}");
         }).Task;
 
     public Task PrintReceiptsAsSingleJobAsync(
@@ -52,10 +54,9 @@ public sealed class WindowsPrintService : IPrintService
             if (receipts.Count == 0) return;
             using var server = new LocalPrintServer();
             using var queue = FindQueue(server, settings.PrinterName);
-            var page = BuildBatchPage(receipts, settings, out var pageWidth, out var pageHeight);
-            var ticket = BuildTicket(queue, pageWidth, pageHeight);
-            new PrintDialog { PrintQueue = queue, PrintTicket = ticket }
-                .PrintVisual(page, $"Checkbox — пачка з {receipts.Count} чеків");
+            var document = PrepareBatchDocument(queue, receipts, settings);
+            cancellationToken.ThrowIfCancellationRequested();
+            WriteReceiptDocument(queue, document, $"Checkbox — пачка з {receipts.Count} чеків");
         }).Task;
 
     public Task PrintTestAsync(AppSettings settings, CancellationToken cancellationToken = default) =>
@@ -238,13 +239,23 @@ public sealed class WindowsPrintService : IPrintService
     private static double OrderHeaderHeight(TextBlock? header) =>
         header is null ? 0 : header.DesiredSize.Height + MillimetersToDip(0.5);
 
-    private static PrintTicket BuildTicket(PrintQueue queue, double widthDip, double heightDip)
+    private static PrintTicket BuildTicket(PrintQueue queue, double widthDip, double heightDip) =>
+        BuildTicket(queue.DefaultPrintTicket, widthDip, heightDip);
+
+    internal static PrintTicket BuildTicket(PrintTicket? defaultTicket, double widthDip, double heightDip)
     {
-        var ticket = queue.DefaultPrintTicket?.Clone() ?? new PrintTicket();
+        var ticket = defaultTicket?.Clone() ?? new PrintTicket();
         ticket.PageMediaSize = new PageMediaSize(widthDip, heightDip);
         ticket.PageOrientation = PageOrientation.Portrait;
         ticket.OutputColor = OutputColor.Grayscale;
         ticket.OutputQuality = OutputQuality.High;
+        // Each confirmed receipt occurs once in the prepared document. A driver default
+        // from another program must not silently duplicate the entire receipt batch.
+        ticket.CopyCount = 1;
+        ticket.PagesPerSheet = 1;
+        ticket.PageOrder = PageOrder.Standard;
+        ticket.Duplexing = Duplexing.OneSided;
+        ticket.PageScalingFactor = 100;
         return ticket;
     }
 
