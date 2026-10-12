@@ -213,7 +213,7 @@ internal static partial class MarketplaceViewModelTests
             var receiptCells = VisualChildren<DataGridCell>(receiptContainer).Where(c => c.IsSelected).ToArray();
             True(receiptCells.Length > 0, "The receipt selection must remain active logically.");
             foreach (var cell in receiptCells)
-                Equal(Color.FromRgb(0xC7, 0xF2, 0xD4), ((SolidColorBrush)cell.Background).Color);
+                Equal(Color.FromRgb(0xBF, 0xDA, 0xFA), ((SolidColorBrush)cell.Background).Color);
             Equal(receipt, main.OrdersReceiptsTab.SelectedReceipt);
             var tabs = (TabControl)window.FindName("ReceiptTabs");
             tabs.SelectedIndex = 0; LayoutContent(window); await DrainDispatcherAsync();
@@ -223,7 +223,7 @@ internal static partial class MarketplaceViewModelTests
             var allReceiptCells = VisualChildren<DataGridCell>(allReceiptContainer).Where(c => c.IsSelected).ToArray();
             True(allReceiptCells.Length > 0, "The All Receipts selection must remain available.");
             foreach (var cell in allReceiptCells)
-                Equal(Color.FromRgb(0xC7, 0xF2, 0xD4), ((SolidColorBrush)cell.Background).Color);
+                Equal(Color.FromRgb(0xBF, 0xDA, 0xFA), ((SolidColorBrush)cell.Background).Color);
             Equal(receipt, main.AllReceiptsTab.SelectedReceipt);
             tabs.SelectedIndex = 1; LayoutContent(window); await DrainDispatcherAsync();
 

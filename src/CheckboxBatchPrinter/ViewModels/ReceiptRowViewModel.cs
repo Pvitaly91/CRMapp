@@ -43,11 +43,13 @@ public sealed class ReceiptRowViewModel : ObservableObject
         set
         {
             if (!SetProperty(ref _orderMatch, value)) return;
-            foreach (var property in new[] { nameof(Marketplace), nameof(OrderNumber), nameof(OrderLinkButtonText), nameof(OrderBuyer), nameof(OrderStatus), nameof(OrderTracking), nameof(LinkStatus), nameof(LinkExplanation) })
+            foreach (var property in new[] { nameof(Marketplace), nameof(LinkedMarketplace), nameof(OrderNumber), nameof(OrderLinkButtonText), nameof(OrderBuyer), nameof(OrderStatus), nameof(OrderTracking), nameof(LinkStatus), nameof(LinkExplanation) })
                 OnPropertyChanged(property);
         }
     }
     public string Marketplace => OrderMatch?.Order?.Key.Marketplace.ToString() ?? "";
+    public string LinkedMarketplace => OrderMatch is { State: ReceiptLinkState.Exact or ReceiptLinkState.Manual or ReceiptLinkState.Suggested, Order: { } order }
+        ? order.Key.Marketplace.ToString() : "";
     public string OrderNumber => OrderMatch?.Order?.Number ?? "";
     public string OrderLinkButtonText => OrderNumber.Length > 0 ? OrderNumber : "Кандидати";
     public string OrderBuyer => OrderMatch?.Order?.Buyer?.Name ?? "";

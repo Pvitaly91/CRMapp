@@ -82,16 +82,31 @@
         <Style x:Key="ReceiptRowStyle" TargetType="DataGridRow">
             <Setter Property="Background" Value="White" />
             <Style.Triggers>
-                <DataTrigger Binding="{Binding RawType}" Value="SELL"><Setter Property="Background" Value="#F2FBF5" /></DataTrigger>
-                <DataTrigger Binding="{Binding RawType}" Value="RETURN"><Setter Property="Background" Value="#FFF0F0" /></DataTrigger>
-                <DataTrigger Binding="{Binding RawType}" Value="SERVICE_IN"><Setter Property="Background" Value="#EEF6FF" /></DataTrigger>
-                <DataTrigger Binding="{Binding RawType}" Value="SERVICE_OUT"><Setter Property="Background" Value="#EEF6FF" /></DataTrigger>
-                <DataTrigger Binding="{Binding PrintStatus}" Value="Done">
-                    <Setter Property="Background" Value="#C7F2D4" />
-                    <Setter Property="Foreground" Value="#075E3A" />
-                    <Setter Property="FontWeight" Value="SemiBold" />
-                    <Setter Property="ToolTip" Value="{Binding PrintError}" />
+                <DataTrigger Binding="{Binding LinkedMarketplace}" Value="Prom">
+                    <Setter Property="Background" Value="#EDF5FF" />
+                    <Setter Property="Foreground" Value="#143E70" />
                 </DataTrigger>
+                <DataTrigger Binding="{Binding LinkedMarketplace}" Value="Rozetka">
+                    <Setter Property="Background" Value="#EFFAF2" />
+                    <Setter Property="Foreground" Value="#175A35" />
+                </DataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding LinkedMarketplace}" Value="Prom" />
+                        <Condition Binding="{Binding PrintStatus}" Value="Done" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Background" Value="#BFDAFA" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
+                </MultiDataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding LinkedMarketplace}" Value="Rozetka" />
+                        <Condition Binding="{Binding PrintStatus}" Value="Done" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Background" Value="#BCE8C9" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
+                </MultiDataTrigger>
+                <DataTrigger Binding="{Binding PrintStatus}" Value="Done"><Setter Property="ToolTip" Value="{Binding PrintError}" /></DataTrigger>
                 <DataTrigger Binding="{Binding PrintStatus}" Value="Error"><Setter Property="ToolTip" Value="{Binding PrintError}" /></DataTrigger>
             </Style.Triggers>
         </Style>
