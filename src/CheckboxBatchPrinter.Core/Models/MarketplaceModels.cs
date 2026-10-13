@@ -176,4 +176,14 @@ public sealed record ReceiptDetails(string Id, IReadOnlyList<OrderItem> Items, s
 {
     public bool? ItemListComplete { get; init; }
     public string AmountComparisonIssue { get; init; } = "";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int AmountValidationVersion { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ReceiptDiscountReconciliation? DiscountReconciliation { get; init; }
+}
+
+public sealed record ReceiptDiscountReconciliation(decimal GrossTotal, decimal DiscountTotal, decimal NetTotal,
+    IReadOnlyList<decimal> ItemDiscounts, decimal ReceiptDiscount)
+{
+    public int Schema { get; init; } = 1;
 }

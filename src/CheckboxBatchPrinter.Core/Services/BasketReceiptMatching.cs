@@ -10,6 +10,7 @@ internal static class BasketReceiptMatching
         decimal? OrderQuantity, decimal? ReceiptQuantity)
     {
         public ProductComparison Products => Check.State;
+        public string DiscountExplanation { get; init; } = "";
         // Count is a secondary hypothesis only for complete, ordinary baskets. Missing or
         // adjusted documents remain competitors, not evidence in favor of another order.
         public bool QuantityDiffers => Issue.Length == 0 && OrderQuantity.HasValue && ReceiptQuantity.HasValue && OrderQuantity != ReceiptQuantity;
@@ -42,9 +43,11 @@ internal static class BasketReceiptMatching
             details.TryGetValue(NormalizeId(receipt.Id), out var detail);
             var products = loading?.Contains(NormalizeId(receipt.Id)) == true ? new(ProductComparison.Loading) : CompareProducts(order, detail);
             var quantitiesLoading = products.State == ProductComparison.Loading;
-            edges.Add(new(receipt, order, products, PaymentReceiptMatching.Compare(order, receipt), AmountIssue(receipt, order, detail),
+            var discount = ReceiptDiscounts.MatchingExplanation(receipt, order, detail, products.State);
+            edges.Add(new(receipt, order, products, PaymentReceiptMatching.Compare(order, receipt), AmountIssue(receipt, order, detail, discount.Length > 0),
                 quantitiesLoading ? null : CountUnits(order.Items, order.ItemListComplete ?? order.ItemsComplete),
-                quantitiesLoading || detail is null ? null : CountUnits(detail.Items, detail.ItemListComplete ?? detail.ItemsComplete)));
+                quantitiesLoading || detail is null ? null : CountUnits(detail.Items, detail.ItemListComplete ?? detail.ItemsComplete))
+                { DiscountExplanation = discount });
         }
         // Finish the product graph first. Payment only splits an ambiguous component whose
         // complete baskets already match; it cannot replace unknown or missing product evidence.
@@ -125,6 +128,7 @@ internal static class BasketReceiptMatching
                 message += $"Кількість товарних одиниць збігається: {units}. Це не доводить тотожність назв товарів. ";
             if (productState == ProductComparison.Match)
                 message += "Повні назви порівняно після очищення спеціальних символів; оригінальні назви не змінено. ";
+            if (canSuggest) message += selected!.DiscountExplanation;
             if (selected?.Payment.State == PaymentComparison.Match) message += selected.Payment.Reason + " ";
             else if (canSuggest && selected?.Payment.State == PaymentComparison.Contradiction && !selected.PaymentTieBreak)
                 message += "Різницю оплати не використано: це додатковий критерій лише для розрізнення однакових повних кошиків. ";
@@ -243,10 +247,13 @@ internal static class BasketReceiptMatching
     internal static bool SameDayBeforeReceipt(DateTimeOffset created, DateTimeOffset receiptDate) =>
         created <= receiptDate && DateRangeBuilder.KyivDate(created) == DateRangeBuilder.KyivDate(receiptDate);
 
-    private static string AmountIssue(ReceiptRecord receipt, MarketplaceOrder order, ReceiptDetails? details)
+    private static string AmountIssue(ReceiptRecord receipt, MarketplaceOrder order, ReceiptDetails? details, bool discountReconciled)
     {
         if (!receipt.TotalKnown || order.Total is null) return "Суму не надано або не розібрано; невідома сума не є нулем. ";
         if (!receipt.DisplayDate.HasValue || !order.CreatedAt.HasValue) return "Невідома дата документа. ";
+        if (discountReconciled) return "";
+        if (details?.DiscountReconciliation is not null)
+            return "Знижка розібрана, але повні товари, кількості або суми до знижки не підтвердили цю пару. ";
         if (receipt.AmountComparisonIssue.Length > 0) return receipt.AmountComparisonIssue;
         if (details?.AmountComparisonIssue.Length > 0) return details.AmountComparisonIssue;
         if (order.AmountComparisonIssue.Length > 0) return order.AmountComparisonIssue;

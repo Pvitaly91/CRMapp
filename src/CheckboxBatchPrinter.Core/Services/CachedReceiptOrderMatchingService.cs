@@ -8,7 +8,7 @@ namespace CheckboxBatchPrinter.Core.Services;
 /// <summary>Keep assigned pairs and search only documents without a link. Manual/fiscal decisions have priority.</summary>
 public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider = null)
 {
-    public const string AlgorithmVersion = "same-kyiv-day-active-unlinked-rozetka-canceled-v13";
+    public const string AlgorithmVersion = "same-kyiv-day-active-unlinked-verified-discounts-v14";
     private const string PreviousAlgorithmVersion = "same-kyiv-day-clean-names-payment-v8";
     public const int MaximumDetails = 5000;
     public const int MaximumSnapshots = 8;
@@ -22,7 +22,8 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
         if (!BindAccount(cache, accountContext)) return false;
         Prune(cache, _clock.GetUtcNow());
         if (!cache.Details.TryGetValue(Normalize(receipt.Id), out var entry) ||
-            entry.ReceiptFingerprint != ReceiptFingerprint(receipt)) return false;
+            entry.ReceiptFingerprint != ReceiptFingerprint(receipt) ||
+            ReceiptDetailsService.NeedsDiscountRevalidation(receipt, entry.Details)) return false;
         details = entry.Details;
         return true;
     }

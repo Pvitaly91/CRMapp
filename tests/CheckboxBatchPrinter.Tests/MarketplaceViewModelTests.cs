@@ -59,6 +59,7 @@ internal static partial class MarketplaceViewModelTests
         ("STA receipt amount search uses exact cents and accepts localized display formats", () => StaAsync(ReceiptAmountSearchAsync)),
         ("STA receipt UUID search is case-insensitive and preserves existing document searches", () => StaAsync(ReceiptIdSearchAsync)),
         ("STA amount search respects dates types unknown totals and hidden print selections", () => StaAsync(ReceiptAmountSearchPrintAsync)),
+        ("STA legacy discounted details refresh once and the new automatic pair survives restart", () => StaAsync(DiscountCacheRefreshAsync)),
         ("STA table receipt number, date and order sorting determine backend order", () => StaAsync(SortedPrintAsync)),
         ("STA marketplace sync inside confirmation cannot change immutable batch", () => StaAsync(ConfirmationSyncAsync)),
         ("STA unlinked receipts print and confirmation count matches backend", () => StaAsync(UnlinkedPrintAsync)),

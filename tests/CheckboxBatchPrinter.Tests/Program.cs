@@ -88,6 +88,7 @@ internal static class Program
         Tests.AddRange(FiscalLinkTests.All);
         Tests.AddRange(BasketMatchingTests.All);
         Tests.AddRange(AmountMatchingTests.All);
+        Tests.AddRange(DiscountMatchingTests.All);
         Tests.AddRange(QuantityMatchingTests.All);
         Tests.AddRange(NameMatchingTests.All);
         Tests.AddRange(FullNameMatchingTests.All);

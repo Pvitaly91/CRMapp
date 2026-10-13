@@ -5,6 +5,13 @@ namespace CheckboxBatchPrinter.Core.Services;
 
 public sealed class ReceiptDetailsService(CheckboxApiClient api, ISettingsService settings) : IReceiptDetailsService
 {
+    internal const string PositionDiscountIssue = "Знижка або повернення в позиціях: потрібна перевірка структури документа.";
+    internal const string ReceiptDiscountIssue = "Знижка або округлення в чеку: склад загальної суми потребує перевірки.";
+    internal const string PositionTotalIssue = "Сума позицій чека відрізняється від загальної: потрібна перевірка структури оплати.";
+    internal static bool IsDiscountIssue(string issue) => issue is PositionDiscountIssue or ReceiptDiscountIssue;
+    internal static bool NeedsDiscountRevalidation(ReceiptRecord receipt, ReceiptDetails details) =>
+        details.AmountValidationVersion < ReceiptDiscounts.ValidationVersion &&
+        (IsDiscountIssue(receipt.AmountComparisonIssue) || IsDiscountIssue(details.AmountComparisonIssue) || details.AmountComparisonIssue == PositionTotalIssue);
     public async Task<ReceiptDetails> GetAsync(string receiptId, CancellationToken cancellationToken = default)
     {
         if (!Guid.TryParse(receiptId, out var id)) throw new ArgumentException("Некоректний UUID чека.");
@@ -43,21 +50,24 @@ public sealed class ReceiptDetailsService(CheckboxApiClient api, ISettingsServic
             items.Sum(item => item.Total ?? 0) != totalMinor / 100m) complete = false;
         if (structural && Number(root, "total_sum") is { } total && items.All(i => i.Total.HasValue) &&
             items.Sum(i => i.Total!.Value) != total / 100m)
-            issue = "Сума позицій чека відрізняється від загальної: потрібна перевірка структури оплати.";
+            issue = PositionTotalIssue;
+        ReceiptDiscounts.TryRead(root, out var discount);
+        if (structural && discount is not null) { complete = true; issue = ""; }
         return new(id, items, Text(root, "related_receipt_id"), Text(root, "order_id"),
             root.TryGetProperty("context", out var context) && context.ValueKind == JsonValueKind.Object && context.EnumerateObject().Any(), complete)
-            { ItemListComplete = structural, AmountComparisonIssue = issue };
+            { ItemListComplete = structural, AmountComparisonIssue = issue,
+                AmountValidationVersion = ReceiptDiscounts.ValidationVersion, DiscountReconciliation = discount };
     }
 
     internal static string ReadAmountIssue(JsonElement root)
     {
         if (HasValues(root, "pre_payment_relation_id")) return "Передоплата / часткова оплата: потрібен точний або ручний зв’язок.";
         if (HasValues(root, "discounts") || Number(root, "round_sum") is not (null or 0))
-            return "Знижка або округлення в чеку: склад загальної суми потребує перевірки.";
+            return ReceiptDiscountIssue;
         if (root.TryGetProperty("goods", out var goods) && goods.ValueKind == JsonValueKind.Array &&
             goods.EnumerateArray().Any(g => g.ValueKind == JsonValueKind.Object && (HasValues(g, "discounts") ||
                 g.TryGetProperty("is_return", out var returned) && returned.ValueKind == JsonValueKind.True)))
-            return "Знижка або повернення в позиціях: потрібна перевірка структури документа.";
+            return PositionDiscountIssue;
         return "";
     }
 
