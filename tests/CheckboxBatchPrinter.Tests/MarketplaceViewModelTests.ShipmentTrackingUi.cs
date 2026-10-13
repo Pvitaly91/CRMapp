@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using CheckboxBatchPrinter.Controls;
 using CheckboxBatchPrinter.Core.Models;
 using CheckboxBatchPrinter.Core.Services;
@@ -15,6 +16,7 @@ internal static partial class MarketplaceViewModelTests
 {
     private static async Task ShipmentTrackingUiAsync()
     {
+        await DispatchedOrderColorsAsync();
         _xamlCheckpoint = "shipment tracking projection and selectable dashboard status";
         var first = new OrderShipment("nova_poshta", "20400000000002")
             { ShipmentId = "10000000-0000-0000-0000-000000000002" };
@@ -132,5 +134,85 @@ internal static partial class MarketplaceViewModelTests
             PresentationTraceSources.DataBindingSource.Listeners.Remove(failures);
             PresentationTraceSources.DataBindingSource.Switch.Level = previousTraceLevel;
         }
+    }
+    private static async Task DispatchedOrderColorsAsync()
+    {
+        _xamlCheckpoint = "carrier handover colors and live tracking notifications";
+        foreach (var status in new[] { "Прийнято перевізником", "В дорозі до РЦ", "Прийнято на доставку", "Посилка отримана на РЦ", "Готово до видачі", "Видано" })
+            True(ShipmentTrackingProgress.IsDispatched(ShippingCarrier.RozetkaDelivery, status), status);
+        foreach (var status in new[] { "Відправлення прямує до м. Київ", "Відправлення у м. Київ", "Передано кур’єру", "Відправлення отримано", "  В\u00a0дорозі  " })
+            True(ShipmentTrackingProgress.IsDispatched(ShippingCarrier.NovaPoshta, status), status);
+        foreach (var carrier in new[] { ShippingCarrier.NovaPoshta, ShippingCarrier.RozetkaDelivery })
+            foreach (var status in new[] { "", "Статус недоступний", "Створено рахунок", "Заплановано", "Прийнято", "Готове до транспортування",
+                "Підготовка до транспортування", "Не прийнято за реєстром", "Не передано перевізнику", "Повернення передано кур’єру",
+                "Отримано запит на повернення (Відмова відправника)", "Відправник самостійно створив цю накладну, але ще не надав до відправки",
+                "Очікується, що відправлення буде в дорозі", "На проміжному РЦ" })
+                True(!ShipmentTrackingProgress.IsDispatched(carrier, status), status);
+        True(!ShipmentTrackingProgress.IsDispatched(ShippingCarrier.Unknown, "В дорозі"));
+
+        var fixture = new Fixture();
+        fixture.Settings.Market.Connections.Add(new()
+            { Id = "synthetic-dispatch-rz", Marketplace = MarketplaceKind.Rozetka, Enabled = true, Name = "Synthetic Rozetka" });
+        var models = Enumerable.Range(0, 6).Select(index => Order() with
+        {
+            Key = new(index < 3 ? MarketplaceKind.Prom : MarketplaceKind.Rozetka,
+                index < 3 ? "prom-test" : "synthetic-dispatch-rz", "dispatch-" + index),
+            Number = index.ToString(), CreatedAt = Order().CreatedAt!.Value.AddMinutes(-index),
+            Shipments = [new(index < 3 ? "nova_poshta" : "rozetka_delivery", index < 3 ? "2040000000000" + index : "RMP-DISPATCH-" + index)]
+        }).ToArray();
+        fixture.Source.Orders = models[..3]; fixture.Rozetka.Orders = models[3..];
+        var (main, workspace) = fixture.Create();
+        await main.RefreshAsync(); await OpenOrdersAsync(main, workspace);
+        main.CoordinatorManaged = true; workspace.ShowCanceledOrders = true;
+        var window = new MainWindow { DataContext = main };
+        try
+        {
+            LayoutContent(window); await DrainDispatcherAsync();
+            var grid = (DataGrid)window.FindName("MarketplaceOrdersGrid");
+            var rows = models.Select(model => workspace.AllOrderRows.Single(row => row.Key == model.Key)).ToArray();
+            for (var index = 0; index < rows.Length; index++)
+            {
+                var row = rows[index]; var shipment = row.Model.Shipments.Single();
+                row.IsSelectedForLabels = true;
+                if (index % 3 != 0)
+                    row.ApplyLabelHistory([new("synthetic-dispatch", "synthetic-job", "synthetic-printer", DateTimeOffset.UtcNow,
+                        LabelSubmissionState.Submitted, [new(ShippingCarrierNames.FromDocumentedDeliveryField(shipment.Carrier),
+                            row.Key.ConnectionId, shipment.TrackingNumber, "synthetic-doc", 1, "synthetic-hash") { Order = row.Key }], 7)]);
+                row.UpdateTrackingStatuses([new(shipment, index % 3 == 2 ? "В дорозі" : "Створено рахунок")]);
+            }
+            async Task AssertColor(MarketplaceOrderRowViewModel row, string color)
+            {
+                grid.ScrollIntoView(row); await DrainDispatcherAsync(); LayoutContent(window);
+                var realized = (DataGridRow)grid.ItemContainerGenerator.ContainerFromItem(row);
+                Equal((Color)ColorConverter.ConvertFromString(color), ((SolidColorBrush)realized.Background).Color);
+            }
+            string[] palette = ["#EDF5FF", "#BFDAFA", "#8CB9EB", "#EFFAF2", "#BCE8C9", "#85CDA0"];
+            for (var index = 0; index < rows.Length; index++) await AssertColor(rows[index], palette[index]);
+            RenderSyntheticContent(window, "shipment-dispatch-colors.png");
+            var sent = rows[2]; var sentShipment = sent.Model.Shipments.Single();
+            var printText = sent.LabelPrintStatus;
+            sent.UpdateTrackingStatuses([new(sentShipment, "Відправлення прямує до м. Київ", IsStale: true)]);
+            await AssertColor(sent, "#8CB9EB");
+            True(sent.HasDispatchedShipments && sent.HasPrintedLabel && sent.IsSelectedForLabels);
+            Equal(printText, sent.LabelPrintStatus);
+            sent.UpdateTrackingStatuses([new(sentShipment, "Відправник самостійно створив цю накладну, але ще не надав до відправки")]);
+            await AssertColor(sent, "#BFDAFA");
+            sent.UpdateTrackingStatuses([new(sentShipment, "Прийнято перевізником")]);
+            await AssertColor(sent, "#8CB9EB");
+            var second = new OrderShipment("rozetka_delivery", "RMP-SECOND-DISPATCH");
+            sent.Update(sent.Model with { Shipments = [sentShipment, second] }, [], []);
+            True(!sent.HasDispatchedShipments, "An untracked second parcel cannot inherit the first parcel's handover.");
+            sent.UpdateTrackingStatuses([new(sentShipment, "В дорозі"), new(second, "Прийнято перевізником")]);
+            True(sent.HasDispatchedShipments);
+            sent.Update(sent.Model with { Shipments = [sentShipment with { TrackingNumber = "replacement-dispatch" }] }, [], []);
+            True(!sent.HasDispatchedShipments, "Replacing a TTN must clear the carrier-progress color.");
+            var rzSent = rows[5]; var rzShipment = rzSent.Model.Shipments.Single();
+            rzSent.Update(rzSent.Model with { Status = "Скасовано", SourceStatusGroup = 3 }, [], []);
+            await AssertColor(rzSent, "#FDE8E7");
+            rzSent.Update(rzSent.Model with { Key = rzSent.Key with { ConnectionId = "other-synthetic-dispatch" }, Status = "Отримано", SourceStatusGroup = 1 }, [], []);
+            True(!rzSent.HasDispatchedShipments && rzSent.TrackingStatusFor(rzShipment) is null);
+            Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves); Equal(0, fixture.Links.Saves);
+        }
+        finally { main.CancelPendingOperations(); window.Close(); await DrainDispatcherAsync(); }
     }
 }

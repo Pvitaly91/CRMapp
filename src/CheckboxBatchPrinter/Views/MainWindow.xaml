@@ -170,6 +170,22 @@
                     </MultiDataTrigger.Conditions>
                     <Setter Property="Background" Value="#BCE8C9" />
                 </MultiDataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding Marketplace}" Value="Prom" />
+                        <Condition Binding="{Binding HasDispatchedShipments}" Value="True" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Background" Value="#8CB9EB" />
+                    <Setter Property="ToolTip" Value="{Binding DispatchToolTip}" />
+                </MultiDataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding Marketplace}" Value="Rozetka" />
+                        <Condition Binding="{Binding HasDispatchedShipments}" Value="True" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="Background" Value="#85CDA0" />
+                    <Setter Property="ToolTip" Value="{Binding DispatchToolTip}" />
+                </MultiDataTrigger>
                 <DataTrigger Binding="{Binding Model.IsCanceled}" Value="True">
                     <Setter Property="Background" Value="#FDE8E7" />
                     <Setter Property="Foreground" Value="#8A2020" />

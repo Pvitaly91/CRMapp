@@ -62,6 +62,17 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
     }
     public bool HasPrintedLabel { get => _hasPrintedLabel; private set => SetProperty(ref _hasPrintedLabel, value); }
     public bool HasLabelSubmission { get => _hasLabelSubmission; private set => SetProperty(ref _hasLabelSubmission, value); }
+    public bool HasDispatchedShipments
+    {
+        get
+        {
+            var links = ShipmentLinks;
+            return links.Count > 0 && links.All(link => TrackingStatusFor(link.Shipment) is { } status &&
+                ShipmentTrackingProgress.IsDispatched(ShippingCarrierNames.FromDocumentedDeliveryField(link.Shipment.Carrier), status.Status));
+        }
+    }
+    public string DispatchToolTip => "Передавання перевізнику підтверджене статусом доставки.\n" +
+        string.Join("\n", ShipmentLinks.Select(link => $"{link.TrackingNumber}: {link.TrackingStatus}"));
     public string DeliveryDisplay => !Model.Shipments.Any(s => !string.IsNullOrWhiteSpace(s.TrackingNumber)) ? "Накладну не створено" :
         string.Join(", ", Model.Shipments.Select(s => ShippingCarrierNames.Display(ShippingCarrierNames.FromDocumentedDeliveryField(s.Carrier))).Distinct());
     public string LinkStatus { get; private set; } = "Без прив’язаного чека";
@@ -85,6 +96,8 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
         _trackingStatuses.Clear();
         foreach (var pair in replacement) _trackingStatuses.Add(pair.Key, pair.Value);
         OnPropertyChanged(nameof(ShipmentLinks));
+        OnPropertyChanged(nameof(HasDispatchedShipments));
+        OnPropertyChanged(nameof(DispatchToolTip));
     }
 
     internal OrderShipmentTrackingStatus? TrackingStatusFor(OrderShipment shipment) =>
@@ -192,7 +205,7 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
         LinkedReceiptsDisplay = string.Join(", ", linked.Select(r => $"№{r.Serial} ({r.Type})")) +
             (outsideRange > 0 ? $"; збережено поза списком: {outsideRange}" : "");
         foreach (var property in new[] { nameof(Model), nameof(Marketplace), nameof(StoreName), nameof(Number), nameof(CreatedAt),
-            nameof(TotalDisplay), nameof(BuyerDisplay), nameof(TrackingDisplay), nameof(ShipmentLinks), nameof(DeliveryDisplay), nameof(Status), nameof(LinkStatus),
+            nameof(TotalDisplay), nameof(BuyerDisplay), nameof(TrackingDisplay), nameof(ShipmentLinks), nameof(HasDispatchedShipments), nameof(DispatchToolTip), nameof(DeliveryDisplay), nameof(Status), nameof(LinkStatus),
             nameof(LinkedReceiptsDisplay), nameof(LinkedReceipts), nameof(LinkExplanation), nameof(HasConfirmedLink), nameof(HasSuggestedLink) }) OnPropertyChanged(property);
     }
 }
