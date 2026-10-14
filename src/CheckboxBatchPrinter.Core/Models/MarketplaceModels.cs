@@ -114,7 +114,14 @@ public sealed record MarketplaceOrder
 }
 
 public sealed record MarketplaceRange(DateTimeOffset From, DateTimeOffset ToExclusive);
-public sealed record OrdersFetchResult(IReadOnlyList<MarketplaceOrder> Orders, bool Complete, string Message = "");
+public sealed record OrdersFetchResult(IReadOnlyList<MarketplaceOrder> Orders, bool Complete, string Message = "")
+{
+    public HttpStatusCode? FailureStatus { get; init; }
+    public TimeSpan? RetryAfter { get; init; }
+    // A failed list must not fan out into hundreds of cached-order requests.
+    // Keep successfully read pages available while the connection is paused.
+    public bool SuppressDetailRefresh { get; init; }
+}
 public sealed record ConnectionSyncState(string ConnectionId, MarketplaceRange Range, bool Complete,
     DateTimeOffset? LastSuccessUtc, string Message, DateTimeOffset AttemptedAtUtc, string? DetailCursor = null)
 {

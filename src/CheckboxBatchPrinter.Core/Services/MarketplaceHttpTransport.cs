@@ -10,6 +10,7 @@ public sealed class MarketplaceApiException(string message, HttpStatusCode? stat
 {
     public HttpStatusCode? StatusCode { get; } = statusCode;
     public TimeSpan? RetryAfter { get; } = retryAfter;
+    public bool BlocksAccountRequests { get; init; }
 }
 
 // No response bodies, credentials, customer fields or request URLs enter application logs.
@@ -19,7 +20,10 @@ public sealed class MarketplaceHttpTransport(HttpClient client,
     public async Task<string> SendAsync(Func<HttpRequestMessage> requestFactory, MarketplaceKind marketplace,
         CancellationToken cancellationToken = default)
     {
-        for (var attempt = 0; attempt < 3; attempt++)
+        // Prom's client installs a shared cooldown after the first failed response.
+        // Retrying here would bypass that guard and multiply account-wide failures.
+        var attempts = marketplace == MarketplaceKind.Prom ? 1 : 3;
+        for (var attempt = 0; attempt < attempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             using var request = requestFactory();
@@ -28,13 +32,13 @@ public sealed class MarketplaceHttpTransport(HttpClient client,
             try { response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false); }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                if (attempt == 2) throw new MarketplaceApiException($"{marketplace}: перевищено час очікування API.");
+                if (attempt == attempts - 1) throw new MarketplaceApiException($"{marketplace}: перевищено час очікування API.");
                 await WaitAsync(TimeSpan.FromSeconds(attempt + 1), cancellationToken).ConfigureAwait(false);
                 continue;
             }
             catch (HttpRequestException)
             {
-                if (attempt == 2) throw new MarketplaceApiException($"{marketplace}: немає з’єднання з API.");
+                if (attempt == attempts - 1) throw new MarketplaceApiException($"{marketplace}: немає з’єднання з API.");
                 await WaitAsync(TimeSpan.FromSeconds(attempt + 1), cancellationToken).ConfigureAwait(false);
                 continue;
             }
@@ -56,7 +60,7 @@ public sealed class MarketplaceHttpTransport(HttpClient client,
                     }
                     return Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
                 }
-                if (attempt < 2 && (response.StatusCode is HttpStatusCode.RequestTimeout or (HttpStatusCode)429 || (int)response.StatusCode >= 500))
+                if (attempt < attempts - 1 && (response.StatusCode is HttpStatusCode.RequestTimeout or (HttpStatusCode)429 || (int)response.StatusCode >= 500))
                 {
                     // Never shorten the server's Retry-After; cancellation remains responsive.
                     var retry = response.Headers.RetryAfter;

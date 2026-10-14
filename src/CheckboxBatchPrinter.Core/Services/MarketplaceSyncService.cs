@@ -80,43 +80,57 @@ public sealed class MarketplaceSyncService(
                         ?? throw new InvalidOperationException("Введіть облікові дані у Налаштуваннях → Маркетплейси.");
                     var client = _clients[connection.Marketplace];
                     var fetched = await client.FetchAsync(connection, credential, range, ct).ConfigureAwait(false);
-                    complete = fetched.Complete;
+                    complete = fetched.Complete && !fetched.SuppressDetailRefresh;
                     message = fetched.Message.Length > 0 ? fetched.Message : message;
+                    if (fetched.FailureStatus is not null || fetched.RetryAfter is not null)
+                        apiFailure = new MarketplaceApiException(message, fetched.FailureStatus, fetched.RetryAfter);
                     foreach (var order in fetched.Orders)
                         if (order.Key.ConnectionId == connection.Id && order.Key.Marketplace == connection.Marketplace)
                             RememberAliases(order);
 
-                    // Durable links must stay current even outside the requested range. Other cached
-                    // orders only affect this range's completeness when their date is in it or unknown;
-                    // dated history outside the range stays cached without an unrelated detail refresh.
-                    var fetchedKeys = fetched.Orders.Select(o => o.Key).ToHashSet();
-                    var relevantCachedKeys = previous.Orders.Where(o => o.CreatedAt is not { } created ||
-                        created >= range.From && created < range.ToExclusive).Select(o => o.Key);
-                    var refresh = knownKeys.Concat(relevantCachedKeys).Select(identity.NormalizeKey).Distinct()
-                        .Where(k => k.ConnectionId == connection.Id && k.Marketplace == connection.Marketplace && !fetchedKeys.Contains(k))
-                        .OrderBy(k => k.OrderId, StringComparer.Ordinal).ToArray();
-                    if (refresh.Length > 500) { complete = false; message = "Частково: понад 500 старих замовлень потребують перевірки."; }
-                    var start = detailCursor is null ? 0 : Array.FindIndex(refresh, k => string.CompareOrdinal(k.OrderId, detailCursor) > 0);
-                    if (start < 0) start = 0;
-                    var batch = refresh.Skip(start).Concat(refresh.Take(start)).Take(500).ToArray();
-                    foreach (var key in batch)
+                    if (!fetched.SuppressDetailRefresh)
                     {
-                        ct.ThrowIfCancellationRequested();
-                        try
+                        // Durable links must stay current even outside the requested range. Other cached
+                        // orders only affect this range's completeness when their date is in it or unknown;
+                        // dated history outside the range stays cached without an unrelated detail refresh.
+                        var fetchedKeys = fetched.Orders.Select(o => o.Key).ToHashSet();
+                        var relevantCachedKeys = previous.Orders.Where(o => o.CreatedAt is not { } created ||
+                            created >= range.From && created < range.ToExclusive).Select(o => o.Key);
+                        var refresh = knownKeys.Concat(relevantCachedKeys).Select(identity.NormalizeKey).Distinct()
+                            .Where(k => k.ConnectionId == connection.Id && k.Marketplace == connection.Marketplace && !fetchedKeys.Contains(k))
+                            .OrderBy(k => k.OrderId, StringComparer.Ordinal).ToArray();
+                        if (refresh.Length > 500) { complete = false; message = "Частково: понад 500 старих замовлень потребують перевірки."; }
+                        var start = detailCursor is null ? 0 : Array.FindIndex(refresh, k => string.CompareOrdinal(k.OrderId, detailCursor) > 0);
+                        if (start < 0) start = 0;
+                        var batch = refresh.Skip(start).Concat(refresh.Take(start)).Take(500).ToArray();
+                        string? lastAttemptedDetail = null;
+                        foreach (var key in batch)
                         {
-                            var order = await client.GetOrderAsync(connection, credential, key.OrderId, ct).ConfigureAwait(false);
-                            if (order is not null && order.Key == key)
-                                RememberAliases(order);
-                            else { complete = false; message = "Частково: одне з раніше пов’язаних замовлень недоступне."; }
+                            ct.ThrowIfCancellationRequested();
+                            lastAttemptedDetail = key.OrderId;
+                            try
+                            {
+                                var order = await client.GetOrderAsync(connection, credential, key.OrderId, ct).ConfigureAwait(false);
+                                if (order is not null && order.Key == key)
+                                    RememberAliases(order);
+                                else { complete = false; message = "Частково: одне з раніше пов’язаних замовлень недоступне."; }
+                            }
+                            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                            catch (Exception ex)
+                            {
+                                apiFailure = MoreRestrictive(apiFailure, ex as MarketplaceApiException);
+                                complete = false; message = "Частково: не всі старі замовлення вдалося оновити.";
+                                if (connection.Marketplace == MarketplaceKind.Prom &&
+                                    ex is MarketplaceApiException { BlocksAccountRequests: true } blocked)
+                                {
+                                    apiFailure = blocked;
+                                    message = blocked.Message;
+                                    break;
+                                }
+                            }
                         }
-                        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-                        catch (Exception ex)
-                        {
-                            apiFailure = MoreRestrictive(apiFailure, ex as MarketplaceApiException);
-                            complete = false; message = "Частково: не всі старі замовлення вдалося оновити.";
-                        }
+                        if (fetched.Complete && lastAttemptedDetail is not null) detailCursor = lastAttemptedDetail;
                     }
-                    if (fetched.Complete && batch.Length > 0) detailCursor = batch[^1].OrderId;
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)

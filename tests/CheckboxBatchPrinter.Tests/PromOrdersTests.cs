@@ -25,7 +25,20 @@ internal static partial class PromOrdersTests
         ("Prom old encrypted cache restores raw totals without rewriting or changing freshness", CachedMoneyAsync),
         ("Prom preserves partial data on repeated pages, HTTP errors and page limits", IncompleteAsync),
         ("Prom cancellation interrupts paging and is not reported as an empty success", CancellationAsync),
-        ("Prom rejects invalid response envelopes and order identifiers", InvalidContractAsync)
+        ("Prom rejects invalid response envelopes and order identifiers", InvalidContractAsync),
+        ("Prom account HTTP network and timeout failures pause all reads without immediate retries", PromAccountErrorPauseAsync),
+        ("Prom error pauses follow the token across aliases and allow independent or rotated tokens", PromTokenPauseIsolationAsync),
+        ("Prom respects long Retry-After delta and HTTP date across all read entry points", PromLongRetryAfterAsync),
+        ("Prom unavailable or malformed order details pause only that order and recover", PromOrderFailureIsolationAsync),
+        ("Prom malformed or repeating lists retain partial results and suppress repeated refresh failures", PromListFailureKeepsPartialDataAsync),
+        ("Prom server error on a later page retains fetched data and pauses account reads", PromLaterPageAccountFailureAsync),
+        ("Prom caller cancellation does not poison account or order cooldowns", PromCancellationDoesNotPauseAsync),
+        ("Prom concurrent detail reads stop after the first account failure", PromConcurrentFailureBurstAsync),
+        ("Prom missing-order flood cannot recycle paused failures after bounded-cache overflow", PromFailureCacheFloodAsync),
+        ("Prom cancellation of a queued caller preserves the in-flight token gate", PromQueuedCancellationAsync),
+        ("Prom a stalled account does not block another token", PromStalledAccountIsolationAsync),
+        ("Prom bounded account cache retains live cooldowns and recovers capacity after expiry", PromAccountCacheFloodAsync),
+        ("Prom account error promotion preserves a longer order-specific Retry-After", PromSharedPauseKeepsLongOrderDeadlineAsync)
     ];
 
     private static MarketplaceConnection Connection => new()

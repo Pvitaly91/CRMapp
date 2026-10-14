@@ -12,8 +12,10 @@ public sealed class PromOrdersClient : IMarketplaceOrdersClient
     private readonly MarketplaceHttpTransport _transport;
     private readonly int _pageSize;
     private readonly int _maxPages;
+    private readonly PromRequestPolicy _requests;
 
-    public PromOrdersClient(MarketplaceHttpTransport transport, int pageSize = 100, int maxPages = 1000)
+    public PromOrdersClient(MarketplaceHttpTransport transport, int pageSize = 100, int maxPages = 1000,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(transport);
         if (pageSize < 2) throw new ArgumentOutOfRangeException(nameof(pageSize));
@@ -21,6 +23,7 @@ public sealed class PromOrdersClient : IMarketplaceOrdersClient
         _transport = transport;
         _pageSize = pageSize;
         _maxPages = maxPages;
+        _requests = new PromRequestPolicy(timeProvider ?? TimeProvider.System);
     }
 
     public MarketplaceKind Marketplace => MarketplaceKind.Prom;
@@ -29,9 +32,13 @@ public sealed class PromOrdersClient : IMarketplaceOrdersClient
         CancellationToken cancellationToken = default)
     {
         ValidateConnection(connection, credentials);
-        var json = await SendAsync("orders/list?limit=1&sort_dir=desc", credentials, cancellationToken);
-        using var document = JsonDocument.Parse(json);
-        _ = ReadOrders(document.RootElement);
+        await _requests.ExecuteAsync(credentials.Token, "list", async () =>
+        {
+            var json = await SendAsync("orders/list?limit=1&sort_dir=desc", credentials, cancellationToken);
+            using var document = JsonDocument.Parse(json);
+            _ = ReadOrders(document.RootElement);
+            return true;
+        }, cancellationToken);
     }
 
     public async Task<OrdersFetchResult> FetchAsync(MarketplaceConnection connection, MarketplaceCredentials credentials,
@@ -55,49 +62,57 @@ public sealed class PromOrdersClient : IMarketplaceOrdersClient
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var path = query + (cursor.HasValue ? "&last_id=" + cursor.Value.ToString(CultureInfo.InvariantCulture) : "");
-                var json = await SendAsync(path, credentials, cancellationToken);
-                using var document = JsonDocument.Parse(json);
-                var values = ReadOrders(document.RootElement);
-                if (values.GetArrayLength() == 0) return Completed();
-
-                var minimumId = long.MaxValue;
-                var addedIds = 0;
-                var onlyCursorBoundary = cursor.HasValue;
-                foreach (var value in values.EnumerateArray())
+                var completed = await _requests.ExecuteAsync(credentials.Token, "list", async () =>
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var orderId = ReadId(value);
-                    if (cursor.HasValue && orderId > cursor.Value)
-                        return Incomplete("Prom повернув сторінку за межами запитаного курсора. Завантаження неповне.");
-                    minimumId = Math.Min(minimumId, orderId);
-                    onlyCursorBoundary &= orderId == cursor;
-                    if (!seenIds.Add(orderId)) continue;
-                    addedIds++;
-                    var order = ParseOrder(value, connection);
-                    if (!order.CreatedAt.HasValue)
+                    var json = await SendAsync(path, credentials, cancellationToken);
+                    using var document = JsonDocument.Parse(json);
+                    var values = ReadOrders(document.RootElement);
+                    if (values.GetArrayLength() == 0) return true;
+
+                    var minimumId = long.MaxValue;
+                    var addedIds = 0;
+                    var onlyCursorBoundary = cursor.HasValue;
+                    foreach (var value in values.EnumerateArray())
                     {
-                        malformedDates = true;
-                        orders[order.Key.OrderId] = order;
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var orderId = ReadId(value);
+                        if (cursor.HasValue && orderId > cursor.Value)
+                            throw new InvalidDataException("Prom повернув сторінку за межами запитаного курсора.");
+                        minimumId = Math.Min(minimumId, orderId);
+                        onlyCursorBoundary &= orderId == cursor;
+                        if (!seenIds.Add(orderId)) continue;
+                        addedIds++;
+                        var order = ParseOrder(value, connection);
+                        if (!order.CreatedAt.HasValue)
+                        {
+                            malformedDates = true;
+                            orders[order.Key.OrderId] = order;
+                        }
+                        else if (order.CreatedAt >= range.From && order.CreatedAt < range.ToExclusive)
+                            orders[order.Key.OrderId] = order;
                     }
-                    else if (order.CreatedAt >= range.From && order.CreatedAt < range.ToExclusive)
-                        orders[order.Key.OrderId] = order;
-                }
 
-                // The published last_id wording permits an inclusive boundary. Keep the overlap
-                // and deduplicate, so an exclusive implementation cannot make us skip an ID.
-                if (addedIds == 0)
-                {
-                    if (onlyCursorBoundary && values.GetArrayLength() == 1) return Completed();
-                    return Incomplete("Prom повторює сторінку замовлень. Завантаження неповне.");
-                }
-                if (cursor.HasValue && minimumId >= cursor.Value)
-                    return Incomplete("Prom не просуває курсор замовлень. Завантаження неповне.");
-                cursor = minimumId;
+                    // Inclusive last_id boundaries are valid, but repeated pages are not.
+                    if (addedIds == 0)
+                    {
+                        if (onlyCursorBoundary && values.GetArrayLength() == 1) return true;
+                        throw new InvalidDataException("Prom повторює сторінку замовлень.");
+                    }
+                    if (cursor.HasValue && minimumId >= cursor.Value)
+                        throw new InvalidDataException("Prom не просуває курсор замовлень.");
+                    cursor = minimumId;
+                    return false;
+                }, cancellationToken);
+                if (completed) return Completed();
             }
             return Incomplete("Досягнуто обмеження сторінок Prom. Звузьте діапазон дат; завантаження неповне.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (MarketplaceApiException exception) { return Incomplete(exception.Message); }
+        catch (MarketplaceApiException exception)
+        {
+            return Incomplete(exception.Message) with
+                { FailureStatus = exception.StatusCode, RetryAfter = exception.RetryAfter };
+        }
         catch (OperationCanceledException) { return Incomplete("Prom: перевищено час очікування. Завантаження неповне."); }
         catch (HttpRequestException) { return Incomplete("Prom: не вдалося отримати всі замовлення через помилку мережі."); }
         catch (JsonException) { return Incomplete("Prom повернув некоректну відповідь. Завантаження неповне."); }
@@ -107,7 +122,8 @@ public sealed class PromOrdersClient : IMarketplaceOrdersClient
         OrdersFetchResult Completed() => malformedDates
             ? Incomplete("Prom: частина замовлень має невідому дату; повноту діапазону не підтверджено.")
             : new OrdersFetchResult(orders.Values.ToArray(), true);
-        OrdersFetchResult Incomplete(string message) => new(orders.Values.ToArray(), false, message);
+        OrdersFetchResult Incomplete(string message) => new(orders.Values.ToArray(), false, message)
+            { SuppressDetailRefresh = true };
     }
 
     public async Task<MarketplaceOrder?> GetOrderAsync(MarketplaceConnection connection, MarketplaceCredentials credentials,
@@ -116,12 +132,16 @@ public sealed class PromOrdersClient : IMarketplaceOrdersClient
         ValidateConnection(connection, credentials);
         if (!long.TryParse(orderId, NumberStyles.None, CultureInfo.InvariantCulture, out var id) || id <= 0)
             throw new ArgumentException("Prom: некоректний ідентифікатор замовлення.", nameof(orderId));
-        var json = await SendAsync("orders/" + id.ToString(CultureInfo.InvariantCulture), credentials, cancellationToken);
-        using var document = JsonDocument.Parse(json);
-        if (!TryProperty(document.RootElement, "order", out var value) || value.ValueKind != JsonValueKind.Object)
-            throw new InvalidDataException("Prom: відповідь не містить замовлення.");
-        if (ReadId(value) != id) throw new InvalidDataException("Prom: відповідь містить інше замовлення.");
-        return ParseOrder(value, connection);
+        var path = "orders/" + id.ToString(CultureInfo.InvariantCulture);
+        return await _requests.ExecuteAsync(credentials.Token, path, async () =>
+        {
+            var json = await SendAsync(path, credentials, cancellationToken);
+            using var document = JsonDocument.Parse(json);
+            if (!TryProperty(document.RootElement, "order", out var value) || value.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException("Prom: відповідь не містить замовлення.");
+            if (ReadId(value) != id) throw new InvalidDataException("Prom: відповідь містить інше замовлення.");
+            return ParseOrder(value, connection);
+        }, cancellationToken);
     }
 
     private Task<string> SendAsync(string path, MarketplaceCredentials credentials, CancellationToken cancellationToken) =>

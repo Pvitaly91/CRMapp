@@ -21,6 +21,9 @@ internal static class MarketplaceSyncTests
         ("sync: platform/account keys remain isolated during detail refresh", CompoundKeysAsync),
         ("sync: partial pages and exceptions never advance last successful checkpoint", PartialFailureAsync),
         ("sync: typed marketplace 401 and 429 cooldown evidence survives incomplete cache", FailureReasonAsync),
+        ("sync: Prom later-page 429 preserves partial data and stops cached-detail fan-out", PromListBackoffAsync),
+        ("sync: Prom account detail failure stops at the attempted cursor and preserves other providers", PromDetailBackoffAsync),
+        ("sync: Prom missing individual order does not block remaining cached details", PromMissingDetailContinuesAsync),
         ("sync: irrelevant dated history does not block current range completeness", HistoricalCacheScopeAsync),
         ("sync: durable outside-range order failures still block completeness", DurableHistoryFailureAsync),
         ("sync: relevant unknown-date and durable order safety limit stays incomplete", SafetyLimitAsync),
@@ -34,9 +37,9 @@ internal static class MarketplaceSyncTests
         ("sync: partial duplicate-account responses update all aliases without advancing their checkpoints", DuplicateSellerPartialFailureAsync),
         ("sync: Kyiv day boundaries honor DST and configurable lookback", DateRangeAsync),
         ("transport: only documented read/auth requests reach HTTP handler", ReadOnlyWhitelistAsync),
-        ("transport: Retry-After delta/date control injected delay", RetryAfterAsync),
+        ("transport: Rozetka Retry-After delta/date control injected delay", RetryAfterAsync),
         ("transport: auth failure is sanitized and not retried", AuthorizationFailureAsync),
-        ("transport: cancellation interrupts backoff before another request", RetryCancellationAsync),
+        ("transport: Rozetka cancellation interrupts backoff before another request", RetryCancellationAsync),
         ("transport: chunked body is size bounded and preserves split UTF8 characters", ChunkedBodyAsync)
     ];
 
@@ -146,6 +149,114 @@ internal static class MarketplaceSyncTests
         Equal(TimeSpan.FromMinutes(10), limited.States.Single().RetryAfter);
         Equal(HttpStatusCode.TooManyRequests, (await cache.LoadAsync(30)).States.Single().FailureStatus);
     }
+
+    private static async Task PromListBackoffAsync()
+    {
+        var lastSuccess = Now.AddDays(-1);
+        var old = Enumerable.Range(1, 501).Select(i => Order(i.ToString(), "cached")).ToArray();
+        var prior = new ConnectionSyncState(PromId, Range, true, lastSuccess, "previous", lastSuccess, "120");
+        var cache = new MemoryCache(new(old, [prior]));
+        var requests = new List<string>();
+        using var http = new HttpClient(new StubHandler(request =>
+        {
+            requests.Add(request.RequestUri!.PathAndQuery);
+            True(request.RequestUri.AbsolutePath == "/api/v1/orders/list");
+            if (requests.Count == 1)
+                return PromJson("""{"orders":[{"id":1000,"date_created":"2026-09-23T12:00:00Z","price":"125.00","currency":"UAH","status":"pending"}]}""");
+            var failed = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+                { Content = new StringContent("private body must not reach cached status") };
+            failed.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromMinutes(12));
+            return failed;
+        }));
+        var client = new PromOrdersClient(new MarketplaceHttpTransport(http, (_, _) =>
+            throw new Exception("Prom must not wait for an immediate HTTP retry.")));
+        var service = new MarketplaceSyncService([client], new MemorySecrets(), cache, new Clock());
+        var result = await service.SynchronizeAsync(Settings(), Range, old.Select(o => o.Key).ToArray());
+        Equal(2, requests.Count);
+        Equal(502, result.Orders.Count);
+        True(old.All(o => result.Orders.Contains(o)));
+        Equal("pending", result.Orders.Single(o => o.Key.OrderId == "1000").Status);
+        var state = result.States.Single();
+        True(!state.Complete);
+        Equal(lastSuccess, state.LastSuccessUtc);
+        Equal("120", state.DetailCursor);
+        Equal(HttpStatusCode.TooManyRequests, state.FailureStatus);
+        True(state.RetryAfter is { } retry && retry > TimeSpan.FromMinutes(11));
+        True(!state.Message.Contains("500", StringComparison.Ordinal));
+        True(!state.Message.Contains("private body", StringComparison.Ordinal));
+        Equal(state, (await cache.LoadAsync(30)).States.Single());
+
+        var paused = await service.SynchronizeAsync(Settings(), Range, old.Select(o => o.Key).ToArray());
+        Equal(2, requests.Count);
+        Equal(502, paused.Orders.Count);
+        Equal(HttpStatusCode.TooManyRequests, paused.States.Single().FailureStatus);
+        Equal(lastSuccess, paused.States.Single().LastSuccessUtc);
+        Equal("120", paused.States.Single().DetailCursor);
+    }
+
+    private static async Task PromDetailBackoffAsync()
+    {
+        var lastSuccess = Now.AddDays(-1);
+        var old = Enumerable.Range(1, 600).Select(i => Order(i.ToString("D4"), "cached")).ToArray();
+        var cache = new MemoryCache(new(old,
+            [new(PromId, Range, true, lastSuccess, "previous", lastSuccess, "0001")]));
+        var requests = new List<string>();
+        using var http = new HttpClient(new StubHandler(request =>
+        {
+            requests.Add(request.RequestUri!.AbsolutePath);
+            if (request.RequestUri.AbsolutePath == "/api/v1/orders/list") return PromJson("""{"orders":[]}""");
+            // Numeric URL normalization removes zero padding from the requested key.
+            True(request.RequestUri.AbsolutePath == "/api/v1/orders/2");
+            return Response(HttpStatusCode.Forbidden);
+        }));
+        var prom = new PromOrdersClient(new MarketplaceHttpTransport(http));
+        var rozetka = new FakeClient(MarketplaceKind.Rozetka)
+        {
+            Fetch = (_, _) => Task.FromResult(new OrdersFetchResult([Order("42", "fresh", RozetkaId, MarketplaceKind.Rozetka)], true))
+        };
+        var result = await new MarketplaceSyncService([prom, rozetka], new MemorySecrets(), cache, new Clock())
+            .SynchronizeAsync(Settings(both: true), Range, []);
+        Equal(2, requests.Count);
+        Equal(601, result.Orders.Count);
+        True(old.All(o => result.Orders.Contains(o)));
+        var state = result.States.Single(s => s.ConnectionId == PromId);
+        True(!state.Complete);
+        Equal(HttpStatusCode.Forbidden, state.FailureStatus);
+        Equal(lastSuccess, state.LastSuccessUtc);
+        Equal("0002", state.DetailCursor);
+        True(state.RetryAfter > TimeSpan.Zero);
+        True(result.States.Single(s => s.ConnectionId == RozetkaId).Complete);
+        Equal(1, rozetka.FetchCount);
+    }
+
+    private static async Task PromMissingDetailContinuesAsync()
+    {
+        var old = new[] { Order("1", "cached"), Order("2", "cached") };
+        var cache = new MemoryCache(new(old, []));
+        var requests = new List<string>();
+        using var http = new HttpClient(new StubHandler(request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            requests.Add(path);
+            return path switch
+            {
+                "/api/v1/orders/list" => PromJson("""{"orders":[]}"""),
+                "/api/v1/orders/1" => Response(HttpStatusCode.NotFound),
+                "/api/v1/orders/2" => PromJson("""{"order":{"id":2,"date_created":"2026-09-23T12:00:00Z","price":"100.00","currency":"UAH","status":"updated"}}"""),
+                _ => throw new Exception("Unexpected synthetic Prom request.")
+            };
+        }));
+        var result = await new MarketplaceSyncService([new PromOrdersClient(new MarketplaceHttpTransport(http))],
+            new MemorySecrets(), cache, new Clock()).SynchronizeAsync(Settings(), Range, []);
+        Equal(3, requests.Count);
+        Equal("cached", result.Orders.Single(o => o.Key.OrderId == "1").Status);
+        Equal("updated", result.Orders.Single(o => o.Key.OrderId == "2").Status);
+        True(!result.States.Single().Complete);
+        Equal("2", result.States.Single().DetailCursor);
+    }
+
+    private static HttpResponseMessage PromJson(string json) => new(HttpStatusCode.OK)
+        { Content = new StringContent(json, Encoding.UTF8, "application/json") };
 
     private static async Task HistoricalCacheScopeAsync()
     {
@@ -610,7 +721,7 @@ internal static class MarketplaceSyncTests
             return response;
         }));
         var transport = new MarketplaceHttpTransport(http, (wait, _) => { waits.Add(wait); return Task.CompletedTask; });
-        Equal("{}", await transport.SendAsync(() => new(HttpMethod.Get, "https://my.prom.ua/api/v1/orders/list"), MarketplaceKind.Prom));
+        Equal("{}", await transport.SendAsync(() => new(HttpMethod.Get, "https://api-seller.rozetka.com.ua/orders/search"), MarketplaceKind.Rozetka));
         Equal(3, calls);
         Equal(2, waits.Count);
         Equal(TimeSpan.FromSeconds(17), waits[0]);
@@ -652,7 +763,7 @@ internal static class MarketplaceSyncTests
             return Task.CompletedTask;
         });
         await ThrowsAsync<OperationCanceledException>(() => transport.SendAsync(
-            () => new(HttpMethod.Get, "https://my.prom.ua/api/v1/orders/list"), MarketplaceKind.Prom, cancellation.Token));
+            () => new(HttpMethod.Get, "https://api-seller.rozetka.com.ua/orders/search"), MarketplaceKind.Rozetka, cancellation.Token));
         Equal(1, calls);
     }
 
