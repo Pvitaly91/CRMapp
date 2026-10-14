@@ -11,9 +11,10 @@ internal static class ProductNameIdentity
         var whitespace = false; var removedSymbol = false; var previousDigit = false;
         foreach (var rune in name.Normalize(NormalizationForm.FormC).ToUpperInvariant().EnumerateRunes())
         {
-            // These apostrophe characters are Unicode modifier letters, not punctuation.
-            var apostrophe = rune.Value is 0x02BC or 0x02BB;
-            if (!apostrophe && Rune.IsLetterOrDigit(rune))
+            // Apostrophes and the ohm symbol are classified as letters by Unicode.
+            // NFC + uppercase also map the compatibility ohm sign (Ω) and lowercase ω to Ω.
+            var ignoredLetter = rune.Value is 0x02BC or 0x02BB or 0x03A9;
+            if (!ignoredLetter && Rune.IsLetterOrDigit(rune))
             {
                 var digit = Rune.IsDigit(rune);
                 // Remove punctuation without joining distinct numeric fragments:

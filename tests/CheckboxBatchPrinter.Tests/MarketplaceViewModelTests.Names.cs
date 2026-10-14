@@ -81,13 +81,14 @@ internal static partial class MarketplaceViewModelTests
         var fixture = new Fixture(); var cache = new AutomaticCache();
         // Fifty units with a damaged apostrophe exercise cleaned full names through tables,
         // preserved source titles, serialized caches, and a later hidden-name collision.
+        // The second basket exercises an ohm symbol replaced by '?' in a receipt.
         var cable = Order() with { Total = 650, Items = [new("Роз’єм XT60H-F", "", 50, 13, 650)], ItemListComplete = true };
         var sensor = cable with { Key = cable.Key with { OrderId = "42" }, Number = "ORDER-42",
-            Items = [new("Запасна кришка для контейнера", "", 50, 13, 650)] };
+            Items = [new("Модуль PAM8403 5V USB 3W+3W для динаміків 4/8Ω", "", 50, 13, 650)] };
         fixture.Source.Orders = [cable, sensor];
         fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 65000), Receipt(ReceiptTwo, 2, 65000)];
         fixture.Details.Values[ReceiptOne] = new(ReceiptOne, [new("  РОЗ?ЄМ\u00a0XT60HF ", "", 50, 13, 650)]) { ItemListComplete = true };
-        fixture.Details.Values[ReceiptTwo] = new(ReceiptTwo, sensor.Items) { ItemListComplete = true };
+        fixture.Details.Values[ReceiptTwo] = new(ReceiptTwo, sensor.Items.Select(item => item with { Name = item.Name.Replace('Ω', '?') }).ToArray()) { ItemListComplete = true };
         var (main, workspace) = fixture.Create(automaticCache: cache);
         await main.RefreshAsync(); await OpenOrdersAsync(main, workspace);
         foreach (var row in main.Receipts)
@@ -100,6 +101,8 @@ internal static partial class MarketplaceViewModelTests
         True(workspace.Orders.Cast<MarketplaceOrderRowViewModel>().All(o => o.HasSuggestedLink && o.LinkStatus == "Автозв’язок: сума й товари"));
         Equal("Роз’єм XT60H-F", fixture.Cache.Snapshot.Orders.Single(o => o.Key == cable.Key).Items[0].Name);
         Equal("  РОЗ?ЄМ\u00a0XT60HF ", fixture.Details.Values[ReceiptOne].Items[0].Name);
+        True(fixture.Cache.Snapshot.Orders.Single(o => o.Key == sensor.Key).Items[0].Name.EndsWith("4/8Ω"));
+        True(fixture.Details.Values[ReceiptTwo].Items[0].Name.EndsWith("4/8?"));
         Equal(2, fixture.Details.Calls);
         var (restarted, restored) = fixture.Create(automaticCache: cache);
         await restarted.RefreshAsync(); restarted.SelectedTabIndex = 1; await restarted.PrepareOrdersAsync();

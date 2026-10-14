@@ -11,6 +11,7 @@ internal static class CleanNameMatchingTests
     [
         ("clean names: 50 units of XT60H-F match apostrophe versus question mark in both marketplaces", Run(FiftyUnits)),
         ("clean names: symbols are removed but letters digits word order and numeric boundaries survive", Run(SymbolsAndBoundaries)),
+        ("clean names: ohm variants match a full basket without changing source text or bypassing competitors and v14 cache invalidation", Run(OhmBasketAndCache)),
         ("clean names: every cleaned name keeps its own aggregated quantity", Run(CompleteBasket)),
         ("clean names: normalization collisions stay ambiguous regardless of input order", Run(Collisions)),
         ("clean names: empty cleaned names and incomplete baskets preserve competitors", Run(InsufficientEvidence)),
@@ -61,7 +62,8 @@ internal static class CleanNameMatchingTests
             ("Товар \U00010428", "ТОВАР \U00010400"),
             ("Зарядка 2×USB", "Зарядка 2?USB"), ("Перехідник USB→DC", "Перехідник USB?DC"),
             ("Товар©®™★⚡🔌 A+B_(C)/D\\E", "Товар ABCDE"),
-            ("Кабель 1.5 мм", "Кабель 1?5 мм"), ("Зарядка 12–24V", "Зарядка 12/24V")
+            ("Кабель 1.5 мм", "Кабель 1?5 мм"), ("Зарядка 12–24V", "Зарядка 12/24V"),
+            ("Модуль 4/8Ω", "Модуль 4/8?"), ("Модуль 4/8Ω", "Модуль 4/8?"), ("Модуль 4/8ω", "Модуль 4/8")
         })
         {
             Equal(ProductComparison.Match, Compare(left, right).Products);
@@ -70,7 +72,8 @@ internal static class CleanNameMatchingTests
         foreach (var (left, right) in new[]
         {
             ("Кабель 1.5 мм", "Кабель 15 мм"), ("Зарядка 12/24V", "Зарядка 1224V"),
-            ("Модуль 4/8Ω", "Модуль 4/8?"), ("Кабель USB", "Кабель USВ"),
+            ("Модуль 4Ω", "Модуль 8?"), ("Модуль 4Ω8", "Модуль 48"), ("Кабель USB", "Кабель USВ"),
+            ("Модуль α", "Модуль β"), ("Модуль ΩA", "Модуль ΩB"),
             ("Вимикач 12V", "Вимикач 24V"), ("Роз’єм XT60H-F", "Роз’єм XT60H-M"),
             ("Кабель живлення", "Кабель питания"), ("Червоний кабель USB", "Кабель USB червоний"),
             ("Кабель USB", "Кабель USB подовжувач"), ("Кабель USB", "Кабель US?"),
@@ -80,6 +83,57 @@ internal static class CleanNameMatchingTests
             var result = Compare(left, right);
             Equal(ProductComparison.Contradiction, result.Products); Check(result.Order is null, "Different cleaned names were linked.");
         }
+    }
+
+    private static void OhmBasketAndCache()
+    {
+        var receipt = Receipt(total: 27100);
+        var order = Order(1, "Модуль аудіопідсилювача PAM8403 5V USB, 3W+3W для динаміків 4/8Ω") with
+        {
+            Total = 271,
+            Items = [new("Модуль аудіопідсилювача PAM8403 5V USB, 3W+3W для динаміків 4/8Ω", "a", 2, 65.5m, 131),
+                new("USB-C (Type-C) панельний роз’єм", "b", 4, 5, 20), new("Модуль драйвера LED 10W", "c", 3, 40, 120)]
+        };
+        var detail = Detail(receipt, order.Items.Select(item => item with
+            { Name = item.Name.Replace('Ω', '?').Replace('’', '?'), Sku = "receipt-" + item.Sku }).ToArray());
+        var details = new Dictionary<string, ReceiptDetails> { [receipt.Id] = detail };
+        var originalOrderName = order.Items[0].Name;
+        var originalReceiptName = detail.Items[0].Name;
+        foreach (var marketplace in new[] { MarketplaceKind.Prom, MarketplaceKind.Rozetka })
+        {
+            var current = order with { Key = order.Key with { Marketplace = marketplace } };
+            var result = Match([receipt], [current], details)[receipt.Id];
+            Equal(current.Key, result.Order?.Key); Equal(ProductComparison.Match, result.Products);
+            Equal(AutomaticLinkBasis.AmountAndProducts, result.Basis);
+            var changedModel = current with { Items = [current.Items[0] with { Name = current.Items[0].Name.Replace("PAM8403", "PAM8406") }, .. current.Items.Skip(1)] };
+            Equal(ProductComparison.Contradiction, Match([receipt], [changedModel], details)[receipt.Id].Products);
+            var changedQuantity = current with { Items = [current.Items[0] with { Quantity = 1 }, .. current.Items.Skip(1)] };
+            Equal(ProductComparison.Contradiction, Match([receipt], [changedQuantity], details)[receipt.Id].Products);
+        }
+        foreach (var orders in new[]
+        {
+            new[] { order, order with { Key = order.Key with { OrderId = "duplicate-ohm" }, Items = detail.Items } },
+            new[] { order with { Key = order.Key with { OrderId = "duplicate-ohm" }, Items = detail.Items }, order }
+        })
+        {
+            var ambiguous = Match([receipt], orders, details)[receipt.Id];
+            Check(ambiguous.Order is null && ambiguous.Ambiguous, "Removing a unit symbol must not choose between otherwise equal orders.");
+        }
+
+        var service = new CachedReceiptOrderMatchingService(); var cache = new AutomaticMatchCache();
+        service.RememberDetails(cache, Account, receipt, detail);
+        service.MatchAll(cache, [receipt], Account, [order], [], true, details);
+        cache.Snapshots = cache.Snapshots.Select(snapshot => snapshot with
+            { AlgorithmVersion = "same-kyiv-day-active-unlinked-verified-discounts-v14" }).ToList();
+        Check(!service.TryRestore(cache, [receipt], Account, [order], [], out _, details), "An old symbol-sensitive graph survived the new cleaning policy.");
+        Check(service.TryGetDetails(cache, Account, receipt, out var cached) && cached.Items[0].Name == originalReceiptName,
+            "Changing the comparison policy must reuse original cached details.");
+        Equal(order.Key, service.RestoreKnownSuggestions(cache, [receipt], Account, [order], [], details)[receipt.Id].Order?.Key);
+        cache.Links.Clear(); // A previously unmatched receipt has no durable automatic pair.
+        var recomputed = service.MatchAll(cache, [receipt], Account, [order], [], true, details);
+        Equal(order.Key, recomputed.Matches[receipt.Id].Order?.Key);
+        Check(!recomputed.CacheHit, "The previously unmatched graph was not recomputed.");
+        Equal(originalOrderName, order.Items[0].Name); Equal(originalReceiptName, detail.Items[0].Name);
     }
 
     private static void CompleteBasket()
