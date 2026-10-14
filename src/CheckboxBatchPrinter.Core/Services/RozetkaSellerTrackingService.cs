@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Net.Http.Headers;
-using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using CheckboxBatchPrinter.Core.Models;
@@ -67,7 +66,7 @@ public sealed class RozetkaSellerTrackingService(ShippingLabelHttp http, IMarket
         try { config = await settings.LoadAsync(cancellationToken).ConfigureAwait(false); }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception) { return new([], ["Rozetka Seller: не вдалося прочитати налаштування підключень."]); }
-        var groups = new Dictionary<(string Login, string Password), List<Target>>();
+        var groups = new Dictionary<string, List<Target>>(StringComparer.Ordinal);
         var today = DateRangeBuilder.KyivDate(_clock.GetUtcNow());
         foreach (var connectionTargets in candidates.GroupBy(t => t.Order.Key.ConnectionId, StringComparer.Ordinal))
         {
@@ -83,18 +82,17 @@ public sealed class RozetkaSellerTrackingService(ShippingLabelHttp http, IMarket
             try { credentials = await secrets.LoadAsync(connectionTargets.Key, cancellationToken).ConfigureAwait(false); }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception) { errors.Add("Rozetka Seller: не вдалося прочитати облікові дані."); continue; }
-            if (credentials is null || string.IsNullOrWhiteSpace(credentials.Login) || credentials.Password.Length == 0 ||
-                credentials.Login.Any(char.IsControl) || credentials.Password.Any(char.IsControl))
-            { errors.Add("Rozetka Seller: збережіть логін і пароль продавця для статусів доставки."); continue; }
-            var identity = (credentials.Login.Trim(), credentials.Password);
+            if (!RozetkaApiCredentials.ValidToken(credentials?.Token))
+            { errors.Add(RozetkaApiCredentials.SetupMessage); continue; }
+            var identity = RozetkaApiCredentials.RequireToken(credentials);
             if (!groups.TryGetValue(identity, out var targets)) groups[identity] = targets = [];
             targets.AddRange(datedTargets);
         }
 
-        // Independent accounts may respond concurrently; aliases of one account share one auth/list scan.
+        // Independent accounts may respond concurrently; aliases of one API token share one list scan.
         var results = await Task.WhenAll(groups.Select(async group =>
         {
-            try { return new ShipmentTrackingFetchResult(await ReadGroupAsync(group.Key.Login, group.Key.Password, group.Value, cancellationToken).ConfigureAwait(false), []); }
+            try { return new ShipmentTrackingFetchResult(await ReadGroupAsync(group.Key, group.Value, cancellationToken).ConfigureAwait(false), []); }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception) { return new ShipmentTrackingFetchResult([], ["Rozetka Seller: статуси доставки цього підключення недоступні; попередні дані збережено."]); }
         })).ConfigureAwait(false);
@@ -103,7 +101,7 @@ public sealed class RozetkaSellerTrackingService(ShippingLabelHttp http, IMarket
         return new(Array.AsReadOnly(statuses.ToArray()), Array.AsReadOnly(errors.Distinct(StringComparer.Ordinal).ToArray()));
     }
 
-    private async Task<IReadOnlyList<ShipmentTrackingStatus>> ReadGroupAsync(string login, string password, IReadOnlyList<Target> targets,
+    private async Task<IReadOnlyList<ShipmentTrackingStatus>> ReadGroupAsync(string token, IReadOnlyList<Target> targets,
         CancellationToken cancellationToken)
     {
         var now = _clock.GetUtcNow();
@@ -112,16 +110,6 @@ public sealed class RozetkaSellerTrackingService(ShippingLabelHttp http, IMarket
         if (targets.Any(t => t.Order.CreatedAt is null)) throw Invalid();
         var from = targets.Min(t => DateRangeBuilder.KyivDate(t.Order.CreatedAt!.Value));
         if (from > to || to.DayNumber - from.DayNumber > 3650) throw Invalid();
-        var body = JsonSerializer.Serialize(new { username = login, password = Convert.ToBase64String(Encoding.UTF8.GetBytes(password)) });
-        using var auth = await JsonAsync(() => new(HttpMethod.Post, Host + "/sites")
-            { Content = new StringContent(body, Encoding.UTF8, "application/json") }, cancellationToken).ConfigureAwait(false);
-        CheckSuccess(auth.RootElement);
-        var authContent = Field(auth.RootElement, "content");
-        var token = Text(authContent, "access_token");
-        var permissions = Field(authContent, "permissions");
-        if (string.IsNullOrWhiteSpace(token) || token.Any(char.IsControl) || permissions.ValueKind != JsonValueKind.Array ||
-            !permissions.EnumerateArray().Any(p => p.ValueKind == JsonValueKind.String && p.GetString() == "module_octopus")) throw Invalid();
-
         var requested = targets.GroupBy(t => (t.Order.Key.OrderId, t.Shipment.TrackingNumber)).ToDictionary(g => g.Key, g => g.ToArray());
         var requestedNumbers = targets.Select(t => t.Shipment.TrackingNumber).ToHashSet(StringComparer.Ordinal);
         var matched = new Dictionary<(string Order, string Tracking), string>();

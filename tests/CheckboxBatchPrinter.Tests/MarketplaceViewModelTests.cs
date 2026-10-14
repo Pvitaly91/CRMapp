@@ -74,7 +74,7 @@ internal static partial class MarketplaceViewModelTests
         ("STA settings Cancel still invalidates marketplace data after cashier credentials changed", () => StaAsync(SettingsCancelAsync)),
         ("STA stale receipt detail continuation cannot enter another account cache", () => StaAsync(StaleDetailsAsync)),
         ("STA corrupt marketplace settings do not block or overwrite Checkbox and printer settings", () => StaAsync(CorruptSettingsAsync)),
-        ("STA Rozetka credential drafts merge and saved account identity cannot change", () => StaAsync(CredentialDraftAsync)),
+        ("STA Rozetka API-token drafts migrate the selected connection and preserve other shops", () => StaAsync(CredentialDraftAsync)),
         ("Checkbox details preserve units and do not infer marketplace IDs from opaque context", ReceiptDetailsAsync),
         ("STA default All Receipts tab works without integrations including preview and print", () => StaAsync(NoIntegrationsAsync)),
         ("STA Checkbox F5 never opens marketplace settings, secrets, cache or APIs", () => StaAsync(CheckboxRefreshIsolationAsync)),
@@ -728,25 +728,24 @@ internal static partial class MarketplaceViewModelTests
         var sync = new MarketplaceSyncService([], fixture.Settings, fixture.Cache);
         var vm = new MarketplaceSettingsViewModel(fixture.Settings, fixture.Settings, sync);
         await vm.LoadAsync();
-        vm.Password = "new-synthetic-A";
-        vm.Selected = second; // Stage the password, then clear visible secret fields.
+        vm.Token = "new-synthetic-A";
+        vm.Selected = second; // Stage the token, then clear visible secret fields.
         vm.Selected = first;
-        vm.Login = "seller-A"; // Editing only login must merge with the staged password.
+        Equal("new-synthetic-A", vm.Token);
         await vm.SaveAsync();
-        Equal("new-synthetic-A", fixture.Settings.Secrets[first.Id].Password);
-        Equal("seller-A", fixture.Settings.Secrets[first.Id].Login);
+        Equal("new-synthetic-A", fixture.Settings.Secrets[first.Id].Token);
+        Equal("", fixture.Settings.Secrets[first.Id].Login);
+        Equal("", fixture.Settings.Secrets[first.Id].Password);
         Equal("old-synthetic-B", fixture.Settings.Secrets[second.Id].Password);
         Equal(1, fixture.Settings.SecretSaves);
-        Equal("", vm.Password); Equal("seller-A", vm.Login);
+        Equal("", vm.Token);
 
-        vm.Login = "different-seller";
-        vm.Password = "different-password";
+        vm.Token = "invalid token";
         var rejected = false;
         try { await vm.SaveAsync(); }
         catch (InvalidOperationException) { rejected = true; }
-        True(rejected, "A different Rozetka login reused the saved account key.");
-        Equal("seller-A", fixture.Settings.Secrets[first.Id].Login);
-        Equal("new-synthetic-A", fixture.Settings.Secrets[first.Id].Password);
+        True(rejected, "A malformed API-token overwrote the saved credentials.");
+        Equal("new-synthetic-A", fixture.Settings.Secrets[first.Id].Token);
         Equal(1, fixture.Settings.SecretSaves);
         Equal(1, fixture.Settings.MarketplaceSaves);
     }

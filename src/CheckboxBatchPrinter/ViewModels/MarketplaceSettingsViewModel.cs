@@ -12,16 +12,16 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
     private readonly IMarketplaceSecretStore _secrets;
     private readonly MarketplaceSyncService _sync;
     private MarketplaceConnection? _selected;
-    private string _token = "", _login = "", _password = "", _status = "Локальні секрети захищено для поточного користувача Windows.";
+    private string _token = "", _status = "Локальні секрети захищено для поточного користувача Windows.";
     private bool _busy;
     private bool _canEdit;
     private bool _saving;
     private bool _updatingCredentialFields;
-    private long _selectionRevision, _loginEditRevision;
     private int _historyDays, _cacheDays = 30;
     private readonly Dictionary<string, MarketplaceCredentials> _pending = [];
     private readonly Dictionary<string, bool?> _savedPresence = [];
-    private readonly Dictionary<string, string> _savedLogins = [];
+    private readonly HashSet<string> _legacyCredentials = [];
+    private readonly HashSet<string> _knownConnectionIds = [];
     private readonly Dictionary<string, long> _credentialReadRevisions = [];
     private readonly HashSet<string> _presenceUnavailable = [];
     public Task CredentialStatusRefresh { get; private set; } = Task.CompletedTask;
@@ -47,7 +47,6 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
             if (_saving || ReferenceEquals(_selected, value)) return;
             StageCredentials();
             if (!SetProperty(ref _selected, value)) return;
-            _selectionRevision++;
             RestoreCredentialFields();
             OnPropertyChanged(nameof(IsProm)); OnPropertyChanged(nameof(IsRozetka));
             ((AsyncRelayCommand)TestCommand).RaiseCanExecuteChanged();
@@ -57,69 +56,52 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
     }
     public bool IsProm => Selected?.Marketplace == MarketplaceKind.Prom;
     public bool IsRozetka => Selected?.Marketplace == MarketplaceKind.Rozetka;
-    public string Token { get => _token; set { if (!_saving || _updatingCredentialFields) { if (SetProperty(ref _token, value)) NotifyCredentialStatus(); } } }
-    public string Login
+    public string Token
     {
-        get => _login;
+        get => _token;
         set
         {
-            if (_saving && !_updatingCredentialFields) return;
-            if (!SetProperty(ref _login, value)) return;
-            if (!_updatingCredentialFields) _loginEditRevision++;
+            if (_saving && !_updatingCredentialFields || !SetProperty(ref _token, value)) return;
+            if (!_updatingCredentialFields && string.IsNullOrWhiteSpace(value) && Selected is { } selected)
+                _pending.Remove(selected.Id);
             NotifyCredentialStatus();
         }
     }
-    public string Password { get => _password; set { if (!_saving || _updatingCredentialFields) { if (SetProperty(ref _password, value)) NotifyCredentialStatus(); } } }
-    private bool HasLoginDraft => IsRozetka && Selected is not null && !string.IsNullOrWhiteSpace(Login) &&
-        !string.Equals(Login.Trim(), _savedLogins.GetValueOrDefault(Selected.Id, "").Trim(), StringComparison.Ordinal);
-    private bool HasCredentialDraft => Selected is not null && (IsProm ? !string.IsNullOrWhiteSpace(Token) ||
-        _pending.TryGetValue(Selected.Id, out var prom) && !string.IsNullOrWhiteSpace(prom.Token) :
-        HasLoginDraft || !string.IsNullOrEmpty(Password) || _pending.ContainsKey(Selected.Id));
+    private bool HasCredentialDraft => Selected is not null && (!string.IsNullOrWhiteSpace(Token) ||
+        _pending.TryGetValue(Selected.Id, out var draft) && !string.IsNullOrWhiteSpace(draft.Token));
     public string CredentialStatusKind => HasCredentialDraft ? "Draft" : Selected is null ||
         !_savedPresence.TryGetValue(Selected.Id, out var saved) || saved is null ? "Unknown" : saved.Value ? "Saved" : "Missing";
     public string CredentialStatus => Selected is null ? "Оберіть підключення" : HasCredentialDraft
         ? CredentialIndicator.Text(false, true, "Ключ") : _presenceUnavailable.Contains(Selected.Id)
             ? "Не вдалося прочитати стан збережених даних" : CredentialStatusKind == "Unknown"
-                ? "Перевіряю наявність збережених даних…" : CredentialIndicator.Text(CredentialStatusKind == "Saved", false, IsProm ? "Токен Prom" : "Облікові дані Rozetka");
+                ? "Перевіряю наявність збережених даних…" : _legacyCredentials.Contains(Selected.Id)
+                    ? "Для Rozetka потрібен API-токен: у кабінеті відкрийте «Налаштування → Безпека API». Збережені логін і пароль більше не використовуються."
+                    : CredentialIndicator.Text(CredentialStatusKind == "Saved", false, IsProm ? "Токен Prom" : "API-токен Rozetka");
     private void NotifyCredentialStatus() { OnPropertyChanged(nameof(CredentialStatus)); OnPropertyChanged(nameof(CredentialStatusKind)); }
-    private void SetCredentialFields(string token, string login, string password)
+    private void SetCredentialFields(string token)
     {
         _updatingCredentialFields = true;
-        try { Token = token; Login = login; Password = password; }
+        try { Token = token; }
         finally { _updatingCredentialFields = false; }
         CredentialFieldsChanged?.Invoke(this, EventArgs.Empty);
         NotifyCredentialStatus();
     }
     private void RestoreCredentialFields()
     {
-        if (Selected is not { } connection) { SetCredentialFields("", "", ""); return; }
-        var draft = _pending.GetValueOrDefault(connection.Id);
-        SetCredentialFields(connection.Marketplace == MarketplaceKind.Prom ? draft?.Token ?? "" : "",
-            connection.Marketplace == MarketplaceKind.Rozetka ? !string.IsNullOrEmpty(draft?.Login)
-                ? draft.Login : _savedLogins.GetValueOrDefault(connection.Id, "") : "",
-            connection.Marketplace == MarketplaceKind.Rozetka ? draft?.Password ?? "" : "");
+        SetCredentialFields(Selected is { } connection ? _pending.GetValueOrDefault(connection.Id)?.Token ?? "" : "");
     }
     private void RememberSavedCredentials(MarketplaceConnection connection, MarketplaceCredentials? credentials)
     {
-        _savedPresence[connection.Id] = connection.Marketplace == MarketplaceKind.Prom
-            ? !string.IsNullOrWhiteSpace(credentials?.Token)
-            : !string.IsNullOrWhiteSpace(credentials?.Login) && !string.IsNullOrEmpty(credentials?.Password);
-        if (connection.Marketplace == MarketplaceKind.Rozetka)
-        {
-            _savedLogins[connection.Id] = credentials?.Login ?? "";
-            if (_pending.TryGetValue(connection.Id, out var draft) &&
-                string.Equals(draft.Login.Trim(), _savedLogins[connection.Id].Trim(), StringComparison.Ordinal))
-            {
-                if (draft.Password.Length == 0) _pending.Remove(connection.Id);
-                else _pending[connection.Id] = draft with { Login = "" };
-            }
-        }
+        _savedPresence[connection.Id] = connection.Marketplace == MarketplaceKind.Rozetka
+            ? RozetkaApiCredentials.ValidToken(credentials?.Token) : !string.IsNullOrWhiteSpace(credentials?.Token);
+        if (connection.Marketplace == MarketplaceKind.Rozetka && _savedPresence[connection.Id] != true &&
+            (!string.IsNullOrEmpty(credentials?.Login) || !string.IsNullOrEmpty(credentials?.Password)))
+            _legacyCredentials.Add(connection.Id);
+        else _legacyCredentials.Remove(connection.Id);
     }
     private async Task RefreshCredentialStatusAsync(MarketplaceConnection? connection)
     {
         if (connection is null) return;
-        var selectionRevision = _selectionRevision;
-        var loginEditRevision = _loginEditRevision;
         var readRevision = NextCredentialReadRevision(connection.Id);
         _savedPresence[connection.Id] = null; _presenceUnavailable.Remove(connection.Id); NotifyCredentialStatus();
         try
@@ -127,14 +109,7 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
             var credentials = await _secrets.LoadAsync(connection.Id);
             if (_credentialReadRevisions.GetValueOrDefault(connection.Id) != readRevision) return;
             RememberSavedCredentials(connection, credentials);
-            // A slow store read may supply only the saved login, never saved secrets or later edits.
-            if (connection.Marketplace == MarketplaceKind.Rozetka && ReferenceEquals(Selected, connection) &&
-                selectionRevision == _selectionRevision && loginEditRevision == _loginEditRevision)
-            {
-                var draftLogin = _pending.GetValueOrDefault(connection.Id)?.Login;
-                SetCredentialFields(Token, !string.IsNullOrEmpty(draftLogin) ? draftLogin :
-                    _savedLogins.GetValueOrDefault(connection.Id, ""), Password);
-            }
+            // Presence reads never restore saved secrets or overwrite an in-flight token draft.
         }
         catch (Exception)
         {
@@ -181,7 +156,8 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
                 return;
             }
             Connections.Clear();
-            foreach (var connection in settings.Connections) Connections.Add(connection);
+            _knownConnectionIds.Clear();
+            foreach (var connection in settings.Connections) { Connections.Add(connection); _knownConnectionIds.Add(connection.Id); }
             HistoryDays = settings.HistoryDays; CacheDays = settings.CacheDays;
             Selected = Connections.FirstOrDefault();
             await CredentialStatusRefresh;
@@ -218,29 +194,20 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
     private void StageCredentials()
     {
         if (Selected is null) return;
-        if (IsProm && !string.IsNullOrWhiteSpace(Token)) _pending[Selected.Id] = new(Token: Token.Trim());
-        if (IsRozetka)
-        {
-            var pending = _pending.GetValueOrDefault(Selected.Id) ?? new();
-            var draft = new MarketplaceCredentials(Login: Login.Trim().Length > 0 ? HasLoginDraft ? Login.Trim() : "" : pending.Login,
-                Password: Password.Length > 0 ? Password : pending.Password);
-            if (draft.Login.Length == 0 && draft.Password.Length == 0) _pending.Remove(Selected.Id);
-            else _pending[Selected.Id] = draft;
-        }
+        if (!string.IsNullOrWhiteSpace(Token)) _pending[Selected.Id] = new(Token: Token);
     }
     private async Task<MarketplaceCredentials> ResolveAsync(MarketplaceConnection connection,
         IReadOnlyDictionary<string, MarketplaceCredentials> drafts)
     {
         var saved = await _secrets.LoadAsync(connection.Id) ?? new();
-        if (!drafts.TryGetValue(connection.Id, out var draft)) return saved;
-        if (connection.Marketplace == MarketplaceKind.Prom) return draft;
-        var login = draft.Login.Length > 0 ? draft.Login : saved.Login;
-        if (saved.Login.Length > 0 && !string.Equals(login, saved.Login, StringComparison.Ordinal))
-            throw new InvalidOperationException("Для іншого логіна Rozetka додайте нове підключення, щоб зберегти ізоляцію замовлень і прив’язок.");
-        var password = draft.Password.Length > 0 ? draft.Password : saved.Password;
-        if (string.IsNullOrWhiteSpace(login) || password.Length == 0)
-            throw new InvalidOperationException($"{connection.Name}: введіть логін і пароль продавця Rozetka. Порожні поля залишають лише вже збережені дані.");
-        return new(Login: login, Password: password);
+        var credentials = drafts.GetValueOrDefault(connection.Id) ?? saved;
+        if (connection.Marketplace == MarketplaceKind.Rozetka && string.IsNullOrWhiteSpace(credentials.Token))
+            throw new InvalidOperationException($"{connection.Name}: введіть API-токен Rozetka з кабінету «Налаштування → Безпека API». Логін і пароль кабінету більше не використовуються.");
+        if (connection.Marketplace == MarketplaceKind.Rozetka && !RozetkaApiCredentials.ValidToken(credentials.Token))
+            throw new InvalidOperationException($"{connection.Name}: некоректний API-токен Rozetka. Скопіюйте його повністю з «Налаштування → Безпека API» без пробілів усередині або перенесень рядків.");
+        if (credentials.Token.Any(char.IsControl) || credentials.Token.Trim().Any(char.IsWhiteSpace))
+            throw new InvalidOperationException($"{connection.Name}: API-токен не повинен містити пробіли або керівні символи.");
+        return new(Token: credentials.Token.Trim());
     }
     public async Task<bool> SaveAsync()
     {
@@ -261,7 +228,9 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
             var resolved = new List<(MarketplaceConnection Connection, MarketplaceCredentials Credentials)>();
             // Resolve and validate every draft before the first protected file is changed.
             foreach (var connection in connections)
-                if (drafts.ContainsKey(connection.Id)) resolved.Add((connection, await ResolveAsync(connection, drafts)));
+                if (drafts.ContainsKey(connection.Id) || connection.Marketplace == MarketplaceKind.Rozetka &&
+                    connection.Enabled && !_knownConnectionIds.Contains(connection.Id))
+                    resolved.Add((connection, await ResolveAsync(connection, drafts)));
             foreach (var (connection, credentials) in resolved)
             {
                 // An earlier presence read cannot replace the state of this newer write.
@@ -271,6 +240,7 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
                 _presenceUnavailable.Remove(connection.Id);
             }
             await _settings.SaveAsync(settings);
+            foreach (var connection in connections) _knownConnectionIds.Add(connection.Id);
             _pending.Clear();
             RestoreCredentialFields();
             CredentialsCleared?.Invoke(this, EventArgs.Empty);

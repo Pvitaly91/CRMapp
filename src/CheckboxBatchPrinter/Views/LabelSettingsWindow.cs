@@ -75,7 +75,7 @@ public sealed class LabelSettingsWindow : Window
 
         root.Children.Add(new TextBlock
         {
-            Text = "Накладні замовлень Rozetka: використовується логін і пароль відповідного магазину з налаштувань маркетплейсів. Окремий токен Delivery не потрібний.",
+            Text = "Накладні замовлень Rozetka: використовується API-токен відповідного магазину з налаштувань маркетплейсів. Окремий токен Delivery не потрібний.",
             TextWrapping = TextWrapping.Wrap, FontSize = 11, Margin = new Thickness(0,12,0,4)
         });
         root.Children.Add(_tokenStatus); root.Children.Add(_sellerStatus);
@@ -195,8 +195,11 @@ public sealed class LabelSettingsWindow : Window
         {
             var credentials = await _marketplaceSecrets.LoadAsync(id);
             if (generation != _sellerStatusGeneration) return;
-            CredentialIndicator.Apply(_sellerStatus, !string.IsNullOrWhiteSpace(credentials?.Login) && !string.IsNullOrEmpty(credentials?.Password),
-                _sellerChanged && id != _original.NovaPoshtaSellerConnectionId, "Облікові дані Rozetka Seller");
+            var hasToken = RozetkaApiCredentials.ValidToken(credentials?.Token);
+            CredentialIndicator.Apply(_sellerStatus, hasToken,
+                _sellerChanged && id != _original.NovaPoshtaSellerConnectionId, "API-токен Rozetka Seller");
+            if (!hasToken)
+                _sellerStatus.Text = "Додайте API-токен цього магазину в налаштуваннях маркетплейсів. У кабінеті Rozetka: «Налаштування → Безпека API».";
         }
         catch (Exception) { if (generation == _sellerStatusGeneration) _sellerStatus.Text = "Rozetka Seller: не вдалося прочитати стан даних"; }
     }

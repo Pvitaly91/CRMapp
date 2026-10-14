@@ -80,7 +80,7 @@
             <TabItem x:Name="MarketplaceTab" Header="Маркетплейси">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="14" DataContext="{Binding Marketplace}">
-                        <TextBlock Text="Лише читання замовлень. Prom: токен із правом читання замовлень. Для іншого магазину створіть нове підключення; для ротації токена використовуйте існуюче."
+                        <TextBlock Text="Лише читання замовлень. Prom: токен із правом читання замовлень. Rozetka: API-токен із кабінету «Налаштування → Безпека API». Для іншого магазину створіть нове підключення; для ротації токена використовуйте існуюче."
                                    TextWrapping="Wrap" Background="#EDF6FF" Padding="10" />
                         <StackPanel IsEnabled="{Binding CanEdit}">
                         <WrapPanel>
@@ -97,12 +97,12 @@
                             <PasswordBox x:Name="PromTokenInput" PasswordChanged="PromTokenInput_PasswordChanged" Margin="3" Padding="6,4" />
                         </StackPanel>
                         <StackPanel Visibility="{Binding IsRozetka, Converter={StaticResource BoolToVisibility}}">
-                            <TextBlock Text="Логін продавця Rozetka" Margin="6,3" />
-                            <TextBox x:Name="RozetkaLoginInput" Text="{Binding Login, UpdateSourceTrigger=PropertyChanged}" />
-                            <TextBlock Text="Пароль продавця Rozetka" Margin="6,3" />
-                            <PasswordBox x:Name="RozetkaPasswordInput" PasswordChanged="RozetkaPasswordInput_PasswordChanged" Margin="3" Padding="6,4" />
+                            <TextBlock Text="API-токен Rozetka" Margin="6,3" />
+                            <PasswordBox x:Name="RozetkaTokenInput" PasswordChanged="RozetkaTokenInput_PasswordChanged" Margin="3" Padding="6,4" />
+                            <TextBlock Text="Створіть токен у кабінеті продавця Rozetka: «Налаштування → Безпека API». Вставте його сюди для цього самого магазину й натисніть «Зберегти». Збережені замовлення та прив’язки залишаться в цьому підключенні."
+                                       TextWrapping="Wrap" Foreground="#667085" Margin="6,5" />
                         </StackPanel>
-                        <TextBlock Text="Збережений логін Rozetka показано в полі. Збережені пароль і токен не показуються: порожні поля залишають попередні значення. Введені чернетки зберігаються при перемиканні магазинів; для запису на диск натисніть «Зберегти»."
+                        <TextBlock Text="Збережені токени не показуються: порожнє поле залишає попереднє значення. Введені чернетки зберігаються при перемиканні магазинів; для запису на диск натисніть «Зберегти»."
                                    TextWrapping="Wrap" Foreground="#667085" Margin="6,5" />
                         <Button Content="Перевірити підключення" Command="{Binding TestCommand}" HorizontalAlignment="Left" />
                         <WrapPanel Margin="0,6">

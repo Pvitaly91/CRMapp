@@ -334,7 +334,8 @@ internal static class SimpleShippingSettingsTests
         {
             var shops = Field<ComboBox>(window, "_npStores"); var key = Field<PasswordBox>(window, "_npKey");
             var status = Field<TextBlock>(window, "_npStatus"); var tokenStatus = Field<TextBlock>(window, "_tokenStatus");
-            Check(Field<TextBlock>(window, "_sellerStatus").Tag?.ToString() == "Saved", "Saved Seller credentials are not marked.");
+            Check(Field<TextBlock>(window, "_sellerStatus").Tag?.ToString() == "Saved" &&
+                Field<TextBlock>(window, "_sellerStatus").Text.Contains("API-токен"), "Saved Seller API-token is not marked.");
             shops.SelectedValue = ShopA; Check(status.Tag?.ToString() == "Saved" && key.Password.Length == 0, "Stored NP key is not visibly marked.");
             Check(tokenStatus.Tag?.ToString() == "Saved" && tokenStatus.Text.Contains("Rozetka Delivery"), "Stored RD token is not marked while advanced settings are collapsed.");
             key.Password = NewKey; Check(status.Tag?.ToString() == "Draft", "Typed NP key was mislabeled as saved.");
@@ -345,14 +346,25 @@ internal static class SimpleShippingSettingsTests
             var text = string.Join(" ", Nodes((DependencyObject)window.Content).OfType<TextBlock>().Select(t => t.Text));
             Check(!text.Contains(OldKey) && !text.Contains(NewKey) && !text.Contains(store.Value.RozetkaDeliveryToken), "A credential indicator exposed secret bytes.");
             Check(store.Saves == 0, "Opening status indicators wrote settings.");
+            sellerSecrets.Value = new(Login: "synthetic_legacy_login", Password: "synthetic_legacy_password");
+            var seller = Field<ComboBox>(window, "_seller");
+            seller.SelectedValue = null; seller.SelectedValue = Seller;
+            Check(Field<TextBlock>(window, "_sellerStatus").Tag?.ToString() == "Missing" &&
+                Field<TextBlock>(window, "_sellerStatus").Text.Contains("Безпека API"),
+                "Legacy Seller credentials were mislabeled as a configured API-token.");
+            sellerSecrets.Value = new(Token: "токен");
+            seller.SelectedValue = null; seller.SelectedValue = Seller;
+            Check(Field<TextBlock>(window, "_sellerStatus").Tag?.ToString() == "Missing",
+                "A malformed Seller token was marked as configured although the transport would reject it.");
         }
         finally { window.Close(); }
         return Task.CompletedTask;
     }
     private sealed class IndicatorSellerSecrets : IMarketplaceSecretStore
     {
+        public MarketplaceCredentials Value { get; set; } = new(Token: "synthetic_private_seller_token");
         public Task<MarketplaceCredentials?> LoadAsync(string id, CancellationToken ct = default) =>
-            Task.FromResult<MarketplaceCredentials?>(new(Login: "synthetic_seller_login", Password: "synthetic_private_seller_password"));
+            Task.FromResult<MarketplaceCredentials?>(Value);
         public Task SaveAsync(string id, MarketplaceCredentials credentials, CancellationToken ct = default) =>
             throw new Exception("Reading Seller status wrote credentials.");
     }

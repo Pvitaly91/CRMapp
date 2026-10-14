@@ -16,6 +16,7 @@ internal static class RozetkaSellerTrackingTests
         ("Seller tracking rejects incomplete conflicting and malformed account responses without publishing partial statuses", InvalidResponsesAsync),
         ("Seller tracking uses only the explicit status title and never infers it from IDs or partner fields", EmptyStatusAsync),
         ("Seller tracking isolates unavailable accounts and does not expose API bodies or secrets", AccountIsolationAsync),
+        ("Seller tracking rejects revoked API tokens once without cabinet login fallback", RevokedTokenAsync),
         ("Seller tracking cancels before or during pagination without publishing stale partial data", CancellationAsync),
         ("Seller tracking route permits only bounded read-only dates pagination and status expansion", ReadOnlyRouteAsync)
     ];
@@ -30,8 +31,6 @@ internal static class RozetkaSellerTrackingTests
     };
     private static HttpResponseMessage Json(object body) => new(HttpStatusCode.OK)
         { Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json") };
-    private static HttpResponseMessage Auth(string token = "synthetic-main") => Json(new
-        { success = true, content = new { access_token = token, permissions = new[] { "module_octopus" } } });
     private static HttpResponseMessage Page(int page, int total, int size, params object[] rows) => Json(new
     {
         success = true, content = new { models = rows,
@@ -43,32 +42,26 @@ internal static class RozetkaSellerTrackingTests
     private static async Task BulkAliasesAsync()
     {
         var store = new Stores();
-        store.Add("alias", " seller-main ", "synthetic-password");
+        store.Add("alias", " synthetic-main ");
         var calls = new List<string>();
-        var handler = new Handler(async (request, _) =>
+        var handler = new Handler((request, _) =>
         {
             calls.Add(request.Method + " " + request.RequestUri!.AbsolutePath);
-            if (request.Method == HttpMethod.Post)
-            {
-                using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
-                Equal("seller-main", body.RootElement.GetProperty("username").GetString());
-                Equal("synthetic-password", Encoding.UTF8.GetString(Convert.FromBase64String(body.RootElement.GetProperty("password").GetString()!)));
-                return Auth();
-            }
+            Equal(HttpMethod.Get, request.Method); Equal("Bearer", request.Headers.Authorization!.Scheme);
             Equal("synthetic-main", request.Headers.Authorization!.Parameter);
             var query = Query(request.RequestUri!);
             Equal("2026-09-23", query["date_from"]); Equal("2026-10-12", query["date_to"]);
             Equal("100", query["pageSize"]); Equal("delivery_status_title", query["expand"]);
-            return query["page"] == "1" ? Page(1, 3, 2,
+            return Task.FromResult(query["page"] == "1" ? Page(1, 3, 2,
                 Row(1, 100, "RMP-100", "Готовий до видачі"), Row(2, 900, "UNK-900", "Не використовувати", "RMP-101"))
-                : Page(2, 3, 2, Row(3, 101, "RMP-101", "  Посилку видано  "));
+                : Page(2, 3, 2, Row(3, 101, "RMP-101", "  Посилку видано  ")));
         });
         using var client = new HttpClient(handler);
         var selected = new[] { Order("primary", "100", "RMP-100", new(2026, 9, 23, 23, 30, 0, TimeSpan.Zero)),
             Order("alias", "100", "RMP-100"), Order("alias", "101", "RMP-101") };
         var result = await new RozetkaSellerTrackingService(new(client), store, store, new Clock()).FetchAsync(selected);
         Equal(3, result.Statuses.Count); Equal(0, result.Errors.Count);
-        Equal(1, calls.Count(c => c == "POST /sites")); Equal(2, calls.Count(c => c == "GET /delivery-rozetka/ttn-list"));
+        Equal(0, calls.Count(c => c == "POST /sites")); Equal(2, calls.Count(c => c == "GET /delivery-rozetka/ttn-list"));
         Check(result.Statuses.Select(s => s.Order).ToHashSet().SetEquals(selected.Select(o => o.Key)), "Account aliases lost their exact selected order identities.");
         Check(result.Statuses.All(s => s.Carrier == ShippingCarrier.RozetkaDelivery && s.Source == "Rozetka Seller" && s.CheckedAtUtc == Now), "Incorrect tracking proof/source.");
         Equal("Посилку видано", result.Statuses.Single(s => s.TrackingNumber == "RMP-101").Status);
@@ -79,7 +72,7 @@ internal static class RozetkaSellerTrackingTests
 
     private static async Task SelectionScopeAsync()
     {
-        foreach (var mode in new[] { "disabled", "unknown-account", "missing-date", "wrong-carrier", "prom", "invalid-ttn", "future-date", "missing-credentials" })
+        foreach (var mode in new[] { "disabled", "unknown-account", "missing-date", "wrong-carrier", "prom", "invalid-ttn", "future-date", "missing-credentials", "control-token" })
         {
             var store = new Stores();
             var order = Order("primary", "100", "RMP-100");
@@ -90,14 +83,15 @@ internal static class RozetkaSellerTrackingTests
             if (mode == "wrong-carrier") order = order with { Shipments = [new("nova_poshta", "20400000000001")] };
             if (mode == "prom") order = order with { Key = order.Key with { Marketplace = MarketplaceKind.Prom } };
             if (mode == "invalid-ttn") order = order with { Shipments = [new("rozetka_delivery", "20400000000001")] };
-            if (mode == "missing-credentials") store.Credentials["primary"] = new(Login: "seller-main", Password: "");
+            if (mode == "missing-credentials") store.Credentials["primary"] = new(Login: "seller-main", Password: "synthetic-password");
+            if (mode == "control-token") store.Credentials["primary"] = new(Token: "synthetic-main\n");
             var calls = 0;
             using var client = new HttpClient(new Handler((_, _) => { calls++; throw new InvalidOperationException("No HTTP read is justified for " + mode); }));
             var result = await new RozetkaSellerTrackingService(new(client), store, store, new Clock()).FetchAsync([order]);
             Equal(0, calls); Equal(0, result.Statuses.Count); Equal(0, store.Writes);
         }
         var datedStore = new Stores();
-        using var datedClient = new HttpClient(new Handler((request, _) => Task.FromResult(request.Method == HttpMethod.Post ? Auth() : Page(1, 1, 100, Row(1, 100, "RMP-100", "Доставляється")))));
+        using var datedClient = new HttpClient(new Handler((request, _) => Task.FromResult(Page(1, 1, 100, Row(1, 100, "RMP-100", "Доставляється")))));
         var mixed = await new RozetkaSellerTrackingService(new(datedClient), datedStore, datedStore, new Clock()).FetchAsync([
             Order("primary", "100", "RMP-100"), Order("primary", "101", "RMP-101") with { CreatedAt = null }]);
         Equal(1, mixed.Statuses.Count); Check(mixed.Errors.Count > 0, "Undated order was silently included in the bounded account scan.");
@@ -111,7 +105,7 @@ internal static class RozetkaSellerTrackingTests
             var reads = 0;
             using var client = new HttpClient(new Handler((request, _) =>
             {
-                if (request.Method == HttpMethod.Post) return Task.FromResult(Auth());
+                Equal(HttpMethod.Get, request.Method);
                 reads++;
                 HttpResponseMessage response = mode switch
                 {
@@ -139,7 +133,7 @@ internal static class RozetkaSellerTrackingTests
     private static async Task EmptyStatusAsync()
     {
         var store = new Stores();
-        using var client = new HttpClient(new Handler((request, _) => Task.FromResult(request.Method == HttpMethod.Post ? Auth() :
+        using var client = new HttpClient(new Handler((request, _) => Task.FromResult(
             Page(1, 3, 100, Row(1, 100, "RMP-100", ""), Row(2, 101, "RMP-101", null), Row(3, 102, "RMP-102", " ")))));
         var result = await new RozetkaSellerTrackingService(new(client), store, store, new Clock()).FetchAsync([
             Order("primary", "100", "RMP-100"), Order("primary", "101", "RMP-101"), Order("primary", "102", "RMP-102")]);
@@ -148,25 +142,20 @@ internal static class RozetkaSellerTrackingTests
 
     private static async Task AccountIsolationAsync()
     {
-        var store = new Stores(); store.Add("other", "other-seller", "other-password");
-        var authCalls = 0;
-        using var client = new HttpClient(new Handler(async (request, _) =>
+        var store = new Stores(); store.Add("other", "other-token");
+        var calls = 0;
+        using var client = new HttpClient(new Handler((request, _) =>
         {
-            if (request.Method == HttpMethod.Post)
-            {
-                authCalls++;
-                using var json = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
-                return Auth(json.RootElement.GetProperty("username").GetString() == "seller-main" ? "primary-session" : "other-session");
-            }
-            return request.Headers.Authorization!.Parameter == "primary-session" ? Page(1, 1, 100, Row(1, 100, "RMP-100", "В дорозі")) :
-                Json(new { success = false, content = new { login = "other-seller", secret = "other-password", recipient = "Do not publish" } });
+            calls++; Equal(HttpMethod.Get, request.Method);
+            return Task.FromResult(request.Headers.Authorization!.Parameter == "synthetic-main" ? Page(1, 1, 100, Row(1, 100, "RMP-100", "В дорозі")) :
+                Json(new { success = false, content = new { login = "other-seller", secret = "other-password", token = "other-token", recipient = "Do not publish" } }));
         }));
         var result = await new RozetkaSellerTrackingService(new(client), store, store, new Clock()).FetchAsync([
             Order("primary", "100", "RMP-100"), Order("other", "101", "RMP-101")]);
-        Equal(2, authCalls); Equal(1, result.Statuses.Count); Equal(1, result.Errors.Count);
+        Equal(2, calls); Equal(1, result.Statuses.Count); Equal(1, result.Errors.Count);
         Equal("primary", result.Statuses.Single().Order!.ConnectionId);
         Check(!string.Join(" ", result.Errors).Contains("other-seller") && !string.Join(" ", result.Errors).Contains("other-password") &&
-            !string.Join(" ", result.Errors).Contains("Do not publish"), "Raw API account or recipient data leaked into the error.");
+            !string.Join(" ", result.Errors).Contains("other-token") && !string.Join(" ", result.Errors).Contains("Do not publish"), "Raw API account or recipient data leaked into the error.");
     }
 
     private static async Task CancellationAsync()
@@ -178,7 +167,7 @@ internal static class RozetkaSellerTrackingTests
             if (cancelBefore) cancellation.Cancel();
             using var client = new HttpClient(new Handler((request, token) =>
             {
-                if (request.Method == HttpMethod.Post) return Task.FromResult(Auth());
+                Equal(HttpMethod.Get, request.Method);
                 reads++;
                 if (reads == 2) { cancellation.Cancel(); return Task.FromCanceled<HttpResponseMessage>(token); }
                 return Task.FromResult(Page(1, 2, 1, Row(1, 100, "RMP-100", "Partial first page")));
@@ -191,6 +180,25 @@ internal static class RozetkaSellerTrackingTests
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
             Equal(cancelBefore ? 0 : 2, reads); Equal(0, store.Writes);
+        }
+    }
+
+    private static async Task RevokedTokenAsync()
+    {
+        foreach (var status in new[] { HttpStatusCode.Unauthorized, HttpStatusCode.Forbidden })
+        {
+            var store = new Stores(); var calls = 0;
+            using var client = new HttpClient(new Handler((request, _) =>
+            {
+                calls++;
+                Equal(HttpMethod.Get, request.Method);
+                Equal("synthetic-main", request.Headers.Authorization!.Parameter);
+                return Task.FromResult(new HttpResponseMessage(status));
+            }));
+            var result = await new RozetkaSellerTrackingService(new(client), store, store, new Clock())
+                .FetchAsync([Order("primary", "100", "RMP-100")]);
+            Equal(1, calls); Equal(0, result.Statuses.Count); Equal(1, result.Errors.Count);
+            Check(!result.Errors[0].Contains("synthetic-main"), "Revoked API token leaked into the user-facing error.");
         }
     }
 
@@ -234,9 +242,9 @@ internal static class RozetkaSellerTrackingTests
         public MarketplaceSettings Config { get; } = new();
         public Dictionary<string, MarketplaceCredentials> Credentials { get; } = [];
         public int Writes;
-        public Stores() => Add("primary", "seller-main", "synthetic-password");
-        public void Add(string id, string login, string password)
-        { Config.Connections.Add(new() { Id = id, Marketplace = MarketplaceKind.Rozetka, Enabled = true }); Credentials[id] = new(Login: login, Password: password); }
+        public Stores() => Add("primary", "synthetic-main");
+        public void Add(string id, string token)
+        { Config.Connections.Add(new() { Id = id, Marketplace = MarketplaceKind.Rozetka, Enabled = true }); Credentials[id] = new(Token: token, Login: "legacy-seller", Password: "legacy-password"); }
         public Task<MarketplaceSettings> LoadAsync(CancellationToken cancellationToken = default)
         { cancellationToken.ThrowIfCancellationRequested(); return Task.FromResult(Config); }
         public Task<MarketplaceCredentials?> LoadAsync(string connectionId, CancellationToken cancellationToken = default)

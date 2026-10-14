@@ -14,7 +14,7 @@ internal static partial class MarketplaceViewModelTests
         var fixture = new Fixture();
         fixture.Settings.Secrets["prom-test"] = new(Token: "synthetic_saved_prom_secret");
         fixture.Settings.Market.Connections.Add(new() { Id = "rz-status", Name = "Synthetic Rozetka", Marketplace = MarketplaceKind.Rozetka, Enabled = true });
-        fixture.Settings.Secrets["rz-status"] = new(Login: "synthetic_login", Password: "synthetic_saved_rz_secret");
+        fixture.Settings.Secrets["rz-status"] = new(Token: "synthetic_saved_rz_secret");
         var vm = new MarketplaceSettingsViewModel(fixture.Settings, fixture.Settings,
             new MarketplaceSyncService([fixture.Source, fixture.Rozetka], fixture.Settings, fixture.Cache));
         await vm.LoadAsync();
@@ -22,14 +22,20 @@ internal static partial class MarketplaceViewModelTests
         Equal("", vm.Token); True(!vm.CredentialStatus.Contains("synthetic_saved_prom_secret"));
         vm.Token = "synthetic_new_prom_secret"; Equal("Draft", vm.CredentialStatusKind);
         vm.Selected = vm.Connections.Single(c => c.Id == "rz-status"); await vm.CredentialStatusRefresh;
-        Equal("Saved", vm.CredentialStatusKind); True(vm.CredentialStatus.Contains("Облікові дані Rozetka збережено"));
-        Equal("synthetic_login", vm.Login);
-        Equal("", vm.Password); True(!vm.CredentialStatus.Contains("synthetic_saved_rz_secret"));
+        Equal("Saved", vm.CredentialStatusKind); True(vm.CredentialStatus.Contains("API-токен Rozetka збережено"));
+        Equal("", vm.Token); True(!vm.CredentialStatus.Contains("synthetic_saved_rz_secret"));
         vm.Selected = vm.Connections.Single(c => c.Id == "prom-test"); await vm.CredentialStatusRefresh;
         Equal("Draft", vm.CredentialStatusKind); await vm.SaveAsync(); Equal("Saved", vm.CredentialStatusKind);
         fixture.Settings.Secrets["rz-status"] = new(Login: "synthetic_login");
         vm.Selected = vm.Connections.Single(c => c.Id == "rz-status"); await vm.CredentialStatusRefresh;
         Equal("Missing", vm.CredentialStatusKind);
+        foreach (var malformed in new[] { "синтетичний_секрет", "synthetic token", "synthetic_token\n" })
+        {
+            fixture.Settings.Secrets["rz-status"] = new(Token: malformed);
+            vm.Selected = null; vm.Selected = vm.Connections.Single(c => c.Id == "rz-status"); await vm.CredentialStatusRefresh;
+            Equal("Missing", vm.CredentialStatusKind);
+            True(!vm.CredentialStatus.Contains(malformed), "Malformed secret leaked into the credential indicator.");
+        }
         Equal(0, fixture.Source.FetchCalls); Equal(0, fixture.Printer.Calls);
     }
     private static async Task CheckboxCredentialStatusAsync()

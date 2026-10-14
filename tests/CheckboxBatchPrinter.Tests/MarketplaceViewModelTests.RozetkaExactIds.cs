@@ -8,8 +8,8 @@ internal static partial class MarketplaceViewModelTests
 {
     public static IReadOnlyList<(string Name, Func<Task> Test)> RozetkaExactIdScenarios =>
     [
-        ("STA Seller HTML receipt UUID survives duplicate accounts, global F5 and serialized restart without guessing from amount", () => StaAsync(RozetkaExactIdRestartAsync)),
-        ("STA Seller HTML exact evidence respects alias rejections, suppressions, manual decisions and canceled print exclusion", () => StaAsync(RozetkaExactIdDecisionsAsync))
+        ("STA Seller link receipt UUID survives duplicate accounts, global F5 and serialized restart without guessing from amount", () => StaAsync(RozetkaExactIdRestartAsync)),
+        ("STA Seller link exact evidence respects alias rejections, suppressions, manual decisions and canceled print exclusion", () => StaAsync(RozetkaExactIdDecisionsAsync))
     ];
 
     private const string SellerExactCode = "00Ab_Cd-123";
@@ -72,7 +72,7 @@ internal static partial class MarketplaceViewModelTests
         Equal("100", restarted.Receipts.Single(r => r.Id == ReceiptOne).OrderNumber);
         Equal(2, restored.AllOrderRows.Count); Equal(4, fixture.Cache.Snapshot.Orders.Count);
         True(fixture.Cache.Snapshot.Orders.Where(o => o.Number == "100").All(o =>
-            o.FiscalReferences.Any(r => r.Kind == FiscalDocumentKeyKind.CheckboxReceiptUrl && r.Source.Contains("type=html"))));
+            o.FiscalReferences.Any(r => r.Kind == FiscalDocumentKeyKind.CheckboxReceiptUrl && r.Source.Contains("type=link"))));
         Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
         Equal(0, fixture.Settings.SecretSaves); Equal(0, fixture.Settings.MarketplaceSaves);
         // Version 1.0.43's optimization graph cannot replay the old parser result.

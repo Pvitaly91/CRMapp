@@ -13,10 +13,11 @@ internal static partial class MarketplaceViewModelTests
     public static IReadOnlyList<(string Name, Func<Task> Test)> RozetkaSettingsScenarios =>
     [
         ("STA new Rozetka settings survive parent Save and reopening the real JSON and DPAPI stores", () => StaAsync(RozetkaNewConnectionRoundTripAsync)),
-        ("STA typed Rozetka drafts restore per shop without exposing stored passwords", () => StaAsync(RozetkaDraftSwitchRoundTripAsync)),
-        ("STA incomplete Rozetka pairs and invalid names reject all pending credentials before any store write", () => StaAsync(RozetkaIncompletePreflightAsync)),
-        ("STA late saved credential presence cannot overwrite a newly typed Rozetka login", () => StaAsync(RozetkaPresenceDoesNotOverwriteDraftAsync)),
-        ("STA prefilled saved Rozetka login stays Saved and a no-edit Save never rewrites secret bytes", () => StaAsync(RozetkaSavedLoginIsNotDraftAsync)),
+        ("STA typed Rozetka API-token drafts restore per shop without exposing stored tokens", () => StaAsync(RozetkaDraftSwitchRoundTripAsync)),
+        ("STA missing or malformed Rozetka tokens and invalid names reject drafts before any store write", () => StaAsync(RozetkaIncompletePreflightAsync)),
+        ("STA late saved credential presence cannot overwrite a newly typed Rozetka API-token", () => StaAsync(RozetkaPresenceDoesNotOverwriteDraftAsync)),
+        ("STA blank saved Rozetka token stays Saved and a no-edit Save never rewrites secret bytes", () => StaAsync(RozetkaSavedTokenIsNotDraftAsync)),
+        ("STA legacy Rozetka credentials require migration while unrelated settings remain editable", () => StaAsync(RozetkaLegacyMigrationAsync)),
         ("STA parent coordinator failure occurs after durable Rozetka persistence", () => StaAsync(RozetkaParentCallbackFailureAsync)),
         ("STA concurrent marketplace Save is rejected while a credential store write is pending", () => StaAsync(RozetkaConcurrentSaveAsync)),
         ("STA concurrent parent settings Save is rejected before duplicate app or credential writes", () => StaAsync(RozetkaConcurrentParentSaveAsync)),
@@ -38,8 +39,7 @@ internal static partial class MarketplaceViewModelTests
         marketplace.AddRozetkaCommand.Execute(null);
         var newId = marketplace.Selected!.Id;
         marketplace.Selected.Name = "Synthetic new Rozetka";
-        marketplace.Login = "synthetic_new_seller";
-        marketplace.Password = "synthetic_new_seller_password";
+        marketplace.Token = "synthetic_new_seller_api_token";
         Equal("Draft", marketplace.CredentialStatusKind);
         await parent.SaveAsync();
         Equal(1, files.Secrets.Saves);
@@ -47,17 +47,16 @@ internal static partial class MarketplaceViewModelTests
         var persisted = (await files.Settings.Inner.LoadAsync()).Connections.Single(c => c.Id == newId);
         Equal(MarketplaceKind.Rozetka, persisted.Marketplace);
         True(persisted.Enabled);
-        await AssertSyntheticCredentialsAsync(files, newId, "synthetic_new_seller", "synthetic_new_seller_password");
+        await AssertSyntheticCredentialsAsync(files, newId, "synthetic_new_seller_api_token");
         Equal("synthetic_existing_prom", (await files.Secrets.Inner.LoadAsync(SettingsPromId))!.Token);
 
         var reopened = files.CreateMarketplace();
         await reopened.LoadAsync();
         reopened.Selected = reopened.Connections.Single(c => c.Id == newId);
         await reopened.CredentialStatusRefresh;
-        Equal("synthetic_new_seller", reopened.Login);
-        Equal("", reopened.Password);
+        Equal("", reopened.Token);
         Equal("Saved", reopened.CredentialStatusKind);
-        True(reopened.CredentialStatus.Contains("Облікові дані Rozetka збережено"));
+        True(reopened.CredentialStatus.Contains("API-токен Rozetka збережено"));
         Equal(0, files.Base.Printer.Calls);
         Equal(0, files.Base.Source.FetchCalls);
         Equal(0, files.Base.Rozetka.FetchCalls);
@@ -68,40 +67,40 @@ internal static partial class MarketplaceViewModelTests
         using var files = new RozetkaSettingsFiles();
         await files.SeedAsync(SettingsConnection(SettingsRozetkaAId), SettingsConnection(SettingsRozetkaBId),
             SettingsConnection(SettingsPromId, MarketplaceKind.Prom));
-        await files.Secrets.Inner.SaveAsync(SettingsRozetkaAId, new(Login: "synthetic_seller_A", Password: "synthetic_stored_A"));
-        await files.Secrets.Inner.SaveAsync(SettingsRozetkaBId, new(Login: "synthetic_seller_B", Password: "synthetic_stored_B"));
+        await files.Secrets.Inner.SaveAsync(SettingsRozetkaAId, new(Token: "synthetic_stored_A"));
+        await files.Secrets.Inner.SaveAsync(SettingsRozetkaBId, new(Token: "synthetic_stored_B"));
         await files.Secrets.Inner.SaveAsync(SettingsPromId, new(Token: "synthetic_stored_prom"));
         var marketplace = files.CreateMarketplace();
         await marketplace.LoadAsync();
-        Equal("synthetic_seller_A", marketplace.Login); Equal("", marketplace.Password);
-        marketplace.Password = "synthetic_typed_A";
+        Equal("", marketplace.Token);
+        marketplace.Token = "synthetic_typed_A";
         marketplace.Selected = marketplace.Connections.Single(c => c.Id == SettingsRozetkaBId);
         await marketplace.CredentialStatusRefresh;
-        Equal("synthetic_seller_B", marketplace.Login); Equal("", marketplace.Password);
-        marketplace.Password = "synthetic_typed_B";
+        Equal("", marketplace.Token);
+        marketplace.Token = "synthetic_typed_B";
         marketplace.Selected = marketplace.Connections.Single(c => c.Id == SettingsPromId);
         await marketplace.CredentialStatusRefresh;
-        Equal("", marketplace.Token); Equal("", marketplace.Password);
+        Equal("", marketplace.Token);
         marketplace.Token = "synthetic_typed_prom";
         marketplace.Selected = marketplace.Connections.Single(c => c.Id == SettingsRozetkaAId);
         await marketplace.CredentialStatusRefresh;
-        Equal("synthetic_seller_A", marketplace.Login); Equal("synthetic_typed_A", marketplace.Password);
+        Equal("synthetic_typed_A", marketplace.Token);
         Equal("Draft", marketplace.CredentialStatusKind);
         marketplace.Selected = marketplace.Connections.Single(c => c.Id == SettingsRozetkaBId);
         await marketplace.CredentialStatusRefresh;
-        Equal("synthetic_seller_B", marketplace.Login); Equal("synthetic_typed_B", marketplace.Password);
+        Equal("synthetic_typed_B", marketplace.Token);
         await marketplace.SaveAsync();
         Equal(3, files.Secrets.Saves);
-        await AssertSyntheticCredentialsAsync(files, SettingsRozetkaAId, "synthetic_seller_A", "synthetic_typed_A");
-        await AssertSyntheticCredentialsAsync(files, SettingsRozetkaBId, "synthetic_seller_B", "synthetic_typed_B");
+        await AssertSyntheticCredentialsAsync(files, SettingsRozetkaAId, "synthetic_typed_A");
+        await AssertSyntheticCredentialsAsync(files, SettingsRozetkaBId, "synthetic_typed_B");
         Equal("synthetic_typed_prom", (await files.Secrets.Inner.LoadAsync(SettingsPromId))!.Token);
-        Equal("", marketplace.Password); Equal("synthetic_seller_B", marketplace.Login);
+        Equal("", marketplace.Token);
         Equal("Saved", marketplace.CredentialStatusKind);
     }
 
     private static async Task RozetkaIncompletePreflightAsync()
     {
-        foreach (var scenario in new[] { "login-only", "password-only", "empty-name" })
+        foreach (var scenario in new[] { "missing-token", "malformed-token", "unicode-token", "control-token", "trailing-control-token", "empty-name" })
         {
             using var files = new RozetkaSettingsFiles();
             await files.SeedAsync(SettingsConnection(SettingsPromId, MarketplaceKind.Prom));
@@ -110,8 +109,14 @@ internal static partial class MarketplaceViewModelTests
             var marketplace = files.CreateMarketplace(); await marketplace.LoadAsync();
             marketplace.Token = "synthetic_pending_prom";
             marketplace.AddRozetkaCommand.Execute(null);
-            if (scenario != "password-only") marketplace.Login = "synthetic_incomplete_seller";
-            if (scenario != "login-only") marketplace.Password = "synthetic_incomplete_password";
+            if (scenario != "missing-token") marketplace.Token = scenario switch
+            {
+                "malformed-token" => "synthetic token",
+                "unicode-token" => "токен",
+                "control-token" => "synthetic\ttoken",
+                "trailing-control-token" => "synthetic_token\n",
+                _ => "synthetic_valid_token"
+            };
             if (scenario == "empty-name") marketplace.Selected!.Name = " ";
             await MustRejectSettingsAsync(() => marketplace.SaveAsync());
             Equal(0, files.Secrets.Saves); Equal(0, files.Settings.Saves);
@@ -126,38 +131,66 @@ internal static partial class MarketplaceViewModelTests
     {
         using var files = new RozetkaSettingsFiles();
         await files.SeedAsync(SettingsConnection(SettingsRozetkaAId));
-        await files.Secrets.Inner.SaveAsync(SettingsRozetkaAId, new(Login: "synthetic_saved_seller", Password: "synthetic_saved_password"));
+        await files.Secrets.Inner.SaveAsync(SettingsRozetkaAId, new(Token: "synthetic_saved_api_token"));
         files.Secrets.BlockNextLoad(SettingsRozetkaAId);
         var marketplace = files.CreateMarketplace();
         var loading = marketplace.LoadAsync();
         await files.Secrets.LoadEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        marketplace.Login = "synthetic_typed_while_loading";
-        marketplace.Password = "synthetic_typed_password";
+        marketplace.Token = "synthetic_typed_while_loading";
         files.Secrets.ReleaseLoad();
         await loading.WaitAsync(TimeSpan.FromSeconds(5));
-        Equal("synthetic_typed_while_loading", marketplace.Login);
-        Equal("synthetic_typed_password", marketplace.Password);
+        Equal("synthetic_typed_while_loading", marketplace.Token);
         Equal("Draft", marketplace.CredentialStatusKind);
         Equal(0, files.Secrets.Saves); Equal(0, files.Settings.Saves);
     }
 
-    private static async Task RozetkaSavedLoginIsNotDraftAsync()
+    private static async Task RozetkaSavedTokenIsNotDraftAsync()
     {
         using var files = new RozetkaSettingsFiles();
         await files.SeedAsync(SettingsConnection(SettingsRozetkaAId));
-        await files.Secrets.Inner.SaveAsync(SettingsRozetkaAId, new(Login: "synthetic_saved_seller", Password: "synthetic_saved_password"));
+        await files.Secrets.Inner.SaveAsync(SettingsRozetkaAId, new(Token: "synthetic_saved_api_token"));
         var secretPath = files.SecretPath(SettingsRozetkaAId);
         var before = await File.ReadAllBytesAsync(secretPath);
         var marketplace = files.CreateMarketplace(); await marketplace.LoadAsync();
-        Equal("synthetic_saved_seller", marketplace.Login); Equal("", marketplace.Password);
+        Equal("", marketplace.Token);
         Equal("Saved", marketplace.CredentialStatusKind);
-        marketplace.Login = "synthetic_saved_seller";
+        marketplace.Token = "synthetic_discarded_token";
+        marketplace.Selected = null;
+        marketplace.Selected = marketplace.Connections.Single();
+        await marketplace.CredentialStatusRefresh;
+        Equal("synthetic_discarded_token", marketplace.Token);
+        marketplace.Token = " ";
         Equal("Saved", marketplace.CredentialStatusKind);
-        True(!await marketplace.SaveAsync(), "An unchanged displayed login was treated as a secret draft.");
+        True(!await marketplace.SaveAsync(), "A blank token was treated as a secret draft.");
         Equal(0, files.Secrets.Saves);
         True(before.SequenceEqual(await File.ReadAllBytesAsync(secretPath)), "No-edit Save changed encrypted credential bytes.");
-        Equal("synthetic_saved_seller", marketplace.Login); Equal("", marketplace.Password);
+        Equal("", marketplace.Token);
         Equal("Saved", marketplace.CredentialStatusKind);
+    }
+
+    private static async Task RozetkaLegacyMigrationAsync()
+    {
+        using var files = new RozetkaSettingsFiles();
+        await files.SeedAsync(SettingsConnection(SettingsRozetkaAId));
+        await files.Secrets.Inner.SaveAsync(SettingsRozetkaAId, new(Login: "synthetic_legacy_login", Password: "synthetic_legacy_password"));
+        var before = await File.ReadAllBytesAsync(files.SecretPath(SettingsRozetkaAId));
+        var marketplace = files.CreateMarketplace(); await marketplace.LoadAsync();
+        Equal("Missing", marketplace.CredentialStatusKind);
+        True(marketplace.CredentialStatus.Contains("Безпека API"));
+        True(!marketplace.CredentialStatus.Contains("synthetic_legacy"));
+        marketplace.CacheDays = 20;
+        True(!await marketplace.SaveAsync());
+        Equal(0, files.Secrets.Saves);
+        True(before.SequenceEqual(await File.ReadAllBytesAsync(files.SecretPath(SettingsRozetkaAId))));
+        await ExecuteAsync(marketplace.TestCommand);
+        True(marketplace.Status.Contains("API-токен"));
+        marketplace.Token = "synthetic_migrated_token";
+        True(await marketplace.SaveAsync());
+        Equal(SettingsRozetkaAId, marketplace.Selected!.Id);
+        Equal(20, (await files.Settings.Inner.LoadAsync()).CacheDays);
+        Equal("Saved", marketplace.CredentialStatusKind);
+        await AssertSyntheticCredentialsAsync(files, SettingsRozetkaAId, "synthetic_migrated_token");
+        Equal(0, files.Base.Printer.Calls); Equal(0, files.Base.Rozetka.FetchCalls);
     }
 
     private static async Task RozetkaParentCallbackFailureAsync()
@@ -174,14 +207,14 @@ internal static partial class MarketplaceViewModelTests
         await parent.LoadAsync(); await parent.EnsureMarketplaceLoadedAsync();
         marketplace.AddRozetkaCommand.Execute(null);
         var id = marketplace.Selected!.Id;
-        marketplace.Login = "synthetic_durable_seller"; marketplace.Password = "synthetic_durable_password";
+        marketplace.Token = "synthetic_durable_token";
         await MustRejectSettingsAsync(() => parent.SaveAsync());
         Equal(1, callbacks); Equal(1, files.Settings.Saves); Equal(1, files.Secrets.Saves);
         True((await files.Settings.Inner.LoadAsync()).Connections.Any(c => c.Id == id));
-        await AssertSyntheticCredentialsAsync(files, id, "synthetic_durable_seller", "synthetic_durable_password");
+        await AssertSyntheticCredentialsAsync(files, id, "synthetic_durable_token");
         var reopened = files.CreateMarketplace(); await reopened.LoadAsync();
         reopened.Selected = reopened.Connections.Single(c => c.Id == id); await reopened.CredentialStatusRefresh;
-        Equal("Saved", reopened.CredentialStatusKind); Equal("synthetic_durable_seller", reopened.Login);
+        Equal("Saved", reopened.CredentialStatusKind); Equal("", reopened.Token);
         True(!parent.IsBusy && !marketplace.IsBusy);
     }
 
@@ -190,7 +223,7 @@ internal static partial class MarketplaceViewModelTests
         using var files = new RozetkaSettingsFiles();
         await files.SeedAsync(SettingsConnection(SettingsRozetkaAId));
         var marketplace = files.CreateMarketplace(); await marketplace.LoadAsync();
-        marketplace.Login = "synthetic_concurrent_seller"; marketplace.Password = "synthetic_concurrent_password";
+        marketplace.Token = "synthetic_concurrent_token";
         files.Secrets.BlockNextSave();
         var first = marketplace.SaveAsync();
         await files.Secrets.SaveEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -199,7 +232,7 @@ internal static partial class MarketplaceViewModelTests
         finally { files.Secrets.ReleaseSave(); }
         await first.WaitAsync(TimeSpan.FromSeconds(5));
         Equal(1, files.Settings.Saves); Equal(1, files.Secrets.Saves); True(!marketplace.IsBusy);
-        await AssertSyntheticCredentialsAsync(files, SettingsRozetkaAId, "synthetic_concurrent_seller", "synthetic_concurrent_password");
+        await AssertSyntheticCredentialsAsync(files, SettingsRozetkaAId, "synthetic_concurrent_token");
     }
 
     private static async Task RozetkaConcurrentParentSaveAsync()
@@ -208,7 +241,7 @@ internal static partial class MarketplaceViewModelTests
         await files.SeedAsync(SettingsConnection(SettingsRozetkaAId));
         var marketplace = files.CreateMarketplace(); var parent = files.CreateParent(marketplace);
         await parent.LoadAsync(); await parent.EnsureMarketplaceLoadedAsync();
-        marketplace.Login = "synthetic_parent_seller"; marketplace.Password = "synthetic_parent_password";
+        marketplace.Token = "synthetic_parent_token";
         files.Secrets.BlockNextSave();
         var first = parent.SaveAsync();
         await files.Secrets.SaveEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -237,21 +270,20 @@ internal static partial class MarketplaceViewModelTests
             marketplace.AddRozetkaCommand.Execute(null); await marketplace.CredentialStatusRefresh;
             LayoutContent(window); await DrainDispatcherAsync();
             id = marketplace.Selected!.Id;
-            var login = (TextBox)window.FindName("RozetkaLoginInput");
-            var password = (PasswordBox)window.FindName("RozetkaPasswordInput");
+            var token = (PasswordBox)window.FindName("RozetkaTokenInput");
             var indicator = (TextBlock)window.FindName("MarketplaceCredentialIndicator");
-            login.Text = "synthetic_ui_seller"; password.Password = "synthetic_ui_password";
+            token.Password = "synthetic_ui_api_token";
             await DrainDispatcherAsync();
-            Equal("synthetic_ui_seller", marketplace.Login); Equal("synthetic_ui_password", marketplace.Password);
+            Equal("synthetic_ui_api_token", marketplace.Token);
             Equal("Draft", indicator.Tag?.ToString());
             marketplace.Selected = marketplace.Connections.Single(c => c.Id == SettingsPromId);
             await marketplace.CredentialStatusRefresh; await DrainDispatcherAsync();
-            Equal("", password.Password); Equal("", ((PasswordBox)window.FindName("PromTokenInput")).Password);
+            Equal("", token.Password); Equal("", ((PasswordBox)window.FindName("PromTokenInput")).Password);
             marketplace.Selected = marketplace.Connections.Single(c => c.Id == id);
             await marketplace.CredentialStatusRefresh; await DrainDispatcherAsync();
-            Equal("synthetic_ui_seller", login.Text); Equal("synthetic_ui_password", password.Password);
+            Equal("synthetic_ui_api_token", token.Password);
             await parent.SaveAsync(); LayoutContent(window); await DrainDispatcherAsync();
-            Equal("Saved", indicator.Tag?.ToString()); Equal("synthetic_ui_seller", login.Text); Equal("", password.Password);
+            Equal("Saved", indicator.Tag?.ToString()); Equal("", token.Password);
             RenderSyntheticContent(window, "rozetka-settings-saved.png");
         }
         finally { window.Close(); }
@@ -264,15 +296,14 @@ internal static partial class MarketplaceViewModelTests
             reopenedWindow.ShowMarketplaceTab(); await reopenedParent.EnsureMarketplaceLoadedAsync();
             reopenedMarketplace.Selected = reopenedMarketplace.Connections.Single(c => c.Id == id);
             await reopenedMarketplace.CredentialStatusRefresh; LayoutContent(reopenedWindow); await DrainDispatcherAsync();
-            Equal("synthetic_ui_seller", ((TextBox)reopenedWindow.FindName("RozetkaLoginInput")).Text);
-            Equal("", ((PasswordBox)reopenedWindow.FindName("RozetkaPasswordInput")).Password);
+            Equal("", ((PasswordBox)reopenedWindow.FindName("RozetkaTokenInput")).Password);
             var indicator = (TextBlock)reopenedWindow.FindName("MarketplaceCredentialIndicator");
             Equal("Saved", indicator.Tag?.ToString());
-            True(indicator.Text.Contains("збережено") && !indicator.Text.Contains("synthetic_ui_password"));
+            True(indicator.Text.Contains("збережено") && !indicator.Text.Contains("synthetic_ui_api_token"));
             RenderSyntheticContent(reopenedWindow, "rozetka-settings-reopened.png");
         }
         finally { reopenedWindow.Close(); }
-        await AssertSyntheticCredentialsAsync(files, id, "synthetic_ui_seller", "synthetic_ui_password");
+        await AssertSyntheticCredentialsAsync(files, id, "synthetic_ui_api_token");
         Equal(0, files.Base.Printer.Calls); Equal(0, files.Base.Source.FetchCalls); Equal(0, files.Base.Rozetka.FetchCalls);
     }
 
@@ -304,7 +335,7 @@ internal static partial class MarketplaceViewModelTests
             await parent.LoadAsync(); await parent.EnsureMarketplaceLoadedAsync();
             editor.AddRozetkaCommand.Execute(null);
             var addedId = editor.Selected!.Id;
-            editor.Login = "synthetic_managed_rozetka"; editor.Password = "synthetic_managed_password";
+            editor.Token = "synthetic_managed_rozetka_api_token";
             await parent.SaveAsync();
             files.Base.Rozetka.Orders = [Order([ReceiptTwo]) with
                 { Key = new(MarketplaceKind.Rozetka, addedId, "managed-rz-order"), Number = "MANAGED-RZ" }];
@@ -348,12 +379,12 @@ internal static partial class MarketplaceViewModelTests
         True(rejected, "Expected invalid or concurrent settings operation to be rejected.");
     }
 
-    private static async Task AssertSyntheticCredentialsAsync(RozetkaSettingsFiles files, string id, string login, string password)
+    private static async Task AssertSyntheticCredentialsAsync(RozetkaSettingsFiles files, string id, string token)
     {
         var secret = await new DpapiMarketplaceSecretStore(files.SecretsDirectory).LoadAsync(id);
-        Equal(login, secret!.Login); Equal(password, secret.Password);
+        Equal(token, secret!.Token); Equal("", secret.Login); Equal("", secret.Password);
         var protectedBytes = await File.ReadAllBytesAsync(files.SecretPath(id));
-        foreach (var marker in new[] { login, password })
+        foreach (var marker in new[] { token })
         {
             True(!Encoding.UTF8.GetString(protectedBytes).Contains(marker), "Synthetic credential was persisted as plaintext.");
             True(!Encoding.Unicode.GetString(protectedBytes).Contains(marker), "Synthetic credential was persisted as plaintext.");

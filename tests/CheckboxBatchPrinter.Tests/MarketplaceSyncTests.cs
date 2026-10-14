@@ -398,8 +398,8 @@ internal static class MarketplaceSyncTests
     {
         Values =
         {
-            ["seller-a-primary"] = new(Login: "seller", Password: "synthetic-secret "),
-            ["seller-z-alias"] = new(Login: " seller ", Password: "synthetic-secret ")
+            ["seller-a-primary"] = new(Token: "synthetic-api-token", Login: "old-seller", Password: "old-password"),
+            ["seller-z-alias"] = new(Token: " synthetic-api-token ", Login: "different-legacy-login", Password: "different-legacy-password")
         }
     };
 
@@ -476,9 +476,9 @@ internal static class MarketplaceSyncTests
         var secrets = DuplicateSellerSecrets();
         foreach (var (id, credential) in new[]
         {
-            ("different-password", new MarketplaceCredentials(Login: "seller", Password: "synthetic-secret")),
-            ("different-login", new MarketplaceCredentials(Login: "Seller", Password: "synthetic-secret ")),
-            ("unreadable", new MarketplaceCredentials(Login: "seller", Password: "synthetic-secret "))
+            ("different-token-a", new MarketplaceCredentials(Token: "separate-api-token-a", Login: "old-seller", Password: "old-password")),
+            ("different-token-b", new MarketplaceCredentials(Token: "separate-api-token-b", Login: "old-seller", Password: "old-password")),
+            ("unreadable", new MarketplaceCredentials(Token: "synthetic-api-token"))
         })
         {
             config.Connections.Add(new() { Id = id, Marketplace = MarketplaceKind.Rozetka, Enabled = true });
@@ -496,7 +496,7 @@ internal static class MarketplaceSyncTests
         True(!first.States.Single(s => s.ConnectionId == "unreadable").Complete);
         True(secrets.LoadCounts.Values.All(count => count == 1));
         // Rotation is observed on the next synchronization, not retained as an old alias proof.
-        secrets.Values["seller-z-alias"] = new(Login: "seller", Password: "rotated-password");
+        secrets.Values["seller-z-alias"] = new(Token: "rotated-api-token");
         var second = await service.SynchronizeAsync(config, Range, []);
         Equal(7, client.FetchCount); Equal(4, second.Orders.Count);
         Equal("seller-z-alias", second.Orders.Single(o => o.Key.ConnectionId == "seller-z-alias").Status);
@@ -560,10 +560,10 @@ internal static class MarketplaceSyncTests
         {
             (MarketplaceKind.Prom, HttpMethod.Get, "https://my.prom.ua/api/v1/orders/list?limit=100"),
             (MarketplaceKind.Prom, HttpMethod.Get, "https://my.prom.ua/api/v1/orders/42"),
-            (MarketplaceKind.Rozetka, HttpMethod.Post, "https://api-seller.rozetka.com.ua/sites"),
             (MarketplaceKind.Rozetka, HttpMethod.Get, "https://api-seller.rozetka.com.ua/orders/search"),
             (MarketplaceKind.Rozetka, HttpMethod.Get, "https://api-seller.rozetka.com.ua/orders/42"),
-            (MarketplaceKind.Rozetka, HttpMethod.Get, "https://api-seller.rozetka.com.ua/prro/receipt/42")
+            (MarketplaceKind.Rozetka, HttpMethod.Get, "https://api-seller.rozetka.com.ua/prro/receipt/42?type=link"),
+            (MarketplaceKind.Rozetka, HttpMethod.Get, "https://api-seller.rozetka.com.ua/prro/receipt-status/42")
         };
         foreach (var (market, method, url) in allowed)
             await transport.SendAsync(() => new(method, url), market);
@@ -578,8 +578,16 @@ internal static class MarketplaceSyncTests
             (MarketplaceKind.Prom, HttpMethod.Get, "https://my.prom.ua:8443/api/v1/orders/list"),
             (MarketplaceKind.Prom, HttpMethod.Get, "https://my.prom.ua/api/v1/orders/list#fragment"),
             (MarketplaceKind.Rozetka, HttpMethod.Put, "https://api-seller.rozetka.com.ua/orders/42"),
+            (MarketplaceKind.Rozetka, HttpMethod.Post, "https://api-seller.rozetka.com.ua/sites"),
             (MarketplaceKind.Rozetka, HttpMethod.Delete, "https://api-seller.rozetka.com.ua/orders/42"),
             (MarketplaceKind.Rozetka, HttpMethod.Post, "https://api-seller.rozetka.com.ua/prro/receipt/42"),
+            (MarketplaceKind.Rozetka, HttpMethod.Get, "https://api-seller.rozetka.com.ua/prro/receipt/42"),
+            (MarketplaceKind.Rozetka, HttpMethod.Get, "https://api-seller.rozetka.com.ua/prro/receipt/42?type=pdf"),
+            (MarketplaceKind.Rozetka, HttpMethod.Get, "https://api-seller.rozetka.com.ua/prro/receipt/42?type=html"),
+            (MarketplaceKind.Rozetka, HttpMethod.Get, "https://api-seller.rozetka.com.ua/prro/receipt/42?type=link&type=pdf"),
+            (MarketplaceKind.Rozetka, HttpMethod.Get, "https://api-seller.rozetka.com.ua/prro/receipt/42?type=link&type=link"),
+            (MarketplaceKind.Rozetka, HttpMethod.Get, "https://api-seller.rozetka.com.ua/prro/receipt/42?type="),
+            (MarketplaceKind.Rozetka, HttpMethod.Get, "https://api-seller.rozetka.com.ua/prro/receipt/42?type=link&format=pdf"),
             (MarketplaceKind.Rozetka, HttpMethod.Post, "https://api.checkbox.ua/api/v1/receipts/sell"),
             (MarketplaceKind.Prom, HttpMethod.Get, "https://api-seller.rozetka.com.ua/orders/42")
         };

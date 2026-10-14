@@ -225,8 +225,8 @@ internal static class NovaPoshtaRequestPolicyTests
             using var http = new HttpClient(handler);
             var transport = new ShippingLabelHttp(http, (wait, _) => { waits.Add(wait); return Task.CompletedTask; },
                 new(new Clock()));
-            await transport.SendAsync(() => new(seller ? HttpMethod.Post : HttpMethod.Get,
-                seller ? "https://api-seller.rozetka.com.ua/sites" : "https://rz-delivery.rozetka.ua/api/track/synthetic"), "application/json", default);
+            await transport.SendAsync(() => new(HttpMethod.Get,
+                seller ? "https://api-seller.rozetka.com.ua/ttns/ttn-list?ttn=20400000000001" : "https://rz-delivery.rozetka.ua/api/track/synthetic"), "application/json", default);
             Check(handler.Calls == 2 && waits.SequenceEqual(new[] { TimeSpan.FromSeconds(7) }), "Existing RD/Seller retry behavior changed.");
         }
     }

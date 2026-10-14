@@ -14,7 +14,7 @@ internal static partial class MarketplaceViewModelTests
     [
         ("STA identical Rozetka accounts collapse cached rows without changing manual alias links after F5 and restart", () => StaAsync(RozetkaDuplicateCachedManualAsync)),
         ("STA duplicate Rozetka baskets suggest once and an alias rejection cannot be bypassed", () => StaAsync(RozetkaDuplicateBasketAsync)),
-        ("STA changed Rozetka password separates rows and restores the original saved manual connection key", () => StaAsync(RozetkaDuplicatePasswordChangeAsync)),
+        ("STA changed Rozetka API token separates rows and restores the original saved manual connection key", () => StaAsync(RozetkaDuplicateTokenChangeAsync)),
         ("Rozetka deduplication requires complete readable exact credentials and an enabled account", RozetkaDuplicateCredentialProofAsync),
         ("Rozetka duplicate primary is deterministic while other accounts and Prom identities stay separate", RozetkaDuplicateIdentityBoundariesAsync),
         ("Rozetka duplicate projection preserves contradictory fiscal evidence and the newest order fields", RozetkaDuplicateEvidenceAsync),
@@ -30,8 +30,8 @@ internal static partial class MarketplaceViewModelTests
         // Reverse insertion proves that the canonical ID does not depend on settings order.
         fixture.Settings.Market.Connections.Add(new() { Id = DuplicateRozetkaId, Marketplace = MarketplaceKind.Rozetka, Enabled = true, Name = "Same displayed name" });
         fixture.Settings.Market.Connections.Add(new() { Id = "rz-test", Marketplace = MarketplaceKind.Rozetka, Enabled = true, Name = "Same displayed name" });
-        fixture.Settings.Secrets["rz-test"] = new(Login: "synthetic-seller", Password: "synthetic-password ");
-        fixture.Settings.Secrets[DuplicateRozetkaId] = new(Login: " synthetic-seller ", Password: "synthetic-password ");
+        fixture.Settings.Secrets["rz-test"] = new(Token: "synthetic-api-token", Login: "legacy-seller", Password: "legacy-password");
+        fixture.Settings.Secrets[DuplicateRozetkaId] = new(Token: " synthetic-api-token ", Login: "different-legacy-seller", Password: "different-legacy-password");
         var order = BasketOrder() with
         {
             Key = new(MarketplaceKind.Rozetka, "rz-test", "908483548"), Number = "908483548",
@@ -95,7 +95,7 @@ internal static partial class MarketplaceViewModelTests
         }
     }
 
-    private static async Task RozetkaDuplicatePasswordChangeAsync()
+    private static async Task RozetkaDuplicateTokenChangeAsync()
     {
         var fixture = DuplicateRozetkaFixture();
         var account = PrintAccountContext.Create(fixture.Settings.App);
@@ -104,7 +104,7 @@ internal static partial class MarketplaceViewModelTests
         var (main, workspace) = fixture.Create();
         await main.RefreshAsync(); main.SelectedTabIndex = 1; await main.PrepareOrdersAsync(); await workspace.SyncAsync();
         Equal(1, workspace.Orders.Cast<object>().Count());
-        fixture.Settings.Secrets[DuplicateRozetkaId] = new(Login: "synthetic-seller", Password: "different-password");
+        fixture.Settings.Secrets[DuplicateRozetkaId] = new(Token: "different-api-token", Login: "legacy-seller", Password: "legacy-password");
         await workspace.SyncAsync();
         Equal(2, workspace.Orders.Cast<object>().Count());
         Equal(originalKey, main.Receipts.Single().OrderMatch!.Order!.Key);
@@ -146,14 +146,12 @@ internal static partial class MarketplaceViewModelTests
     {
         var fixture = DuplicateRozetkaFixture();
         var secrets = new DuplicateRozetkaSecrets();
-        secrets.Values["rz-test"] = new(Login: "synthetic-seller", Password: "synthetic-password ");
+        secrets.Values["rz-test"] = new(Token: "synthetic-api-token");
         foreach (var value in new MarketplaceCredentials?[]
         {
-            null, new(Login: "", Password: "synthetic-password "), new(Login: "synthetic-seller", Password: ""),
-            new(Login: "synthetic-seller", Password: "synthetic-password"), // Password whitespace is significant.
-            new(Login: "Synthetic-seller", Password: "synthetic-password "),
-            new(Login: "synthetic-seller\n", Password: "synthetic-password "),
-            new(Login: "synthetic-seller", Password: "synthetic-password \n")
+            null, new(Token: ""), new(Login: "legacy-seller", Password: "legacy-password"),
+            new(Token: "different-token"), new(Token: "Synthetic-api-token"),
+            new(Token: "synthetic-api-token\n"), new(Token: "synthetic-api-token extra"), new(Token: "токен")
         })
         {
             secrets.Values[DuplicateRozetkaId] = value;
@@ -175,8 +173,8 @@ internal static partial class MarketplaceViewModelTests
         var fixture = DuplicateRozetkaFixture();
         fixture.Settings.Market.Connections.Add(new() { Id = "other-seller", Marketplace = MarketplaceKind.Rozetka, Enabled = true, Name = "Same displayed name" });
         fixture.Settings.Market.Connections.Add(new() { Id = "prom-test", Marketplace = MarketplaceKind.Prom, Enabled = true, Name = "Same displayed name" });
-        fixture.Settings.Secrets["other-seller"] = new(Login: "different-seller", Password: "synthetic-password ");
-        fixture.Settings.Secrets["prom-test"] = new(Token: "synthetic-password ", Login: "synthetic-seller", Password: "synthetic-password ");
+        fixture.Settings.Secrets["other-seller"] = new(Token: "different-api-token", Login: "legacy-seller", Password: "legacy-password");
+        fixture.Settings.Secrets["prom-test"] = new(Token: "synthetic-api-token", Login: "legacy-seller", Password: "legacy-password");
         var first = fixture.Rozetka.Orders[0];
         var source = fixture.Rozetka.Orders.Concat([
             first with { Key = first.Key with { ConnectionId = "other-seller" } },

@@ -102,7 +102,8 @@ internal static class ShippingLabelsTests
         public Task SaveAsync(ShippingLabelSettings value, CancellationToken ct) { Config = value; return Task.CompletedTask; }
         Task<MarketplaceSettings> IMarketplaceSettingsStore.LoadAsync(CancellationToken ct) => Task.FromResult(Market);
         public Task SaveAsync(MarketplaceSettings value, CancellationToken ct) { Market = value; return Task.CompletedTask; }
-        public Task<MarketplaceCredentials?> LoadAsync(string id, CancellationToken ct) => Task.FromResult<MarketplaceCredentials?>(new(Login: "synthetic", Password: "synthetic-secret"));
+        public MarketplaceCredentials SellerCredentials = new(Token: "synthetic-seller-token", Login: "synthetic", Password: "synthetic-secret");
+        public Task<MarketplaceCredentials?> LoadAsync(string id, CancellationToken ct) => Task.FromResult<MarketplaceCredentials?>(SellerCredentials);
         public Task SaveAsync(string id, MarketplaceCredentials value, CancellationToken ct) => Task.CompletedTask;
     }
     private sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> response) : HttpMessageHandler
@@ -147,12 +148,16 @@ internal static class ShippingLabelsTests
         var stores = new Stores(); var id = Guid.NewGuid().ToString("N");
         stores.Market.Connections.Add(new() { Id = id, Marketplace = MarketplaceKind.Rozetka, Enabled = true });
         stores.Config = stores.Config with { NovaPoshtaSellerConnectionId = id };
-        var handler = new Handler(request => request.RequestUri!.AbsolutePath switch
+        var handler = new Handler(request =>
         {
-            "/sites" => Json(new { success = true, content = new { access_token = "synthetic-seller-token" } }),
+            Check(request.Method == HttpMethod.Get && request.Headers.Authorization?.Scheme == "Bearer" &&
+                request.Headers.Authorization.Parameter == "synthetic-seller-token", "Seller label did not use the configured API token directly.");
+            return request.RequestUri!.AbsolutePath switch
+            {
             "/ttns/ttn-list" => Json(new { success = true, content = new { ttn_list = new[] { new { Ref = "10000000-0000-0000-0000-000000000001", IntDocNumber = "00123456", SeatsAmount = "2" } } } }),
             "/ttns/ttn-print/zebra" => new(HttpStatusCode.OK) { Content = new ByteArrayContent(SyntheticShippingPdf.Create(pages: 2)) { Headers = { ContentType = new("application/pdf") } } },
             _ => throw new Exception("Unexpected write route.")
+            };
         });
         using var client = new HttpClient(handler);
         var source = new OfficialShippingLabelSource(new(client), stores, stores, stores);
@@ -162,11 +167,15 @@ internal static class ShippingLabelsTests
             var document = await source.GetAsync(shipment);
             Check(document.DocumentId != shipment.TrackingNumber && Guid.TryParse(document.DocumentId, out _) && document.ExpectedPages == 2, "Public TTN treated as Ref.");
         }
-        Check(handler.Paths.Count == 6 && handler.Paths.Last().Contains("ttnNumbers%5B%5D=00123456"), "Zebra request differs.");
+        Check(handler.Paths.Count == 4 && handler.Paths.Last().Contains("ttnNumbers%5B%5D=00123456"), "Zebra request differs.");
+        stores.SellerCredentials = new(Login: "synthetic", Password: "synthetic-secret");
+        try { await source.GetAsync(Shipment(ShippingCarrier.NovaPoshta)); throw new Exception("Legacy cabinet credentials were used."); }
+        catch (ShippingLabelException ex) { Check(ex.MissingCredentials, "Legacy Seller settings did not explain API token migration."); }
+        Check(handler.Paths.Count == 4, "Missing API token caused a cabinet login or another HTTP request.");
     }
     private static async Task ReadOnlyRoutes()
     {
-        foreach (var route in new[] { "https://rz-delivery.rozetka.ua/api/track", "https://rz-delivery.rozetka.ua/api/registry", "https://api-seller.rozetka.com.ua/ttns/create", "https://evil.test/api/track/00123" })
+        foreach (var route in new[] { "https://api-seller.rozetka.com.ua/sites", "https://rz-delivery.rozetka.ua/api/track", "https://rz-delivery.rozetka.ua/api/registry", "https://api-seller.rozetka.com.ua/ttns/create", "https://evil.test/api/track/00123" })
         foreach (var method in new[] { HttpMethod.Get, HttpMethod.Post, HttpMethod.Patch, HttpMethod.Delete })
         {
             using var request = new HttpRequestMessage(method, route);

@@ -89,10 +89,10 @@ public sealed class MarketplaceHttpTransport(HttpClient client,
             MarketplaceKind.Prom => uri.Host == "my.prom.ua" && request.Method == HttpMethod.Get &&
                 (uri.AbsolutePath == "/api/v1/orders/list" || Regex.IsMatch(uri.AbsolutePath, @"^/api/v1/orders/\d+$")),
             MarketplaceKind.Rozetka => uri.Host == "api-seller.rozetka.com.ua" &&
-                ((request.Method == HttpMethod.Post && uri.AbsolutePath == "/sites") ||
-                 (request.Method == HttpMethod.Get && (uri.AbsolutePath == "/orders/search" ||
-                    Regex.IsMatch(uri.AbsolutePath, @"^/orders/\d+$") || Regex.IsMatch(uri.AbsolutePath, @"^/prro/receipt/\d+$") ||
-                    Regex.IsMatch(uri.AbsolutePath, @"^/prro/receipt-status/\d+$")))),
+                (request.Method == HttpMethod.Get && (uri.AbsolutePath == "/orders/search" ||
+                    Regex.IsMatch(uri.AbsolutePath, @"^/orders/\d+$") ||
+                    (Regex.IsMatch(uri.AbsolutePath, @"^/prro/receipt/\d+$") && uri.Query == "?type=link") ||
+                    Regex.IsMatch(uri.AbsolutePath, @"^/prro/receipt-status/\d+$"))),
             _ => false
         };
         if (!allowed) throw new InvalidOperationException("Операція не входить до дозволеного переліку читання маркетплейсів.");

@@ -2,8 +2,8 @@ using CheckboxBatchPrinter.Core.Models;
 
 namespace CheckboxBatchPrinter.Core.Services;
 
-// Session-only equivalence: identical nonempty Prom bearer tokens or Rozetka
-// seller login/password pairs prove that enabled connections read the same account.
+// Session-only equivalence: identical nonempty marketplace API tokens prove
+// that enabled connections read the same account.
 // Names/order numbers alone do not. No credentials or alias mappings are persisted.
 public sealed class MarketplaceOrderDeduplication
 {
@@ -32,10 +32,8 @@ public sealed class MarketplaceOrderDeduplication
                 }
                 else
                 {
-                    if (string.IsNullOrWhiteSpace(credential?.Login) || string.IsNullOrEmpty(credential.Password) ||
-                        credential.Login.Any(char.IsControl) || credential.Password.Any(char.IsControl)) continue;
-                    // Match the authentication request: trim the login, retain the exact password.
-                    identity = (MarketplaceKind.Rozetka, credential.Login.Trim(), credential.Password);
+                    if (!RozetkaApiCredentials.ValidToken(credential?.Token)) continue;
+                    identity = (MarketplaceKind.Rozetka, "", RozetkaApiCredentials.RequireToken(credential));
                 }
                 if (!accounts.TryGetValue(identity, out var primary)) accounts[identity] = primary = connection.Id;
                 result._aliases[(connection.Marketplace, connection.Id)] = primary;

@@ -9,18 +9,21 @@ using CheckboxBatchPrinter.Core.Models;
 namespace CheckboxBatchPrinter.Core.Services;
 
 /// <summary>Documented Seller API operations only; no order/PRRO mutation endpoints.</summary>
-public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IMarketplaceOrdersClient
+public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport, TimeProvider? timeProvider = null) : IMarketplaceOrdersClient
 {
     private const string BaseUrl = "https://api-seller.rozetka.com.ua";
     private const string ListExpand = "delivery,user,purchases,status_data,prro,carrier";
     private const string DetailExpand = "delivery,user,purchases,item_details,status_data";
     private const string FiscalLinkSource = "GET /prro/receipt/{order_id}?type=link: content.url";
-    private const string FiscalHtmlSource = "GET /prro/receipt/{order_id}?type=html: content.url";
     private const int PageLimit = 1000;
     private const int FiscalCacheLimit = 1024;
+    private readonly TimeProvider _clock = timeProvider ?? TimeProvider.System;
     private readonly object _fiscalCacheLock = new();
     private readonly Dictionary<FiscalCacheKey, CachedFiscalUrl> _fiscalCache = new();
     private readonly LinkedList<FiscalCacheKey> _fiscalCacheRecency = new();
+    private readonly Dictionary<string, PrroPause> _prroPauses = new();
+    private PrroPause? _prroOverflowPause;
+    private readonly Dictionary<string, DateTimeOffset> _apiDeniedUntil = new();
     private static readonly TimeZoneInfo Kyiv = TimeZoneInfo.FindSystemTimeZoneById("FLE Standard Time");
     public MarketplaceKind Marketplace => MarketplaceKind.Rozetka;
 
@@ -28,7 +31,7 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
         CancellationToken cancellationToken = default)
     {
         Validate(connection, credentials);
-        var session = await LoginAsync(credentials, cancellationToken);
+        var session = CreateSession(credentials);
         using var json = await ReadAsync("/orders/search?page=1&types=1", session, credentials, cancellationToken);
         if (Field(Field(json.RootElement, "content"), "orders").ValueKind != JsonValueKind.Array)
             throw new InvalidDataException("Rozetka не повернула список замовлень для перевірки доступу.");
@@ -45,7 +48,7 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
         var warning = "Rozetka: дати без часового поясу трактуються як Europe/Kyiv; API не документує пояс.";
         try
         {
-            var session = await LoginAsync(credentials, cancellationToken);
+            var session = CreateSession(credentials);
             var from = TimeZoneInfo.ConvertTime(range.From, Kyiv).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
             var to = TimeZoneInfo.ConvertTime(range.ToExclusive.AddTicks(-1), Kyiv).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
             for (var page = 1; page <= PageLimit; page++)
@@ -108,7 +111,8 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
         }
         catch (Exception exception) when (IsRecoverable(exception, cancellationToken))
         {
-            return new(orders.Values.ToArray(), false, "Не вдалося отримати всі замовлення Rozetka; показано отриману частину.");
+            return new(orders.Values.ToArray(), false, exception is MarketplaceApiException api
+                ? api.Message : "Не вдалося отримати всі замовлення Rozetka; показано отриману частину.");
         }
     }
 
@@ -118,7 +122,7 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
         Validate(connection, credentials);
         if (string.IsNullOrWhiteSpace(orderId) || !orderId.All(char.IsAsciiDigit))
             throw new ArgumentException("ID замовлення Rozetka має містити лише цифри.");
-        var session = await LoginAsync(credentials, cancellationToken);
+        var session = CreateSession(credentials);
         using var detail = await ReadAsync($"/orders/{orderId}?expand={DetailExpand}", session, credentials, cancellationToken);
         var data = Field(detail.RootElement, "content");
         if (Text(data, "id") != orderId) throw new InvalidDataException("Rozetka повернула інше замовлення.");
@@ -131,14 +135,15 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
     {
         cancellationToken.ThrowIfCancellationRequested();
         var cacheKey = new FiscalCacheKey(CredentialFingerprint(credentials), connectionId, orderId);
-        // Fresh order fields (including cancellation), PRRO assertions and update time must
-        // still agree. Only immutable, strictly parsed Checkbox UUID URLs are reused.
+        // Fresh order fields and credentials must still agree. Failures and incomplete
+        // references have a bounded retry interval instead of being retried every refresh.
         var fingerprint = FiscalFingerprint(data);
-        if (!session.CanReadPrro)
-        {
-            ForgetFiscalUrl(cacheKey);
-            return (null, "Немає права prro_access для читання посилання. Це не означає, що чека немає.", "");
-        }
+        // A pause must not erase previously confirmed immutable evidence. Changed order
+        // assertions still invalidate the entry before any cached reference is returned.
+        var cacheHit = TryGetFiscalUrl(cacheKey, fingerprint, out var cached);
+        if (cacheHit && cached.Url is not null) return (cached.Url, cached.Status, cached.Source);
+        if (GetPrroPause(cacheKey.Credentials) is { } pause) return (null, pause.Status, "");
+        if (cacheHit) return (cached.Url, cached.Status, cached.Source);
         try
         {
             var status = Integer(Field(data, "prro"), "prro_receipt_status");
@@ -154,71 +159,46 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
                 return (null, status == 0 ? "Rozetka повідомляє: чек ще не фіскалізований." :
                     "Статус PRRO невідомий; наявність чека не встановлена.", "");
             }
-            if (TryGetFiscalUrl(cacheKey, fingerprint, out var cached)) return (cached.Url, "", cached.Source);
-            string? displayUrl = null;
-            var displaySource = "";
-            var authorizationFailed = false;
-            var warning = "PRRO не повернув перевіреного посилання на чек.";
-            try
+            using var receipt = await ReadAsync($"/prro/receipt/{orderId}?type=link", session, credentials, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            var candidate = Text(Field(receipt.RootElement, "content"), "url");
+            if (IsSafeDisplayUrl(candidate))
             {
-                using var receipt = await ReadAsync($"/prro/receipt/{orderId}?type=link", session, credentials, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                var candidate = Text(Field(receipt.RootElement, "content"), "url");
-                if (IsSafeDisplayUrl(candidate))
+                if (CheckboxReceiptReference.TryParseUrl(candidate, out var parsed))
                 {
-                    if (CheckboxReceiptReference.TryParseUrl(candidate, out var parsed))
-                    {
-                        if (parsed.ReceiptId.Length > 0) RememberFiscalUrl(cacheKey, fingerprint, candidate, FiscalLinkSource);
-                        return (candidate, "", FiscalLinkSource);
-                    }
-                    displayUrl = candidate;
-                    displaySource = FiscalLinkSource;
-                    warning = "Формат посилання PRRO не підтверджений як Checkbox; автоприв’язку за ним не виконано.";
+                    RememberFiscalUrl(cacheKey, fingerprint, candidate, FiscalLinkSource, "",
+                        parsed.ReceiptId.Length > 0 ? null : TimeSpan.FromMinutes(5));
+                    return (candidate, "", FiscalLinkSource);
                 }
+                const string warning = "Формат посилання PRRO не підтверджений як Checkbox; автоприв’язку за ним не виконано.";
+                RememberFiscalUrl(cacheKey, fingerprint, candidate, FiscalLinkSource, warning, TimeSpan.FromMinutes(5));
+                return (candidate, warning, FiscalLinkSource);
             }
-            catch (Exception exception) when (IsRecoverable(exception, cancellationToken))
-            {
-                authorizationFailed = IsUnauthorized(exception) ||
-                    exception is MarketplaceApiException { StatusCode: HttpStatusCode.Forbidden } ||
-                    exception is HttpRequestException { StatusCode: HttpStatusCode.Forbidden };
-                warning = "Читання наявного PRRO-документа недоступне; це не означає, що чека немає.";
-            }
-
-            // Some Seller accounts cannot return type=link but return the existing
-            // Checkbox document URL for type=html. Read the Seller response once;
-            // never navigate to the returned URL or create a new fiscal receipt.
-            if (!authorizationFailed && session.CanReadPrro)
-                try
-                {
-                    using var html = await ReadAsync($"/prro/receipt/{orderId}?type=html", session, credentials, cancellationToken);
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var candidate = Text(Field(html.RootElement, "content"), "url");
-                    if (IsSafeDisplayUrl(candidate))
-                    {
-                        if (CheckboxReceiptReference.TryParseUrl(candidate, out var parsed))
-                        {
-                            if (parsed.ReceiptId.Length > 0) RememberFiscalUrl(cacheKey, fingerprint, candidate, FiscalHtmlSource);
-                            return (candidate, "", FiscalHtmlSource);
-                        }
-                        if (displayUrl is null)
-                        {
-                            displayUrl = candidate;
-                            displaySource = FiscalHtmlSource;
-                        }
-                    }
-                }
-                catch (Exception exception) when (IsRecoverable(exception, cancellationToken)) { }
-
-            // Keep a safe display-only reference and the primary failure status
-            // when neither response provides a strictly recognized Checkbox key.
-            return (displayUrl, warning, displaySource);
+            const string missing = "PRRO не повернув перевіреного посилання на чек. Наступна спроба — через 5 хвилин.";
+            RememberFiscalUrl(cacheKey, fingerprint, null, "", missing, TimeSpan.FromMinutes(5));
+            return (null, missing, "");
         }
         catch (Exception exception) when (IsRecoverable(exception, cancellationToken))
-        { return (null, "Читання наявного PRRO-документа недоступне; це не означає, що чека немає.", ""); }
+        {
+            var unsupported = exception is RozetkaFiscalFormatException;
+            var retry = unsupported ? TimeSpan.FromHours(1) : TimeSpan.FromMinutes(5);
+            if (exception is MarketplaceApiException { RetryAfter: { } serverRetry } && serverRetry > retry) retry = serverRetry;
+            var pauseAccount = unsupported || IsUnauthorized(exception) || exception is HttpRequestException ||
+                exception is MarketplaceApiException { StatusCode: null or HttpStatusCode.Forbidden or
+                    HttpStatusCode.RequestTimeout or (HttpStatusCode)429 } ||
+                exception is MarketplaceApiException { StatusCode: { } status } && (int)status >= 500;
+            var warning = unsupported
+                ? "Rozetka відхилила type=link (15005). Читання PRRO для цього API-токена призупинено на годину; інші формати не запитуються."
+                : pauseAccount ? "Читання PRRO для цього API-токена призупинено щонайменше на 5 хвилин після помилки. Це не означає, що чека немає."
+                : "Читання цього PRRO-документа недоступне; це не означає, що чека немає. Наступна спроба — через 5 хвилин.";
+            if (pauseAccount) PausePrro(cacheKey.Credentials, warning, retry);
+            RememberFiscalUrl(cacheKey, fingerprint, null, "", warning, retry);
+            return (null, warning, "");
+        }
     }
 
     private static string CredentialFingerprint(MarketplaceCredentials credentials) =>
-        Fingerprint([credentials.Login.Trim(), credentials.Password]);
+        Fingerprint([credentials.Token.Trim()]);
 
     private static string FiscalFingerprint(JsonElement data) => Fingerprint(
         new[] { "changed", "prro", "status", "status_data", "organization", "organization_id",
@@ -227,7 +207,7 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
 
     private static string Fingerprint(string[] values)
     {
-        // Cache keys contain a digest, never retained login/password strings. Nothing is persisted.
+        // Cache keys contain a digest, never retained credential strings. Nothing is persisted.
         var bytes = JsonSerializer.SerializeToUtf8Bytes(values);
         try { return Convert.ToHexString(SHA256.HashData(bytes)); }
         finally { CryptographicOperations.ZeroMemory(bytes); }
@@ -240,7 +220,7 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
             if (_fiscalCache.TryGetValue(key, out var cached))
             {
                 _fiscalCacheRecency.Remove(cached.Node);
-                if (cached.Fingerprint == fingerprint)
+                if (cached.Fingerprint == fingerprint && (cached.RetryAt is null || _clock.GetUtcNow() < cached.RetryAt))
                 {
                     _fiscalCacheRecency.AddFirst(cached.Node);
                     value = cached;
@@ -253,16 +233,20 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
         }
     }
 
-    private void RememberFiscalUrl(FiscalCacheKey key, string fingerprint, string url, string source)
+    private void RememberFiscalUrl(FiscalCacheKey key, string fingerprint, string? url, string source, string status, TimeSpan? retry)
     {
         lock (_fiscalCacheLock)
         {
             if (_fiscalCache.Remove(key, out var previous)) _fiscalCacheRecency.Remove(previous.Node);
             var node = _fiscalCacheRecency.AddFirst(key);
-            _fiscalCache[key] = new(fingerprint, url, source, node);
+            _fiscalCache[key] = new(fingerprint, url, source, status, retry is null ? null : _clock.GetUtcNow() + retry, node);
             while (_fiscalCache.Count > FiscalCacheLimit && _fiscalCacheRecency.Last is { } oldest)
             {
-                _fiscalCache.Remove(oldest.Value);
+                if (_fiscalCache.Remove(oldest.Value, out var evicted) && evicted.Url is null &&
+                    evicted.RetryAt is { } retryAt && retryAt > _clock.GetUtcNow())
+                    PausePrro(oldest.Value.Credentials,
+                        "Читання PRRO тимчасово призупинено, щоб не повторювати помилки. Замовлення продовжують оновлюватися.",
+                        retryAt - _clock.GetUtcNow());
                 _fiscalCacheRecency.RemoveLast();
             }
         }
@@ -275,62 +259,97 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
     }
 
     private sealed record FiscalCacheKey(string Credentials, string ConnectionId, string OrderId);
-    private sealed record CachedFiscalUrl(string Fingerprint, string Url, string Source, LinkedListNode<FiscalCacheKey> Node);
+    private sealed record CachedFiscalUrl(string Fingerprint, string? Url, string Source, string Status,
+        DateTimeOffset? RetryAt, LinkedListNode<FiscalCacheKey> Node);
+    private sealed record PrroPause(DateTimeOffset Until, string Status);
+
+    private PrroPause? GetPrroPause(string credentials)
+    {
+        lock (_fiscalCacheLock)
+        {
+            var now = _clock.GetUtcNow();
+            if (_prroOverflowPause is { } overflow && overflow.Until > now) return overflow;
+            _prroOverflowPause = null;
+            if (!_prroPauses.TryGetValue(credentials, out var pause)) return null;
+            if (pause.Until > now) return pause;
+            _prroPauses.Remove(credentials);
+            return null;
+        }
+    }
+
+    private void PausePrro(string credentials, string status, TimeSpan duration)
+    {
+        lock (_fiscalCacheLock)
+        {
+            var now = _clock.GetUtcNow();
+            var pause = new PrroPause(now + duration, status);
+            if (_prroPauses.TryGetValue(credentials, out var previous) && previous.Until > pause.Until) return;
+            foreach (var expired in _prroPauses.Where(pair => pair.Value.Until <= now).Select(pair => pair.Key).ToArray())
+                _prroPauses.Remove(expired);
+            if (!_prroPauses.ContainsKey(credentials) && _prroPauses.Count >= FiscalCacheLimit)
+            {
+                // Never clear active cooldowns when the bounded credential cache fills:
+                // pause optional PRRO reads rather than creating another retry storm.
+                if (_prroOverflowPause is null || _prroOverflowPause.Until < pause.Until)
+                    _prroOverflowPause = pause with { Status = "Читання PRRO тимчасово призупинено після великої кількості помилок. Замовлення продовжують оновлюватися." };
+                return;
+            }
+            _prroPauses[credentials] = pause;
+        }
+    }
 
     private static bool IsSafeDisplayUrl(string candidate) =>
         Uri.TryCreate(candidate, UriKind.Absolute, out var uri) && uri.Scheme == "https" &&
         uri.UserInfo.Length == 0 && !candidate.Any(char.IsControl);
 
-    private async Task<Session> LoginAsync(MarketplaceCredentials credentials, CancellationToken cancellationToken)
+    private Session CreateSession(MarketplaceCredentials credentials)
     {
-        var body = JsonSerializer.Serialize(new
+        var token = RozetkaApiCredentials.RequireToken(credentials);
+        var identity = CredentialFingerprint(credentials);
+        lock (_fiscalCacheLock)
         {
-            username = credentials.Login.Trim(),
-            password = Convert.ToBase64String(Encoding.UTF8.GetBytes(credentials.Password))
-        });
-        var text = await transport.SendAsync(() => new HttpRequestMessage(HttpMethod.Post, BaseUrl + "/sites")
-        {
-            Content = new StringContent(body, Encoding.UTF8, "application/json")
-        }, Marketplace, cancellationToken);
-        using var json = JsonDocument.Parse(text);
-        EnsureSuccess(json.RootElement);
-        var content = Field(json.RootElement, "content");
-        var token = Text(content, "access_token");
-        if (token.Length == 0 || token.Any(char.IsWhiteSpace) || token.Any(char.IsControl))
-            throw new InvalidDataException("Rozetka не повернула коректний токен авторизації.");
-        var permissions = Field(content, "permissions");
-        return new Session(token, permissions.ValueKind == JsonValueKind.Array &&
-            permissions.EnumerateArray().Any(p => p.ValueKind == JsonValueKind.String && p.GetString() == "prro_access"));
+            if (_apiDeniedUntil.TryGetValue(identity, out var deniedUntil) && _clock.GetUtcNow() < deniedUntil)
+                throw new MarketplaceApiException("Rozetka: API-токен відхилено. Перевірте токен і його права у налаштуваннях; повторний запит відкладено на 5 хвилин.",
+                    HttpStatusCode.Unauthorized, deniedUntil - _clock.GetUtcNow());
+            _apiDeniedUntil.Remove(identity);
+            return new Session(token);
+        }
     }
 
     private async Task<JsonDocument> ReadAsync(string path, Session session, MarketplaceCredentials credentials,
         CancellationToken cancellationToken)
     {
-        for (var attempt = 0; ; attempt++)
+        if (session.AccessDenied)
+            throw new MarketplaceApiException("Rozetka: API-токен відхилено; решту запитів цього оновлення зупинено.",
+                HttpStatusCode.Unauthorized, TimeSpan.FromMinutes(5));
+        try
         {
-            try
+            var text = await transport.SendAsync(() =>
             {
-                var text = await transport.SendAsync(() =>
-                {
-                    var request = new HttpRequestMessage(HttpMethod.Get, BaseUrl + path);
-                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", session.Token);
-                    request.Headers.TryAddWithoutValidation("Content-Language", "uk");
-                    return request;
-                }, Marketplace, cancellationToken);
-                var json = JsonDocument.Parse(text);
-                try { EnsureSuccess(json.RootElement); return json; }
-                catch { json.Dispose(); throw; }
-            }
-            catch (Exception exception) when (attempt == 0 && !session.Reauthenticated && IsUnauthorized(exception))
+                var request = new HttpRequestMessage(HttpMethod.Get, BaseUrl + path);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", session.Token);
+                request.Headers.TryAddWithoutValidation("Content-Language", "uk");
+                return request;
+            }, Marketplace, cancellationToken);
+            var json = JsonDocument.Parse(text);
+            try { EnsureSuccess(json.RootElement); return json; }
+            catch { json.Dispose(); throw; }
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested &&
+            (IsUnauthorized(exception) || !path.StartsWith("/prro/", StringComparison.Ordinal) &&
+                (exception is MarketplaceApiException { StatusCode: HttpStatusCode.Forbidden } ||
+                 exception is HttpRequestException { StatusCode: HttpStatusCode.Forbidden })))
+        {
+            session.AccessDenied = true;
+            lock (_fiscalCacheLock)
             {
-                session.Reauthenticated = true;
-                var fresh = await LoginAsync(credentials, cancellationToken);
-                session.Token = fresh.Token;
-                session.CanReadPrro = fresh.CanReadPrro;
+                if (_apiDeniedUntil.Count >= FiscalCacheLimit) _apiDeniedUntil.Clear();
+                _apiDeniedUntil[CredentialFingerprint(credentials)] = _clock.GetUtcNow() + TimeSpan.FromMinutes(5);
             }
+            throw new MarketplaceApiException("Rozetka: API-токен відхилено. Перевірте токен і його права у налаштуваннях.",
+                HttpStatusCode.Unauthorized, TimeSpan.FromMinutes(5));
         }
     }
-
     private static MarketplaceOrder ParseOrder(JsonElement row, MarketplaceConnection connection, string? receiptUrl = null,
         string receiptUrlSource = FiscalLinkSource)
     {
@@ -433,13 +452,15 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
     private static void Validate(MarketplaceConnection connection, MarketplaceCredentials credentials)
     {
         if (connection.Marketplace != MarketplaceKind.Rozetka) throw new ArgumentException("Очікується підключення Rozetka.");
-        if (string.IsNullOrWhiteSpace(connection.Id) || string.IsNullOrWhiteSpace(credentials.Login) || credentials.Password.Length == 0)
-            throw new InvalidOperationException("Вкажіть логін та пароль кабінету продавця Rozetka у локальних налаштуваннях.");
+        if (string.IsNullOrWhiteSpace(connection.Id)) throw new InvalidOperationException("Оберіть підключення Rozetka.");
+        if (!RozetkaApiCredentials.ValidToken(credentials.Token))
+            throw new MarketplaceApiException("Rozetka: додайте API-токен із «Налаштування → Безпека API» у налаштуваннях маркетплейсу CRMapp. Вхід за логіном і паролем більше не використовується.");
     }
     private static void EnsureSuccess(JsonElement root)
     {
         if (Field(root, "success").ValueKind == JsonValueKind.True) return;
         var code = Integer(Field(root, "errors"), "code");
+        if (code == 15005) throw new RozetkaFiscalFormatException();
         if (code is 1018 or 1020) throw new RozetkaTokenException();
         if (code == 1010)
             throw new MarketplaceApiException("Rozetka: доступ до запиту заборонено. Перевірте права читання підключення.",
@@ -450,7 +471,7 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
         exception is MarketplaceApiException { StatusCode: HttpStatusCode.Unauthorized } ||
         exception is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized };
     private static bool IsRecoverable(Exception exception, CancellationToken token) => !token.IsCancellationRequested &&
-        exception is MarketplaceApiException or HttpRequestException or JsonException or InvalidDataException or RozetkaTokenException or TaskCanceledException;
+        exception is MarketplaceApiException or HttpRequestException or JsonException or InvalidDataException or RozetkaTokenException or RozetkaFiscalFormatException or TaskCanceledException;
     private static JsonElement Field(JsonElement element, string name) => element.ValueKind == JsonValueKind.Object &&
         element.TryGetProperty(name, out var value) ? value : default;
     private static string Text(JsonElement element, string name)
@@ -479,11 +500,11 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport) : IM
             DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var offset)) return offset;
         return null;
     }
-    private sealed class Session(string token, bool canReadPrro)
+    private sealed class Session(string token)
     {
-        public string Token = token;
-        public bool CanReadPrro = canReadPrro;
-        public bool Reauthenticated;
+        public readonly string Token = token;
+        public bool AccessDenied;
     }
     private sealed class RozetkaTokenException : Exception;
+    private sealed class RozetkaFiscalFormatException : Exception;
 }

@@ -21,14 +21,14 @@ internal static class SellerRozetkaDeliveryLabelTests
 
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
-        ("Rozetka Delivery order label uses its exact Seller login without a Delivery key", SellerRoute),
+        ("Rozetka Delivery order label uses its exact API token without cabinet login or a Delivery key", SellerRoute),
         ("Seller Delivery partner TTN resolves only through its owned primary RMP document", PartnerRoute),
         ("Seller Delivery rejects missing disabled changed-kind and incomplete accounts before HTTP", Accounts),
         ("Seller Delivery verifies order identity and rejects missing ambiguous or contradictory documents", Identity),
         ("Seller Delivery checks every list page before printing and rejects duplicate or incomplete pagination", Pagination),
-        ("Seller Delivery requires module_octopus and does not disclose authentication failures", Permissions),
+        ("Seller Delivery fails denied or revoked API tokens without login fallback or secret disclosure", Permissions),
         ("Seller Delivery rejects unauthorized redirected non-PDF and malformed API replies", Responses),
-        ("Seller Delivery cancellation stops before HTTP and during authentication list or PDF", Cancellation),
+        ("Seller Delivery cancellation stops before HTTP and during list or PDF", Cancellation),
         ("Seller Delivery read-only allowlist excludes writes unbounded queries and unsafe print bodies", ReadOnlyPolicy),
         ("Seller Delivery preserves Prom and independent Delivery-token routing", LegacyScope),
         ("STA Seller Delivery renders all supplied pages and retains Seller account history", () => MarketplaceViewModelTests.StaAsync(AllPages)),
@@ -46,8 +46,8 @@ internal static class SellerRozetkaDeliveryLabelTests
         };
         public readonly Dictionary<string, MarketplaceCredentials?> Credentials = new(StringComparer.Ordinal)
         {
-            [Account] = new(Login: " " + Login + " ", Password: Password),
-            [OtherAccount] = new(Login: "foreign@example.invalid", Password: "synthetic-foreign-password")
+            [Account] = new(Token: " " + Token + " ", Login: Login, Password: Password),
+            [OtherAccount] = new(Token: "synthetic-foreign-token", Login: "foreign@example.invalid", Password: "synthetic-foreign-password")
         };
         public readonly List<string> SecretReads = [];
         public Exception? SecretError;
@@ -73,8 +73,6 @@ internal static class SellerRozetkaDeliveryLabelTests
         public readonly List<Read> Reads = [];
         public readonly OfficialShippingLabelSource Source;
         private readonly HttpClient _client;
-        public string[] Permissions = ["module_octopus"];
-        public bool AuthSuccess = true;
         public Func<int, object>? ListPage;
         public Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage?>>? Override;
         public byte[] PdfBytes = SyntheticShippingPdf.Create();
@@ -93,15 +91,6 @@ internal static class SellerRozetkaDeliveryLabelTests
             Check(uri.Host == "api-seller.rozetka.com.ua", "Seller label contacted another service.");
             switch (uri.AbsolutePath)
             {
-                case "/sites":
-                    Check(request.Method == HttpMethod.Post && request.Headers.Authorization is null, "Seller authentication used another service token.");
-                    using (var json = JsonDocument.Parse(body))
-                    {
-                        Check(json.RootElement.GetProperty("username").GetString() == Login &&
-                            Encoding.UTF8.GetString(Convert.FromBase64String(json.RootElement.GetProperty("password").GetString()!)) == Password,
-                            "Seller label used credentials from another configured account or changed the password.");
-                    }
-                    return Json(new { success = AuthSuccess, content = new { access_token = Token, permissions = Permissions } });
                 case "/delivery-rozetka/ttn-list":
                     Check(request.Method == HttpMethod.Get && request.Headers.Authorization?.Parameter == Token, "List read did not use the selected Seller token.");
                     var query = Query(uri);
@@ -163,7 +152,7 @@ internal static class SellerRozetkaDeliveryLabelTests
         Check(document.ExpectedPages == 0 && document.Pdf.SequenceEqual(fixture.PdfBytes) && document.Fingerprint == Convert.ToHexString(SHA256.HashData(document.Pdf)),
             "Seller delivery guessed a place count or changed the official PDF.");
         Check(fixture.Store.SecretReads.SequenceEqual([Account]) && fixture.Reads.Select(read => read.Path).SequenceEqual(
-            ["/sites", "/delivery-rozetka/ttn-list", "/delivery-rozetka/ttn-print-batch"]), "Seller label consulted a fallback account or Delivery key.");
+            ["/delivery-rozetka/ttn-list", "/delivery-rozetka/ttn-print-batch"]), "Seller label consulted a cabinet login, fallback account or Delivery key.");
     }
     private static async Task PartnerRoute()
     {
@@ -171,7 +160,7 @@ internal static class SellerRozetkaDeliveryLabelTests
         var shipment = Shipment(Partner);
         var document = await fixture.Source.GetAsync(shipment);
         Check(document.Shipment == shipment && document.DocumentId == Tracking, "Partner tracking was mistaken for the primary Seller TTN.");
-        var query = Query(new Uri("https://api-seller.rozetka.com.ua" + fixture.Reads[1].Path + fixture.Reads[1].Query));
+        var query = Query(new Uri("https://api-seller.rozetka.com.ua" + fixture.Reads[0].Path + fixture.Reads[0].Query));
         Check(!query.ContainsKey("ttn"), "Partner number was sent as an undocumented primary-TTN filter.");
         using var external = new Fixture { ListPage = _ => List([Model(partner: null, external: Partner)]) };
         await Failure(external.Source.GetAsync(shipment), LabelFailureKind.MissingDocument, LabelFailureKind.InvalidDocument);
@@ -182,7 +171,7 @@ internal static class SellerRozetkaDeliveryLabelTests
     }
     private static async Task Accounts()
     {
-        foreach (var kind in new[] { "removed", "disabled", "prom", "duplicate-id", "missing-secret", "unreadable-secret", "corrupted-secret", "login", "password", "control-login", "control-password" })
+        foreach (var kind in new[] { "removed", "disabled", "prom", "duplicate-id", "missing-secret", "unreadable-secret", "corrupted-secret", "legacy-login", "empty-token", "control-token", "space-token" })
         {
             using var fixture = new Fixture();
             var connection = fixture.Store.Market.Connections.Single(c => c.Id == Account);
@@ -193,10 +182,10 @@ internal static class SellerRozetkaDeliveryLabelTests
             if (kind == "missing-secret") fixture.Store.Credentials[Account] = null;
             if (kind == "unreadable-secret") fixture.Store.SecretError = new System.IO.IOException("Synthetic protected store failure.");
             if (kind == "corrupted-secret") fixture.Store.SecretError = new CryptographicException("Synthetic DPAPI failure.");
-            if (kind == "login") fixture.Store.Credentials[Account] = new(Login: " ", Password: Password);
-            if (kind == "password") fixture.Store.Credentials[Account] = new(Login: Login, Password: "");
-            if (kind == "control-login") fixture.Store.Credentials[Account] = new(Login: Login + "\n", Password: Password);
-            if (kind == "control-password") fixture.Store.Credentials[Account] = new(Login: Login, Password: Password + "\n");
+            if (kind == "legacy-login") fixture.Store.Credentials[Account] = new(Login: Login, Password: Password);
+            if (kind == "empty-token") fixture.Store.Credentials[Account] = new(Token: " ", Login: Login, Password: Password);
+            if (kind == "control-token") fixture.Store.Credentials[Account] = new(Token: Token + "\n", Login: Login, Password: Password);
+            if (kind == "space-token") fixture.Store.Credentials[Account] = new(Token: Token + " invalid", Login: Login, Password: Password);
             await Failure(fixture.Source.GetAsync(Shipment()), LabelFailureKind.ConnectionRequired, LabelFailureKind.InvalidDocument);
             Check(fixture.Reads.Count == 0 && fixture.Store.SecretReads.All(id => id == Account), "Invalid Seller configuration contacted an API or another store.");
         }
@@ -247,18 +236,19 @@ internal static class SellerRozetkaDeliveryLabelTests
     }
     private static async Task Permissions()
     {
-        foreach (var kind in new[] { "absent", "substring", "success-false", "no-token", "permissions-wrong-type" })
+        foreach (var kind in new[] { "revoked", "forbidden", "expired", "success-false" })
         {
             using var fixture = new Fixture();
-            if (kind == "absent") fixture.Permissions = ["order_read"];
-            if (kind == "substring") fixture.Permissions = ["module_octopus_edit"];
-            if (kind == "success-false") fixture.AuthSuccess = false;
-            if (kind == "no-token" || kind == "permissions-wrong-type") fixture.Override = (request, _) => Task.FromResult<HttpResponseMessage?>(
-                request.RequestUri!.AbsolutePath != "/sites" ? null : kind == "no-token"
-                    ? Json(new { success = true, content = new { access_token = "", permissions = new[] { "module_octopus" } } })
-                    : Json(new { success = true, content = new { access_token = Token, permissions = "module_octopus" } }));
+            fixture.Override = (request, _) => Task.FromResult<HttpResponseMessage?>(kind switch
+            {
+                "revoked" => new(HttpStatusCode.Unauthorized),
+                "forbidden" => new(HttpStatusCode.Forbidden),
+                "expired" => Json(new { success = false, errors = new { code = 1020, message = Token } }),
+                _ => Json(new { success = false, errors = new { code = 1010, message = Password } })
+            });
             await Failure(fixture.Source.GetAsync(Shipment()), LabelFailureKind.AccessDenied, LabelFailureKind.InvalidDocument);
-            Check(fixture.Reads.Count == 1, "Seller label continued after authentication or missing permission.");
+            Check(fixture.Reads.Count == 1 && fixture.Reads[0].Path == "/delivery-rozetka/ttn-list",
+                "Seller label retried rejected API credentials or fell back to cabinet authentication.");
         }
     }
     private static async Task Responses()
@@ -277,7 +267,7 @@ internal static class SellerRozetkaDeliveryLabelTests
                 var path = request.RequestUri!.AbsolutePath;
                 HttpResponseMessage? result = kind switch
                 {
-                    "401-auth" when path == "/sites" => new(HttpStatusCode.Unauthorized),
+                    "401-auth" when path.EndsWith("ttn-list") => new(HttpStatusCode.Unauthorized),
                     "403-list" when path.EndsWith("ttn-list") => new(HttpStatusCode.Forbidden),
                     "redirect" when path.EndsWith("ttn-print-batch") => new(HttpStatusCode.Redirect) { Headers = { Location = new("https://evil.invalid/") } },
                     "list-error" when path.EndsWith("ttn-list") => Json(new { success = false, errors = new[] { Password, Token } }),
@@ -316,7 +306,7 @@ internal static class SellerRozetkaDeliveryLabelTests
     }
     private static async Task Cancellation()
     {
-        foreach (var stage in new[] { "before", "/sites", "/delivery-rozetka/ttn-list", "/delivery-rozetka/ttn-print-batch" })
+        foreach (var stage in new[] { "before", "/delivery-rozetka/ttn-list", "/delivery-rozetka/ttn-print-batch" })
         {
             using var fixture = new Fixture();
             using var cancellation = new CancellationTokenSource();
@@ -328,7 +318,7 @@ internal static class SellerRozetkaDeliveryLabelTests
             };
             try { await fixture.Source.GetAsync(Shipment(), cancellation.Token); throw new Exception("Canceled Seller label returned a document."); }
             catch (OperationCanceledException) { Check(cancellation.IsCancellationRequested, "Seller timeout was mistaken for caller cancellation."); }
-            Check(fixture.Reads.Count == (stage == "before" ? 0 : stage == "/sites" ? 1 : stage.EndsWith("ttn-list") ? 2 : 3), "Cancellation continued into another stage.");
+            Check(fixture.Reads.Count == (stage == "before" ? 0 : stage.EndsWith("ttn-list") ? 1 : 2), "Cancellation continued into another stage.");
         }
     }
     private static Task ReadOnlyPolicy()
@@ -339,7 +329,7 @@ internal static class SellerRozetkaDeliveryLabelTests
         using (var request = new HttpRequestMessage(HttpMethod.Get, host + list)) ShippingLabelHttp.Validate(request);
         using (var request = new HttpRequestMessage(HttpMethod.Post, host + print) { Content = new StringContent("{\"track_numbers\":[\"RMP-537811951\"]}", Encoding.UTF8, "application/json") })
             ShippingLabelHttp.Validate(request);
-        foreach (var route in new[] { host + "/delivery-rozetka/ttn-create", host + "/delivery-rozetka/ttn-update", host + print + "?format=zebra",
+        foreach (var route in new[] { host + "/sites", host + "/delivery-rozetka/ttn-create", host + "/delivery-rozetka/ttn-update", host + print + "?format=zebra",
             "https://evil.invalid" + print, "http://api-seller.rozetka.com.ua" + print, host + ":444" + print, host + print + "#fragment" })
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, route) { Content = new StringContent("{\"track_numbers\":[\"RMP-537811951\"]}", Encoding.UTF8, "application/json") };
@@ -447,7 +437,7 @@ internal static class SellerRozetkaDeliveryLabelTests
             const string foreignAccount = "synthetic-foreign-seller";
             fixture.Store.Credentials[OtherAccount] = fixture.Store.Credentials[Account];
             fixture.Store.Market.Connections.Add(new() { Id = foreignAccount, Marketplace = MarketplaceKind.Rozetka, Enabled = true });
-            fixture.Store.Credentials[foreignAccount] = new(Login: "different-account@example.invalid", Password: "synthetic-different-password");
+            fixture.Store.Credentials[foreignAccount] = new(Token: "synthetic-different-token", Login: "different-account@example.invalid", Password: "synthetic-different-password");
             async Task CheckCanonicalHistory(IReadOnlyList<LabelPrintAttempt> records)
             {
                 var deduplication = await MarketplaceOrderDeduplication.ResolveAsync(fixture.Store.Market, fixture.Store);

@@ -92,24 +92,13 @@ public sealed class RozetkaSellerDeliveryLabelSource(ShippingLabelHttp http, IMa
         try { credentials = await secrets.LoadAsync(order.ConnectionId, cancellationToken).ConfigureAwait(false); }
         catch (Exception ex) when (ex is IOException or CryptographicException or JsonException)
         { throw Missing("Не вдалося прочитати збережені облікові дані Rozetka Seller. Збережіть їх повторно у налаштуваннях."); }
-        if (credentials is null || string.IsNullOrWhiteSpace(credentials.Login) || credentials.Password.Length == 0 ||
-            credentials.Login.Any(char.IsControl) || credentials.Password.Any(char.IsControl))
-            throw Missing("Збережіть логін і пароль Rozetka Seller цього замовлення у налаштуваннях маркетплейсів.");
-
-        var body = JsonSerializer.Serialize(new { username = credentials.Login.Trim(), password = Convert.ToBase64String(Encoding.UTF8.GetBytes(credentials.Password)) });
-        using var auth = await JsonAsync(() => new(HttpMethod.Post, Host + "/sites")
-            { Content = new StringContent(body, Encoding.UTF8, "application/json") }, cancellationToken).ConfigureAwait(false);
-        CheckSuccess(auth.RootElement);
-        var content = Field(auth.RootElement, "content");
-        var token = Text(content, "access_token");
-        var permissions = Field(content, "permissions");
-        if (string.IsNullOrWhiteSpace(token) || token.Any(char.IsControl) || permissions.ValueKind != JsonValueKind.Array ||
-            !permissions.EnumerateArray().Any(p => p.ValueKind == JsonValueKind.String && p.GetString() == "module_octopus"))
-            throw new ShippingLabelException(LabelFailureKind.AccessDenied, "Rozetka Seller не має доступу до модуля доставки (module_octopus). Перевірте права продавця.");
+        if (!RozetkaApiCredentials.ValidToken(credentials?.Token))
+            throw Missing(RozetkaApiCredentials.SetupMessage);
+        var token = RozetkaApiCredentials.RequireToken(credentials);
         cancellationToken.ThrowIfCancellationRequested();
 
         var record = await LookupAsync(shipment, token, cancellationToken).ConfigureAwait(false);
-        var proof = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(credentials.Login.Trim().Length.ToString(CultureInfo.InvariantCulture) + ":" + credentials.Login.Trim() + credentials.Password)));
+        var proof = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
         var batchOrder = (order.ConnectionId, proof, order.OrderId);
         if (_selectedShipments is not null && _batchOrder != batchOrder)
         {

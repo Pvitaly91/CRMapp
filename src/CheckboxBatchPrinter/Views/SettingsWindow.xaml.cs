@@ -33,8 +33,8 @@ public partial class SettingsWindow : Window
         _synchronizingCredentialFields = true;
         try
         {
-            PromTokenInput.Password = _credentialViewModel?.Token ?? "";
-            RozetkaPasswordInput.Password = _credentialViewModel?.Password ?? "";
+            PromTokenInput.Password = _credentialViewModel?.IsProm == true ? _credentialViewModel.Token : "";
+            RozetkaTokenInput.Password = _credentialViewModel?.IsRozetka == true ? _credentialViewModel.Token : "";
         }
         finally { _synchronizingCredentialFields = false; }
     }
@@ -55,10 +55,10 @@ public partial class SettingsWindow : Window
         if (_synchronizingCredentialFields) return;
         if (DataContext is SettingsViewModel { Marketplace: { } marketplace }) marketplace.Token = PromTokenInput.Password;
     }
-    private void RozetkaPasswordInput_PasswordChanged(object sender, RoutedEventArgs e)
+    private void RozetkaTokenInput_PasswordChanged(object sender, RoutedEventArgs e)
     {
         if (_synchronizingCredentialFields) return;
-        if (DataContext is SettingsViewModel { Marketplace: { } marketplace }) marketplace.Password = RozetkaPasswordInput.Password;
+        if (DataContext is SettingsViewModel { Marketplace: { } marketplace }) marketplace.Token = RozetkaTokenInput.Password;
     }
 
     private void PasswordInput_PasswordChanged(object sender, RoutedEventArgs e)

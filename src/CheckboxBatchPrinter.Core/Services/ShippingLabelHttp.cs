@@ -29,8 +29,7 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
             "rz-delivery.rozetka.ua" => request.Method == HttpMethod.Get &&
                 (uri.AbsolutePath == "/api/track" && ValidRozetkaDeliveryListQuery(uri) ||
                  uri.AbsolutePath == "/api/track/label" || Regex.IsMatch(uri.AbsolutePath, @"^/api/track/[0-9A-Za-z-]+$")),
-            "api-seller.rozetka.com.ua" => request.Method == HttpMethod.Post && uri.AbsolutePath == "/sites" && uri.Query.Length == 0 ||
-                request.Method == HttpMethod.Get && uri.AbsolutePath is "/ttns/ttn-list" or "/ttns/ttn-print/zebra" ||
+            "api-seller.rozetka.com.ua" => request.Method == HttpMethod.Get && uri.AbsolutePath is "/ttns/ttn-list" or "/ttns/ttn-print/zebra" ||
                 RozetkaSellerDeliveryReadOnlyContract.ValidRoute(request) || RozetkaSellerTrackingReadOnlyContract.ValidRoute(request),
             _ => false
         };
@@ -218,14 +217,9 @@ public sealed class OfficialShippingLabelSource(ShippingLabelHttp http, IShippin
                 "Потрібне підключення Rozetka Seller з доступом до цієї ТТН Нової пошти. Прямий NP API ще не підключено: його актуальний контракт потребує перевірки.")
             { MissingCredentials = string.IsNullOrWhiteSpace(connectionId) };
         var credentials = await marketplaceSecrets.LoadAsync(connectionId, ct);
-        if (credentials is null || string.IsNullOrWhiteSpace(credentials.Login) || credentials.Password.Length == 0)
-            throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Налаштуйте підключення Rozetka Seller локально.") { MissingCredentials = true };
-        var body = JsonSerializer.Serialize(new { username = credentials.Login.Trim(), password = Convert.ToBase64String(Encoding.UTF8.GetBytes(credentials.Password)) });
-        using var auth = JsonDocument.Parse(await http.SendAsync(() => new(HttpMethod.Post, "https://api-seller.rozetka.com.ua/sites")
-        { Content = new StringContent(body, Encoding.UTF8, "application/json") }, "application/json", ct));
-        CheckSellerSuccess(auth.RootElement);
-        var token = Text(Field(auth.RootElement, "content"), "access_token");
-        if (string.IsNullOrWhiteSpace(token)) throw new ShippingLabelException(LabelFailureKind.AccessDenied, "Seller API не повернуло токен.");
+        if (!RozetkaApiCredentials.ValidToken(credentials?.Token))
+            throw new ShippingLabelException(LabelFailureKind.ConnectionRequired, RozetkaApiCredentials.SetupMessage) { MissingCredentials = true };
+        var token = RozetkaApiCredentials.RequireToken(credentials);
         using var found = await JsonAsync("https://api-seller.rozetka.com.ua/ttns/ttn-list?ttn=" + Uri.EscapeDataString(shipment.TrackingNumber), token, ct);
         CheckSellerSuccess(found.RootElement);
         var list = Field(Field(found.RootElement, "content"), "ttn_list");
