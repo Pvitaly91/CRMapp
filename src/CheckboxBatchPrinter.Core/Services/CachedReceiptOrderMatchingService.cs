@@ -44,7 +44,8 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
     public AutomaticMatchingResult MatchAll(AutomaticMatchCache cache, IReadOnlyList<ReceiptRecord> receipts, string accountContext,
         IReadOnlyList<MarketplaceOrder> orders, IReadOnlyList<ReceiptOrderDecision> decisions, bool coverageComplete,
         IReadOnlyDictionary<string, ReceiptDetails>? details = null, AmountMatchScope? scope = null, IReadOnlySet<string>? loading = null,
-        IReadOnlyList<string>? enabledConnectionIds = null)
+        IReadOnlyList<string>? enabledConnectionIds = null,
+        IReadOnlyDictionary<string, ReceiptOrderMatch>? establishedExactLinks = null)
     {
         if (!BindAccount(cache, accountContext)) throw new ArgumentException("Обліковий контекст кешу не збігається.", nameof(cache));
         Prune(cache, _clock.GetUtcNow());
@@ -54,6 +55,8 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
                 details, scope, loading, enabledConnectionIds))
             return new(restored, true);
         var existing = ResolveSavedLinks(cache, receipts, orders, decisions, scope);
+        foreach (var (id, match) in establishedExactLinks ?? new Dictionary<string, ReceiptOrderMatch>())
+            if (match.State == ReceiptLinkState.Exact && match.Order is not null) existing[id] = match;
         var matches = _matcher.MatchAll(receipts, accountContext, orders, decisions, coverageComplete, details, scope, loading, existing);
         RememberLinks(cache, receipts, matches, loading);
         if (coverageComplete && loading?.Count is not > 0 && matches.Count <= MaximumMatchesPerSnapshot)

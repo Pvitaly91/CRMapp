@@ -30,14 +30,37 @@ public sealed class ReceiptOrderMatchingService
             .ToDictionary(g => g.Key, g => g.First());
         var result = unique.ToDictionary(r => r.Id, r => MatchEvidence(r, accountContext, available, decisions,
             coverageComplete, normalizedDetails.GetValueOrDefault(BasketReceiptMatching.NormalizeId(r.Id)), unique));
-        var reserved = decisions.Where(d => d.AccountContext == accountContext)
+        var manualReservations = decisions.Where(d => d.AccountContext == accountContext)
             .GroupBy(d => BasketReceiptMatching.NormalizeId(d.ReceiptId)).Select(g => g.MaxBy(d => d.UpdatedAtUtc)!)
             .Where(d => d.ConfirmedOrder is not null).Select(d => d.ConfirmedOrder!)
-            .Concat(result.Values.Where(m => m.State is ReceiptLinkState.Manual or ReceiptLinkState.Exact)
+            .ToHashSet();
+        var reserved = manualReservations.Concat(result.Values.Where(m => m.State is ReceiptLinkState.Manual or ReceiptLinkState.Exact)
                 .Where(m => m.Order is not null).Select(m => m.Order!.Key)).ToHashSet();
         var retainedOrders = new HashSet<OrderKey>();
         foreach (var (id, match) in existingLinks ?? new Dictionary<string, ReceiptOrderMatch>())
         {
+            // Exact entries come only from EstablishedReceiptLinkSession's local
+            // validation of previously accepted pairs. They retain their allocation
+            // while unrelated API coverage is pending, including outside this subset.
+            if (match.State == ReceiptLinkState.Exact && match.Order is { } established &&
+                currentOrders.TryGetValue(established.Key, out var current) && !current.IsCanceled)
+            {
+                if (result.TryGetValue(id, out var observed) && observed.State is ReceiptLinkState.Manual or ReceiptLinkState.Conflict)
+                    continue;
+                if (result.Any(pair => pair.Key != id && pair.Value.Order?.Key == established.Key &&
+                        (pair.Value.State == ReceiptLinkState.Manual || pair.Value.State == ReceiptLinkState.Exact &&
+                            !(existingLinks?.TryGetValue(pair.Key, out var retained) == true &&
+                                retained.State == ReceiptLinkState.Exact && retained.Order?.Key == established.Key))) ||
+                    manualReservations.Contains(established.Key))
+                    continue;
+                if (result.TryGetValue(id, out observed))
+                {
+                    if (observed.State == ReceiptLinkState.Exact && observed.Order?.Key != established.Key) continue;
+                    result[id] = match with { Order = current };
+                }
+                retainedOrders.Add(established.Key);
+                continue;
+            }
             if (match.State != ReceiptLinkState.Suggested || match.Order is null || reserved.Contains(match.Order.Key)) continue;
             if ((currentOrders.GetValueOrDefault(match.Order.Key) ?? match.Order).IsCanceled) continue;
             if (result.TryGetValue(id, out var evidence))

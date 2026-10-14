@@ -18,6 +18,7 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
     private readonly IOrderLinkDialogService _dialogs;
     private readonly IFiscalReferenceVerifier? _fiscalVerifier;
     private readonly CachedReceiptOrderMatchingService _matcher = new();
+    private readonly EstablishedReceiptLinkSession _establishedLinks = new();
     private readonly IAutomaticMatchCacheStore? _automaticCacheStore;
     private AutomaticMatchCache _automaticCache = new();
     private bool _allowCachedRestore, _legacyCoverageVerified, _showingCachedMatches;
@@ -213,7 +214,7 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
     public void UpdateReceiptScope(IReadOnlyList<ReceiptRowViewModel> rows, string account, DateOnly from, DateOnly to,
         bool background = false, bool verifiedCoverage = true)
     {
-        if (!CoordinatorManaged) { SetReceiptScope(rows, account, from, to); return; }
+        if (!CoordinatorManaged && !IsWorkspaceRefreshing) { SetReceiptScope(rows, account, from, to); return; }
         if (_account != account)
         {
             SetReceiptScope(rows, account, background ? _displayFrom ?? from : from, background ? _displayTo ?? to : to);
@@ -906,12 +907,16 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
     private void ApplyMatches(bool? backgroundOnly = null)
     {
         if (!_canApply) return;
+        if (!_parallelPublishing && _pendingRefreshPublications.Any(block => block.IsCurrent)) return;
         if (_pendingFiscalPublications.Any(block => block.IsCurrent)) return;
         if (_parallelPublishing && Labels?.IsPrintOperationActive == true) return;
         var backgroundMode = backgroundOnly ?? _backgroundSyncing;
         var orders = ActiveOrders;
         _matcher.NormalizeConnectionAliases(_automaticCache, _account, _snapshot.Orders, orders, _deduplication.NormalizeKey);
         var decisions = ActiveDecisions;
+        var established = _establishedLinks.Restore(_account, _rows.Select(row => row.Model).ToArray(),
+            orders, decisions, EnabledConnectionIds);
+        orders = established.Orders;
         var interactiveCoverageComplete = _coverageComplete && ReceiptCoverageFresh;
         var appliedCoverageComplete = interactiveCoverageComplete;
         var appliedScopeDescription = MatchScope.Description;
@@ -923,7 +928,7 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
             {
                 var interactive = _rows.Where(r => IsInRange(r, _from, _to)).ToArray();
                 foreach (var (id, match) in CalculateMatches(interactive, MatchScope, interactiveCoverageComplete,
-                             orders, decisions, _legacyCoverageVerified)) matches[id] = match;
+                             orders, decisions, _legacyCoverageVerified, establishedExactLinks: established.Matches)) matches[id] = match;
             }
             if (_backgroundFrom is { } backgroundFrom && _backgroundTo is { } backgroundTo)
             {
@@ -941,15 +946,25 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
                     appliedScopeDescription = scope.Description;
                 }
                 foreach (var (id, match) in CalculateMatches(recent, scope,
-                             freshCoverage, orders, decisions, false, restoreBackgroundCache: true))
+                             freshCoverage, orders, decisions, false, restoreBackgroundCache: true,
+                             establishedExactLinks: established.Matches))
                     if (!matches.ContainsKey(id)) matches[id] = match;
             }
+        }
+        foreach (var (id, retained) in established.Matches)
+        {
+            if (matches.TryGetValue(id, out var current) &&
+                (current.State is ReceiptLinkState.Manual or ReceiptLinkState.Conflict ||
+                 current.State == ReceiptLinkState.Exact && current.Order?.Key != retained.Order?.Key)) continue;
+            matches[id] = retained;
         }
         foreach (var row in _rows)
             row.OrderMatch = !HasEnabledConnections || _account.Length == 0
                 ? new(ReceiptLinkState.NotChecked, null, "Маркетплейси не підключено. Звичайний друк доступний.", [])
                 : matches.TryGetValue(row.Id, out var match) ? match : row.OrderMatch ??
                     new(ReceiptLinkState.Incomplete, null, "Цей діапазон ще не перевірено.", []);
+        _establishedLinks.Capture(_account, _rows.Select(row => row.Model).ToArray(),
+            _rows.Where(row => row.OrderMatch is not null).ToDictionary(row => row.Id, row => row.OrderMatch!), EnabledConnectionIds);
         RefreshOrderRows(orders);
         var linked = _rows.Where(r => r.OrderMatch?.Order is not null).Select(r => r.OrderMatch!.Order!.Key).ToHashSet();
         var unmatchedKeys = orders.Count(o => o.FiscalReferences.Count > 0 && !linked.Contains(o.Key));
@@ -971,7 +986,7 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
     private IReadOnlyDictionary<string, ReceiptOrderMatch> CalculateMatches(
         IReadOnlyList<ReceiptRowViewModel> rows, AmountMatchScope matchScope, bool complete,
         IReadOnlyList<MarketplaceOrder> orders, IReadOnlyList<ReceiptOrderDecision> decisions, bool legacyCoverage,
-        bool restoreBackgroundCache = false)
+        bool restoreBackgroundCache = false, IReadOnlyDictionary<string, ReceiptOrderMatch>? establishedExactLinks = null)
     {
         if (rows.Count == 0) return new Dictionary<string, ReceiptOrderMatch>();
         var receipts = rows.Select(row => row.Model).ToArray();
@@ -989,7 +1004,7 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
             { Explanation = "Збережений результат попередньої перевірки; очікує оновлення API. " + p.Value.Explanation });
         }
         var calculated = _matcher.MatchAll(_automaticCache, receipts, _account, orders, decisions,
-            complete, details, matchScope, loading, EnabledConnectionIds).Matches;
+            complete, details, matchScope, loading, EnabledConnectionIds, establishedExactLinks).Matches;
         if (!complete && calculated.Values.Any(m => m.State == ReceiptLinkState.Suggested)) _showingCachedMatches = true;
         if (!allowRestore || complete) return calculated;
         var known = _matcher.RestoreKnownSuggestions(_automaticCache, receipts, _account, orders,

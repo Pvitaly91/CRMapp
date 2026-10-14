@@ -6,6 +6,24 @@ namespace CheckboxBatchPrinter.ViewModels;
 public sealed partial class MarketplaceWorkspaceViewModel
 {
     private readonly HashSet<FiscalPublicationBlock> _pendingFiscalPublications = [];
+    private readonly HashSet<FiscalPublicationBlock> _pendingRefreshPublications = [];
+
+    public IDisposable BeginRefreshPublication()
+    {
+        var account = _account;
+        var configuration = _configurationVersion;
+        var accountVersion = _parallelAccountVersion;
+        var display = (_displayFrom, _displayTo);
+        bool IsCurrent() => account == _account && configuration == _configurationVersion &&
+            accountVersion == _parallelAccountVersion && display == (_displayFrom, _displayTo);
+        var block = new FiscalPublicationBlock(IsCurrent, completed =>
+        {
+            _pendingRefreshPublications.Remove(completed);
+            if (IsCurrent()) ApplyMatches();
+        });
+        _pendingRefreshPublications.Add(block);
+        return block;
+    }
 
     private async Task EnsureAttachedBeforeFiscalPublicationAsync()
     {
@@ -66,6 +84,27 @@ public sealed partial class MarketplaceWorkspaceViewModel
         static string NormalizeId(string id) => Guid.TryParse(id, out var uuid) ? uuid.ToString("D") : id;
         var byReceiptId = _rows.Select(row => row.Model).GroupBy(receipt => NormalizeId(receipt.Id))
             .ToDictionary(group => group.Key, group => group.First());
+        var previousOrders = ActiveOrders.GroupBy(order => order.Key).ToDictionary(group => group.Key, group => group.First());
+        var established = _establishedLinks.Restore(_account, byReceiptId.Values.ToArray(), orders,
+            ActiveDecisions, EnabledConnectionIds);
+        orders = established.Orders;
+        var establishedKeys = established.Matches.Values.Where(match => match.Order is not null)
+            .Select(match => match.Order!.Key).ToHashSet();
+        var savedSuggested = _matcher.LinkedOrderKeys(_automaticCache, _account, byReceiptId.Values.ToArray(), orders, ActiveDecisions);
+        var manual = ActiveDecisions.Where(decision => decision.AccountContext == _account)
+            .GroupBy(decision => NormalizeId(decision.ReceiptId))
+            .Select(group => group.MaxBy(decision => decision.UpdatedAtUtc)!)
+            .Where(decision => decision.ConfirmedOrder is not null)
+            .ToDictionary(decision => NormalizeId(decision.ReceiptId));
+        var unchangedLinked = establishedKeys.Concat(savedSuggested).Concat(manual.Values.Select(decision => decision.ConfirmedOrder!))
+            .ToHashSet();
+        unchangedLinked.RemoveWhere(key => !previousOrders.TryGetValue(key, out var previous) ||
+            orders.FirstOrDefault(order => order.Key == key) is not { } current || !SameFiscalDocuments(previous, current));
+        var linkedReceipts = established.Matches.Where(pair => pair.Value.Order is not null)
+            .ToDictionary(pair => NormalizeId(pair.Key), pair => pair.Value.Order!.Key);
+        foreach (var (id, decision) in manual) linkedReceipts[id] = decision.ConfirmedOrder!;
+        foreach (var row in _rows.Where(row => row.OrderMatch is { State: ReceiptLinkState.Suggested, Order: not null } &&
+                     savedSuggested.Contains(row.OrderMatch.Order.Key))) linkedReceipts[NormalizeId(row.Id)] = row.OrderMatch!.Order!.Key;
         var detailsById = _receiptDetails.Values.GroupBy(details => NormalizeId(details.Id))
             .ToDictionary(group => group.Key, group => group.First());
         var relevantIds = _rows.Where(row => IsInRange(row, from, to)).Select(row => NormalizeId(row.Id)).ToHashSet();
@@ -90,6 +129,9 @@ public sealed partial class MarketplaceWorkspaceViewModel
         bool NeedsVerification(MarketplaceOrder order)
         {
             if (order.FiscalReferences.Count == 0) return false;
+            if (unchangedLinked.Contains(order.Key) && !receipts.Any(receipt =>
+                    linkedReceipts.GetValueOrDefault(NormalizeId(receipt.Id)) != order.Key &&
+                    HasFiscalClaim(order, receipt))) return false;
             if (order.CreatedAt is { } created && DateRangeBuilder.KyivDate(created) is var day && day >= from && day <= to)
                 return true;
             if (explicitlyLinked.Contains(order.Key) || order.ReceiptIds.Any(id => receiptIds.Any(receipt => CheckboxReceiptReference.SameId(id, receipt))))
@@ -113,7 +155,7 @@ public sealed partial class MarketplaceWorkspaceViewModel
             : [];
         token.ThrowIfCancellationRequested();
         var byKey = verified.ToDictionary(order => order.Key);
-        return orders.Select(order => byKey.TryGetValue(order.Key, out var current) ? current : order with
+        return orders.Select(order => byKey.TryGetValue(order.Key, out var current) ? current : establishedKeys.Contains(order.Key) ? order : order with
         {
             // A skipped order receives no new account-scoped proof. Its immutable
             // UUID, code, source and cashier assertions are all retained for matching.
@@ -121,4 +163,28 @@ public sealed partial class MarketplaceWorkspaceViewModel
                 { VerifiedReceiptId = "", VerifiedAccountContext = "" }).ToArray()
         }).ToArray();
     }
+
+    private static bool SameFiscalDocuments(MarketplaceOrder previous, MarketplaceOrder current)
+    {
+        static FiscalDocumentReference Raw(FiscalDocumentReference reference) => reference with
+            { VerifiedReceiptId = "", VerifiedAccountContext = "" };
+        static string NormalizeId(string id) => Guid.TryParse(id, out var uuid) ? uuid.ToString("D") : id;
+        return previous.Key == current.Key &&
+            previous.ReceiptIds.Select(NormalizeId).ToHashSet(StringComparer.Ordinal).SetEquals(current.ReceiptIds.Select(NormalizeId)) &&
+            previous.FiscalReceiptNumbers.ToHashSet(StringComparer.Ordinal).SetEquals(current.FiscalReceiptNumbers) &&
+            previous.FiscalReceiptUrls.ToHashSet(StringComparer.Ordinal).SetEquals(current.FiscalReceiptUrls) &&
+            previous.FiscalReferences.Select(Raw).ToHashSet().SetEquals(current.FiscalReferences.Select(Raw));
+    }
+
+    private static bool HasFiscalClaim(MarketplaceOrder order, ReceiptRecord receipt) =>
+        order.ReceiptIds.Any(id => CheckboxReceiptReference.SameId(id, receipt.Id)) ||
+        receipt.FiscalCode.Length > 0 && order.FiscalReceiptNumbers.Contains(receipt.FiscalCode, StringComparer.Ordinal) ||
+        order.FiscalReferences.Where(reference => reference.Order == order.Key).Any(reference => reference.Kind switch
+        {
+            FiscalDocumentKeyKind.CheckboxReceiptUuid => CheckboxReceiptReference.SameId(reference.Value, receipt.Id),
+            FiscalDocumentKeyKind.FiscalCode => receipt.FiscalCode.Length > 0 && reference.Value == receipt.FiscalCode,
+            FiscalDocumentKeyKind.CheckboxReceiptUrl => CheckboxReceiptReference.TryParseUrl(reference.Value, out var parsed) &&
+                (CheckboxReceiptReference.SameId(parsed.ReceiptId, receipt.Id) || receipt.FiscalCode.Length > 0 && parsed.FiscalCode == receipt.FiscalCode),
+            _ => false
+        });
 }

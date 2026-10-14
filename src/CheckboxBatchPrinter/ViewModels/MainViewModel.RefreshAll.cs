@@ -83,6 +83,7 @@ public sealed partial class MainViewModel
     private async Task RunRefreshAllAsync(DateOnly from, DateOnly to, TaskCompletionSource completion)
     {
         using var cancellation = new CancellationTokenSource();
+        var publication = Marketplace?.BeginRefreshPublication();
         _refreshAllCancellation = cancellation;
         IsRefreshingAll = true;
         if (Marketplace is not null)
@@ -138,6 +139,7 @@ public sealed partial class MainViewModel
         }
         finally
         {
+            publication?.Dispose();
             if (Marketplace is not null) Marketplace.IsWorkspaceRefreshing = false;
             if (Waybills is not null) Waybills.IsWorkspaceRefreshing = false;
             _refreshAllCancellation = null;
