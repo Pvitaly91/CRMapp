@@ -139,7 +139,11 @@ public sealed partial class MarketplaceWorkspaceViewModel
         {
             // Return details must be available before selecting fiscal verification
             // targets: their original sale can be outside the displayed period.
-            var verified = await VerifyFiscalReferencesInPeriodAsync(ActiveOrdersFrom(snapshot), from, to, token);
+            var activeOrders = ActiveOrdersFrom(snapshot);
+            // Initial attachment cannot publish while verification is pending.
+            // Normalize saved pairs before their raw alias rows are projected away.
+            _matcher.NormalizeConnectionAliases(_automaticCache, _account, snapshot.Orders, activeOrders, _deduplication.NormalizeKey);
+            var verified = await VerifyFiscalReferencesInPeriodAsync(activeOrders, from, to, token);
             token.ThrowIfCancellationRequested();
             if (!IsCurrentParallelContext(generation, configurationVersion, accountVersion, display)) return false;
             snapshot = new(verified, snapshot.States);

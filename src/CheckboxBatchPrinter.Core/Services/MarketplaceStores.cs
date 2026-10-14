@@ -44,6 +44,7 @@ public sealed class JsonMarketplaceSettingsStore(string path) : IMarketplaceSett
             if (!ids.Add(MarketplaceStoreFiles.ConnectionFileId(connection.Id)))
                 throw new InvalidDataException("Підключення повинні мати різні постійні ідентифікатори.");
         }
+        _ = MarketplaceConnectionAliases.Resolve(settings);
     }
 }
 

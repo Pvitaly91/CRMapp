@@ -20,7 +20,12 @@ public sealed class MarketplaceSettings
     public int HistoryDays { get; set; }
     public int CacheDays { get; set; } = 30;
     public List<MarketplaceConnection> Connections { get; set; } = [];
+    // Explicitly consolidated connections keep their historical order/link identities.
+    // These mappings contain no credentials and are never inferred from order numbers.
+    public List<MarketplaceConnectionAlias> ConnectionAliases { get; set; } = [];
 }
+
+public sealed record MarketplaceConnectionAlias(MarketplaceKind Marketplace, string SourceConnectionId, string TargetConnectionId);
 
 public sealed record MarketplaceCredentials(string Token = "", string Login = "", string Password = "");
 public sealed record OrderPerson(string Name = "", string Phone = "");

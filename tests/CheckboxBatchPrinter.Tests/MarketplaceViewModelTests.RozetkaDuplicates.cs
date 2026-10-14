@@ -19,6 +19,8 @@ internal static partial class MarketplaceViewModelTests
         ("Rozetka duplicate primary is deterministic while other accounts and Prom identities stay separate", RozetkaDuplicateIdentityBoundariesAsync),
         ("Rozetka duplicate projection preserves contradictory fiscal evidence and the newest order fields", RozetkaDuplicateEvidenceAsync),
         ("Rozetka decision normalization preserves scope suppression and original persisted keys", RozetkaDuplicateDecisionsAsync),
+        ("explicit historical marketplace aliases retain old keys while following token-equivalent canonical accounts", HistoricalConnectionAliasesAsync),
+        ("marketplace settings reject invalid historical alias graphs without replacing the stored configuration", HistoricalConnectionAliasValidationAsync),
         ("STA one Rozetka print candidate respects submitted history across duplicate projection and restart", () => StaAsync(RozetkaDuplicatePrintCandidatesAsync))
     ];
 

@@ -24,6 +24,7 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
     private readonly HashSet<string> _knownConnectionIds = [];
     private readonly Dictionary<string, long> _credentialReadRevisions = [];
     private readonly HashSet<string> _presenceUnavailable = [];
+    private List<MarketplaceConnectionAlias> _connectionAliases = [];
     public Task CredentialStatusRefresh { get; private set; } = Task.CompletedTask;
 
     public MarketplaceSettingsViewModel(IMarketplaceSettingsStore settings, IMarketplaceSecretStore secrets, MarketplaceSyncService sync)
@@ -158,6 +159,7 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
             Connections.Clear();
             _knownConnectionIds.Clear();
             foreach (var connection in settings.Connections) { Connections.Add(connection); _knownConnectionIds.Add(connection.Id); }
+            _connectionAliases = settings.ConnectionAliases.ToList();
             HistoryDays = settings.HistoryDays; CacheDays = settings.CacheDays;
             Selected = Connections.FirstOrDefault();
             await CredentialStatusRefresh;
@@ -218,7 +220,8 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
         StageCredentials();
         var connections = Connections.Select(CloneConnection).ToList();
         var drafts = new Dictionary<string, MarketplaceCredentials>(_pending);
-        var settings = new MarketplaceSettings { Connections = connections, HistoryDays = HistoryDays, CacheDays = CacheDays };
+        var settings = new MarketplaceSettings { Connections = connections, HistoryDays = HistoryDays, CacheDays = CacheDays,
+            ConnectionAliases = _connectionAliases.ToList() };
         _saving = true;
         IsBusy = true;
         try

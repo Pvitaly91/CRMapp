@@ -18,6 +18,7 @@ internal static partial class MarketplaceViewModelTests
         ("STA late saved credential presence cannot overwrite a newly typed Rozetka API-token", () => StaAsync(RozetkaPresenceDoesNotOverwriteDraftAsync)),
         ("STA blank saved Rozetka token stays Saved and a no-edit Save never rewrites secret bytes", () => StaAsync(RozetkaSavedTokenIsNotDraftAsync)),
         ("STA legacy Rozetka credentials require migration while unrelated settings remain editable", () => StaAsync(RozetkaLegacyMigrationAsync)),
+        ("STA saving marketplace settings preserves explicitly consolidated historical aliases and protected credentials", () => StaAsync(RozetkaHistoricalAliasSettingsRoundTripAsync)),
         ("STA parent coordinator failure occurs after durable Rozetka persistence", () => StaAsync(RozetkaParentCallbackFailureAsync)),
         ("STA concurrent marketplace Save is rejected while a credential store write is pending", () => StaAsync(RozetkaConcurrentSaveAsync)),
         ("STA concurrent parent settings Save is rejected before duplicate app or credential writes", () => StaAsync(RozetkaConcurrentParentSaveAsync)),
@@ -216,6 +217,23 @@ internal static partial class MarketplaceViewModelTests
         reopened.Selected = reopened.Connections.Single(c => c.Id == id); await reopened.CredentialStatusRefresh;
         Equal("Saved", reopened.CredentialStatusKind); Equal("", reopened.Token);
         True(!parent.IsBusy && !marketplace.IsBusy);
+    }
+
+    private static async Task RozetkaHistoricalAliasSettingsRoundTripAsync()
+    {
+        using var files = new RozetkaSettingsFiles();
+        var alias = new MarketplaceConnectionAlias(MarketplaceKind.Rozetka, SettingsRozetkaBId, SettingsRozetkaAId);
+        await files.Settings.Inner.SaveAsync(new() { Connections = [SettingsConnection(SettingsRozetkaAId)], ConnectionAliases = [alias] });
+        await files.Secrets.Inner.SaveAsync(SettingsRozetkaAId, new(Token: "synthetic_consolidated_token"));
+        var credentialsBefore = await File.ReadAllBytesAsync(files.SecretPath(SettingsRozetkaAId));
+        var editor = files.CreateMarketplace(); await editor.LoadAsync();
+        Equal(1, editor.Connections.Count); editor.CacheDays = 20;
+        True(!await editor.SaveAsync());
+        var reopened = await files.Settings.Inner.LoadAsync();
+        Equal(alias, reopened.ConnectionAliases.Single()); Equal(1, reopened.Connections.Count); Equal(20, reopened.CacheDays);
+        Equal(0, files.Secrets.Saves);
+        True(credentialsBefore.SequenceEqual(await File.ReadAllBytesAsync(files.SecretPath(SettingsRozetkaAId))));
+        Equal(0, files.Base.Printer.Calls); Equal(0, files.Base.Rozetka.FetchCalls);
     }
 
     private static async Task RozetkaConcurrentSaveAsync()

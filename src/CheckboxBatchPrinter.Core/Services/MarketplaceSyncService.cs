@@ -28,8 +28,10 @@ public sealed class MarketplaceSyncService(
         try
         {
             // Settings can be edited while I/O is pending; every lane must use the same scope.
-            var connections = settings.Connections.Where(c => c.Enabled).Select(c => new MarketplaceConnection
+            var allConnections = settings.Connections.Select(c => new MarketplaceConnection
             { Id = c.Id, Marketplace = c.Marketplace, Enabled = c.Enabled, Name = c.Name }).ToArray();
+            var connections = allConnections.Where(c => c.Enabled).ToArray();
+            var historicalAliases = settings.ConnectionAliases.ToList();
             var knownKeys = knownOrders.ToArray();
             var retentionDays = settings.CacheDays;
             // Resolve account equivalence and perform requests against the same credential
@@ -43,10 +45,17 @@ public sealed class MarketplaceSyncService(
                 catch (Exception) { credentials[connection.Id] = null; }
             }
             var identity = await MarketplaceOrderDeduplication.ResolveAsync(
-                new MarketplaceSettings { Connections = connections.ToList() }, new CredentialSnapshot(credentials), ct).ConfigureAwait(false);
+                new MarketplaceSettings { Connections = allConnections.ToList(), ConnectionAliases = historicalAliases },
+                new CredentialSnapshot(credentials), ct).ConfigureAwait(false);
             var previous = await cache.LoadAsync(retentionDays, ct).ConfigureAwait(false);
             var orders = previous.Orders.ToDictionary(o => o.Key);
             var states = previous.States.ToDictionary(s => s.ConnectionId);
+            var consolidatedAccounts = historicalAliases.Select(alias => identity.NormalizeKey(
+                new(alias.Marketplace, alias.SourceConnectionId, "")))
+                .Select(key => (key.Marketplace, key.ConnectionId)).ToHashSet();
+            var consolidatedEvidence = consolidatedAccounts.Count == 0 ? new Dictionary<OrderKey, MarketplaceOrder>() :
+                identity.Merge(previous.Orders).Where(order =>
+                    consolidatedAccounts.Contains((order.Key.Marketplace, order.Key.ConnectionId))).ToDictionary(order => order.Key);
             using var saveGate = new SemaphoreSlim(1, 1);
             // Independent providers run together. Connections, pages and details within one
             // provider stay sequential, retaining its existing rate limits and error handling.
@@ -166,7 +175,18 @@ public sealed class MarketplaceSyncService(
                             FiscalReferences = order.FiscalReferences.Select(reference => reference.Order == order.Key
                                 ? reference with { Order = key } : reference).ToArray()
                         };
-                        updates[key] = laneOrders[key] = MarketplaceFiscalEvidence.Preserve(projected, laneOrders.GetValueOrDefault(key));
+                        var preserved = MarketplaceFiscalEvidence.Preserve(projected, laneOrders.GetValueOrDefault(key));
+                        if (consolidatedEvidence.TryGetValue(identity.NormalizeKey(key), out var historical))
+                        {
+                            // Copy immutable fiscal evidence onto the surviving account before
+                            // the removed connection's cached rows expire. Preserve conflicts
+                            // and re-scope only references owned by that historical order.
+                            var scoped = historical with { Key = key, FiscalReferences = historical.FiscalReferences
+                                .Select(reference => reference.Order == historical.Key ? reference with { Order = key } : reference).ToArray() };
+                            preserved = MarketplaceFiscalEvidence.Preserve(preserved, scoped) with
+                            { ReceiptIds = preserved.ReceiptIds.Concat(scoped.ReceiptIds).Distinct(StringComparer.Ordinal).ToArray() };
+                        }
+                        updates[key] = laneOrders[key] = preserved;
                     }
                 }
             }

@@ -136,6 +136,50 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
         return ResolveSavedLinks(cache, receipts, orders, decisions, null).Values.Select(m => m.Order!.Key).ToHashSet();
     }
 
+    /// <summary>Retain a verified saved pair when explicit connection consolidation changes only its identity.</summary>
+    public void NormalizeConnectionAliases(AutomaticMatchCache cache, string accountContext,
+        IReadOnlyList<MarketplaceOrder> sourceOrders, IReadOnlyList<MarketplaceOrder> normalizedOrders,
+        Func<OrderKey, OrderKey> normalizeKey)
+    {
+        if (string.IsNullOrWhiteSpace(accountContext) || !BindAccount(cache, accountContext)) return;
+        Prune(cache, _clock.GetUtcNow());
+        var aliases = cache.Links.Where(pair => pair.Value.Match.State == ReceiptLinkState.Suggested &&
+            pair.Value.Match.Order is { } key && normalizeKey(key) != key).ToArray();
+        if (aliases.Length == 0) return;
+        var originals = sourceOrders.GroupBy(order => order.Key)
+            .ToDictionary(group => group.Key, group => group.MaxBy(order => order.RetrievedAtUtc)!);
+        var canonical = normalizedOrders.GroupBy(order => order.Key)
+            .ToDictionary(group => group.Key, group => group.MaxBy(order => order.RetrievedAtUtc)!);
+        foreach (var (id, link) in aliases)
+        {
+            var saved = link.Match;
+            if (saved.State != ReceiptLinkState.Suggested || saved.Order is null) continue;
+            var key = normalizeKey(saved.Order);
+            if (key == saved.Order || !originals.TryGetValue(saved.Order, out var original) || original.IsCanceled ||
+                !canonical.TryGetValue(key, out var current) || current.IsCanceled ||
+                saved.OrderFingerprint != OrderFingerprint(original)) continue;
+            var projected = original with
+            {
+                Key = key,
+                FiscalReferences = original.FiscalReferences.Select(reference => reference.Order == original.Key
+                    ? reference with { Order = key } : reference).ToArray()
+            };
+            var fingerprint = OrderFingerprint(current);
+            // The canonical account may have newer or contradictory document data.
+            // Such a change requires ordinary matching; an alias cannot waive it.
+            if (OrderFingerprint(projected) != fingerprint) continue;
+            cache.Links[id] = link with
+            {
+                Match = saved with
+                {
+                    Order = key, OrderFingerprint = fingerprint,
+                    Candidates = saved.Candidates.Select(normalizeKey).Distinct().ToArray(),
+                    GroupOrders = saved.GroupOrders.Select(normalizeKey).Distinct().ToArray()
+                }
+            };
+        }
+    }
+
     private Dictionary<string, ReceiptOrderMatch> ResolveSavedLinks(AutomaticMatchCache cache,
         IReadOnlyList<ReceiptRecord> receipts, IReadOnlyList<MarketplaceOrder> orders,
         IReadOnlyList<ReceiptOrderDecision> decisions, AmountMatchScope? scope)

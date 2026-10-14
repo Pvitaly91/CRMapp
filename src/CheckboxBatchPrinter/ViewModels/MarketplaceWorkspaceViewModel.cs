@@ -573,7 +573,11 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
             }
             if (_fiscalVerifier is not null && _account.Length > 0)
             {
-                var verified = await VerifyFiscalReferencesInPeriodAsync(ActiveOrdersFrom(snapshot), syncFrom, syncTo, token);
+                var activeOrders = ActiveOrdersFrom(snapshot);
+                // Verification publishes canonical rows only. Validate saved alias
+                // pairs while the source snapshot still contains their original keys.
+                _matcher.NormalizeConnectionAliases(_automaticCache, _account, snapshot.Orders, activeOrders, _deduplication.NormalizeKey);
+                var verified = await VerifyFiscalReferencesInPeriodAsync(activeOrders, syncFrom, syncTo, token);
                 token.ThrowIfCancellationRequested();
                 if (generation != _generation) return;
                 snapshot = new(verified, snapshot.States);
@@ -642,8 +646,8 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
     internal (int Generation, string Account, DateOnly From, DateOnly To, DateOnly? DisplayFrom, DateOnly? DisplayTo) SelectionScope =>
         (_generation, _account, _from, _to, _displayFrom, _displayTo);
     private IReadOnlyList<MarketplaceOrder> ActiveOrders => ActiveOrdersFrom(_snapshot);
-    private IReadOnlyList<MarketplaceOrder> ActiveOrdersFrom(MarketplaceSnapshot snapshot) => _deduplication.Merge(snapshot.Orders.Where(o =>
-        _config.Connections.Any(c => c.Enabled && c.Id == o.Key.ConnectionId && c.Marketplace == o.Key.Marketplace)));
+    private IReadOnlyList<MarketplaceOrder> ActiveOrdersFrom(MarketplaceSnapshot snapshot) => _deduplication.Merge(snapshot.Orders).Where(o =>
+        _config.Connections.Any(c => c.Enabled && c.Id == o.Key.ConnectionId && c.Marketplace == o.Key.Marketplace)).ToArray();
 
     private bool MatchesOrderFilter(object value)
     {
@@ -808,6 +812,7 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
         var range = MarketplaceSyncService.BuildRange(receiptFrom, receiptTo,
             Math.Min(3650, _config.HistoryDays + _extraHistory));
         var activeOrders = ActiveOrders;
+        _matcher.NormalizeConnectionAliases(_automaticCache, _account, _snapshot.Orders, activeOrders, _deduplication.NormalizeKey);
         var linkedOrders = _matcher.LinkedOrderKeys(_automaticCache, _account, _rows.Select(r => r.Model).ToArray(),
             activeOrders, ActiveDecisions).ToHashSet();
         linkedOrders.UnionWith(_rows.Where(r => r.OrderMatch?.Order is not null && r.OrderMatch.Products != ProductComparison.Loading)
@@ -905,6 +910,7 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
         if (_parallelPublishing && Labels?.IsPrintOperationActive == true) return;
         var backgroundMode = backgroundOnly ?? _backgroundSyncing;
         var orders = ActiveOrders;
+        _matcher.NormalizeConnectionAliases(_automaticCache, _account, _snapshot.Orders, orders, _deduplication.NormalizeKey);
         var decisions = ActiveDecisions;
         var interactiveCoverageComplete = _coverageComplete && ReceiptCoverageFresh;
         var appliedCoverageComplete = interactiveCoverageComplete;

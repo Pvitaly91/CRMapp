@@ -4,7 +4,8 @@ namespace CheckboxBatchPrinter.Core.Services;
 
 // Session-only equivalence: identical nonempty marketplace API tokens prove
 // that enabled connections read the same account.
-// Names/order numbers alone do not. No credentials or alias mappings are persisted.
+// Names/order numbers alone do not. Explicitly consolidated historical connections
+// additionally resolve through the non-secret mappings saved in marketplace settings.
 public sealed class MarketplaceOrderDeduplication
 {
     private readonly Dictionary<(MarketplaceKind Marketplace, string ConnectionId), string> _aliases = new();
@@ -13,6 +14,7 @@ public sealed class MarketplaceOrderDeduplication
         IMarketplaceSecretStore secrets, CancellationToken ct = default)
     {
         var result = new MarketplaceOrderDeduplication();
+        var historicalAliases = MarketplaceConnectionAliases.Resolve(settings);
         // Tuple string equality is ordinal; identities stay separate for each marketplace.
         var accounts = new Dictionary<(MarketplaceKind Marketplace, string Login, string Secret), string>();
         foreach (var connection in settings.Connections.Where(c => c.Enabled &&
@@ -41,11 +43,20 @@ public sealed class MarketplaceOrderDeduplication
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception) { /* Unreadable credentials do not prove account equivalence. */ }
         }
+        var enabled = settings.Connections.Where(c => c.Enabled).Select(c => (c.Marketplace, c.Id)).ToHashSet();
+        foreach (var (source, target) in historicalAliases)
+            if (enabled.Contains((source.Marketplace, target)))
+                result._aliases[source] = result.NormalizeKey(new(source.Marketplace, target, "")).ConnectionId;
         return result;
     }
 
-    public OrderKey NormalizeKey(OrderKey key) =>
-        _aliases.TryGetValue((key.Marketplace, key.ConnectionId), out var primary) ? key with { ConnectionId = primary } : key;
+    public OrderKey NormalizeKey(OrderKey key)
+    {
+        if (_aliases.TryGetValue((key.Marketplace, key.ConnectionId), out var primary) ||
+            Guid.TryParse(key.ConnectionId, out var id) && _aliases.TryGetValue((key.Marketplace, id.ToString("N")), out primary))
+            return key with { ConnectionId = primary };
+        return key;
+    }
 
     public IReadOnlyList<MarketplaceOrder> Merge(IEnumerable<MarketplaceOrder> orders) => orders
         .Select(order =>

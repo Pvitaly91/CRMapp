@@ -35,6 +35,7 @@ internal static class MarketplaceSyncTests
         ("sync: alias manual keys refresh one canonical detail and retain every persisted alias", DuplicateSellerKnownKeysAsync),
         ("sync: changed or unreadable seller credentials never share a request", DuplicateSellerCredentialBoundariesAsync),
         ("sync: partial duplicate-account responses update all aliases without advancing their checkpoints", DuplicateSellerPartialFailureAsync),
+        ("sync: consolidated fiscal evidence survives refresh and expiration of removed connection rows without hiding conflicts", ConsolidatedFiscalEvidenceSurvivesExpiryAsync),
         ("sync: Kyiv day boundaries honor DST and configurable lookback", DateRangeAsync),
         ("transport: only documented read/auth requests reach HTTP handler", ReadOnlyWhitelistAsync),
         ("transport: Rozetka Retry-After delta/date control injected delay", RetryAfterAsync),
@@ -647,6 +648,86 @@ internal static class MarketplaceSyncTests
         }
     }
 
+    private static async Task ConsolidatedFiscalEvidenceSurvivesExpiryAsync()
+    {
+        foreach (var conflicting in new[] { false, true })
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "cbp-consolidated-fiscal-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                const string removedId = "90000000000000000000000000000081", unrelatedId = "90000000000000000000000000000082";
+                const string oldReceipt = "11111111-1111-1111-1111-111111111111", freshReceipt = "22222222-2222-2222-2222-222222222222";
+                var config = new MarketplaceSettings
+                {
+                    Connections = [new() { Id = RozetkaId, Marketplace = MarketplaceKind.Rozetka, Enabled = true }],
+                    ConnectionAliases = [new(MarketplaceKind.Rozetka, removedId, RozetkaId)]
+                };
+                var oldKey = new OrderKey(MarketplaceKind.Rozetka, removedId, "42");
+                var activeKey = oldKey with { ConnectionId = RozetkaId };
+                var oldReference = new FiscalDocumentReference(FiscalDocumentKeyKind.CheckboxReceiptUuid,
+                    oldReceipt, "historical link", oldKey, "checkbox", "same-document");
+                var old = Order("42", "historical", removedId, MarketplaceKind.Rozetka) with
+                {
+                    RetrievedAtUtc = Now.AddDays(-29), ReceiptIds = [oldReceipt], FiscalReferences = [oldReference],
+                    FiscalReceiptNumbers = ["historical-fiscal-code"],
+                    FiscalReceiptUrls = ["https://check.checkbox.ua/" + oldReceipt]
+                };
+                var active = Order("42", "current", RozetkaId, MarketplaceKind.Rozetka) with { RetrievedAtUtc = Now.AddDays(-1) };
+                var unrelated = Order("42", "other seller", unrelatedId, MarketplaceKind.Rozetka) with
+                { ReceiptIds = ["33333333-3333-3333-3333-333333333333"], FiscalReceiptNumbers = ["other-seller-code"] };
+                var clock = new ExpiringClock { Utc = Now };
+                var path = Path.Combine(directory, "marketplace-cache.dpapi");
+                var cache = new DpapiMarketplaceCacheStore(path, clock);
+                await cache.SaveAsync(new([old, active, unrelated], []));
+                var client = new FakeClient(MarketplaceKind.Rozetka)
+                {
+                    Fetch = (connection, _) =>
+                    {
+                        Equal(RozetkaId, connection.Id);
+                        var fresh = Order("42", "fresh", connection.Id, MarketplaceKind.Rozetka) with { RetrievedAtUtc = clock.Utc };
+                        if (conflicting) fresh = fresh with { ReceiptIds = [freshReceipt], FiscalReferences =
+                            [oldReference with { Order = activeKey, Value = freshReceipt, Source = "fresh conflicting assertion" }] };
+                        return Task.FromResult(new OrdersFetchResult([fresh], true));
+                    }
+                };
+                var secrets = new SellerSecrets(); secrets.Values[RozetkaId] = new(Token: "synthetic-consolidated-token");
+                var service = new MarketplaceSyncService([client], secrets, cache, clock);
+                var first = await service.SynchronizeAsync(config, Range, [oldKey]);
+                var surviving = first.Orders.Single(o => o.Key == activeKey);
+                Equal("fresh", surviving.Status); Equal(conflicting ? 2 : 1, surviving.FiscalReferences.Count);
+                True(surviving.FiscalReferences.All(r => r.Order == activeKey));
+                True(surviving.ReceiptIds.Contains(oldReceipt));
+                True(!surviving.ReceiptIds.Contains(unrelated.ReceiptIds.Single()));
+                True(!surviving.FiscalReceiptNumbers.Contains("other-seller-code"));
+                var retainedOld = first.Orders.Single(o => o.Key == oldKey);
+                Equal(old.Status, retainedOld.Status); Equal(old.RetrievedAtUtc, retainedOld.RetrievedAtUtc);
+                Equal(oldReference, retainedOld.FiscalReferences.Single());
+                Equal(0, client.DetailIds.Count); Equal(1, client.FetchCount);
+                True(!secrets.LoadCounts.ContainsKey(removedId));
+
+                clock.Utc = Now.AddDays(2);
+                var expired = await cache.LoadAsync(30);
+                True(expired.Orders.All(o => o.Key != oldKey));
+                Equal(conflicting ? 2 : 1, expired.Orders.Single(o => o.Key == activeKey).FiscalReferences.Count);
+                // Reopen the protected cache and refresh again after the old alias no longer exists.
+                var reopened = new DpapiMarketplaceCacheStore(path, clock);
+                var next = await new MarketplaceSyncService([client], secrets, reopened, clock).SynchronizeAsync(config, Range, [oldKey]);
+                surviving = next.Orders.Single(o => o.Key == activeKey);
+                Equal(conflicting ? 2 : 1, surviving.FiscalReferences.Count);
+                Equal(conflicting ? 2 : 1, surviving.ReceiptIds.Count);
+                True(surviving.FiscalReferences.All(r => r.Order == activeKey));
+                True(surviving.FiscalReceiptNumbers.Contains("historical-fiscal-code"));
+                True(surviving.FiscalReceiptUrls.Contains(old.FiscalReceiptUrls.Single()));
+                True(next.Orders.All(o => o.Key != oldKey)); Equal(0, client.DetailIds.Count); Equal(2, client.FetchCount);
+                var receipt = new ReceiptRecord { Id = oldReceipt, Type = ReceiptTypes.Sell, Status = "DONE", FiscalDate = Now, TotalSumMinor = 10000 };
+                Equal(conflicting ? ReceiptLinkState.Conflict : ReceiptLinkState.Exact,
+                    new ReceiptOrderMatchingService().Match(receipt, "synthetic-cashier", [surviving], [], true).State);
+            }
+            finally { Directory.Delete(directory, recursive: true); }
+        }
+    }
+
     private static Task DateRangeAsync()
     {
         var spring = MarketplaceSyncService.BuildRange(new DateOnly(2024, 3, 31), new DateOnly(2024, 3, 31), 0);
@@ -902,6 +983,11 @@ internal static class MarketplaceSyncTests
         public Task SaveAsync(string connectionId, MarketplaceCredentials credentials, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
     private sealed class Clock : TimeProvider { public override DateTimeOffset GetUtcNow() => Now; }
+    private sealed class ExpiringClock : TimeProvider
+    {
+        public DateTimeOffset Utc { get; set; }
+        public override DateTimeOffset GetUtcNow() => Utc;
+    }
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> handle) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromResult(handle(request));
