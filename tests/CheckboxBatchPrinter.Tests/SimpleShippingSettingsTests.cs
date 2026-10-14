@@ -10,6 +10,7 @@ using CheckboxBatchPrinter.Core.Models;
 using CheckboxBatchPrinter.Core.Services;
 using CheckboxBatchPrinter.Services;
 using CheckboxBatchPrinter.Views;
+using CheckboxBatchPrinter.ViewModels;
 using static CheckboxBatchPrinter.Tests.ShippingLabelsTests;
 
 namespace CheckboxBatchPrinter.Tests;
@@ -36,18 +37,19 @@ internal static class SimpleShippingSettingsTests
     [
         ("simple NP blank key preserves settings without choosing an account", Blank),
         ("simple NP private key rotates in place and same key keeps identity", PrivateRotation),
-        ("simple NP shared account key forks only the selected shop", SharedRotation),
-        ("simple NP unbound shop receives its own account without guessing an existing one", Unbound),
+        ("simple NP shared account key updates in place and retains all shop bindings", SharedRotation),
+        ("simple NP unbound shop reuses the sole existing account without duplicating it", Unbound),
         ("simple NP rejects invalid keys shops and account overflow without exposing secrets", Invalid),
         ("DPAPI simple NP key and explicit shop binding survive restart without changing label history", Persistence),
         ("STA simple label settings show one masked NP field and collapse advanced options", () => MarketplaceViewModelTests.StaAsync(SimplifiedUi)),
-        ("STA simple label settings save the explicitly selected Prom shop only", () => MarketplaceViewModelTests.StaAsync(SelectedShopUi)),
+        ("STA simple label settings reuse the existing NP account for the selected Prom shop", () => MarketplaceViewModelTests.StaAsync(SelectedShopUi)),
         ("STA NP verify follows selected order shop and rejects a programmatic mismatched click without saving", () => MarketplaceViewModelTests.StaAsync(VerificationShopUi)),
-        ("STA simple label settings keep typed keys separate while switching shops", () => MarketplaceViewModelTests.StaAsync(DraftsUi)),
+        ("STA conflicting NP drafts cannot silently overwrite one account and identical drafts reuse it", () => MarketplaceViewModelTests.StaAsync(DraftsUi)),
         ("STA shipping credential indicators distinguish saved tokens drafts and shops without exposing keys", () => MarketplaceViewModelTests.StaAsync(CredentialIndicatorsUi)),
         ("STA simple label settings closing without save writes no typed key", () => MarketplaceViewModelTests.StaAsync(CancelUi)),
         ("STA simple label settings blank key preserves latest credentials and collapsed print options", () => MarketplaceViewModelTests.StaAsync(PreserveUi)),
-        ("STA simple NP key can be saved before selecting a label printer", () => MarketplaceViewModelTests.StaAsync(NoPrinterUi))
+        ("STA simple NP key can be saved before selecting a label printer", () => MarketplaceViewModelTests.StaAsync(NoPrinterUi)),
+        ("STA Rozetka Delivery token rotation keeps its connection and print history identities", () => MarketplaceViewModelTests.StaAsync(DeliveryTokenRotationUi))
     ];
 
     private static void OtherSettingsUnchanged(ShippingLabelSettings before, ShippingLabelSettings after)
@@ -91,24 +93,31 @@ internal static class SimpleShippingSettingsTests
             "Entering the same shared key forked an account.");
         var updated = NovaPoshtaKeySettings.Apply(original, Prom(), NewKey);
         var binding = updated.NovaPoshtaStoreBindings.Single(b => b.MarketplaceConnectionId == ShopA);
-        Check(updated.NovaPoshtaConnections.Count == 2 && binding.NovaPoshtaConnectionId != Account &&
+        Check(updated.NovaPoshtaConnections.Count == 1 && binding.NovaPoshtaConnectionId == Account &&
             updated.NovaPoshtaConnections.Single(c => c.Id == binding.NovaPoshtaConnectionId).ApiKey == NewKey &&
-            updated.NovaPoshtaConnections.Single(c => c.Id == Account).ApiKey == OldKey &&
-            updated.NovaPoshtaStoreBindings.Single(b => b.MarketplaceConnectionId == ShopB).NovaPoshtaConnectionId == Account,
-            "Changing one shop's key changed another shop's shared account.");
+            updated.NovaPoshtaStoreBindings.SequenceEqual(original.NovaPoshtaStoreBindings) &&
+            updated.NovaPoshtaConnections.Single().Name == original.NovaPoshtaConnections.Single().Name,
+            "Rotating a shared key created a new account or changed stable shop bindings.");
+        Check(original.NovaPoshtaConnections.Single().ApiKey == OldKey, "Shared key rotation mutated its input.");
         OtherSettingsUnchanged(original, updated);
         return Task.CompletedTask;
     }
     private static Task Unbound()
     {
-        var original = Original with { NovaPoshtaConnections = [new(Account, "Unbound legacy account", NewKey)] };
-        var updated = NovaPoshtaKeySettings.Apply(original, Prom(), NewKey);
-        var binding = updated.NovaPoshtaStoreBindings.Single();
-        Check(updated.NovaPoshtaConnections.Count == 2 && binding.MarketplaceConnectionId == ShopA && binding.NovaPoshtaConnectionId != Account &&
-            updated.NovaPoshtaConnections.Single(c => c.Id == binding.NovaPoshtaConnectionId).ApiKey == NewKey &&
-            updated.NovaPoshtaConnections.Single(c => c.Id == Account) == original.NovaPoshtaConnections.Single(),
-            "Unbound shop guessed an existing account from its name or key.");
-        OtherSettingsUnchanged(original, updated);
+        var original = Original with { NovaPoshtaConnections = [new(Account, "Existing carrier account", OldKey)] };
+        foreach (var key in new[] { OldKey, NewKey })
+        {
+            var updated = NovaPoshtaKeySettings.Apply(original, Prom(), key);
+            var binding = updated.NovaPoshtaStoreBindings.Single();
+            Check(updated.NovaPoshtaConnections.Count == 1 && binding == new NovaPoshtaStoreBinding(ShopA, Account) &&
+                updated.NovaPoshtaConnections.Single() == (original.NovaPoshtaConnections.Single() with { ApiKey = key }),
+                "An unbound shop created another carrier account instead of reusing the only existing connection.");
+            var again = NovaPoshtaKeySettings.Apply(updated, Prom(ShopB), key);
+            Check(again.NovaPoshtaConnections.Count == 1 && again.NovaPoshtaStoreBindings.Count == 2 &&
+                again.NovaPoshtaStoreBindings.All(item => item.NovaPoshtaConnectionId == Account),
+                "Binding a second store duplicated the carrier account.");
+            OtherSettingsUnchanged(original, updated);
+        }
         return Task.CompletedTask;
     }
     private static Task Invalid()
@@ -133,6 +142,13 @@ internal static class SimpleShippingSettingsTests
         var full = Original with { NovaPoshtaConnections = Enumerable.Range(1, 30)
             .Select(i => new NovaPoshtaConnection(i.ToString("x32"), "Synthetic " + i, OldKey)).ToArray() };
         Rejected(full, Prom(), NewKey);
+        Rejected(full with { NovaPoshtaConnections = full.NovaPoshtaConnections.Take(2).ToArray() }, Prom(), NewKey);
+        var boundFull = full with { NovaPoshtaStoreBindings = [new(ShopA, full.NovaPoshtaConnections[0].Id)] };
+        var rotatedFull = NovaPoshtaKeySettings.Apply(boundFull, Prom(), NewKey);
+        Check(rotatedFull.NovaPoshtaConnections.Count == 30 && rotatedFull.NovaPoshtaConnections[0].ApiKey == NewKey &&
+            rotatedFull.NovaPoshtaConnections.Skip(1).SequenceEqual(boundFull.NovaPoshtaConnections.Skip(1)) &&
+            rotatedFull.NovaPoshtaStoreBindings.SequenceEqual(boundFull.NovaPoshtaStoreBindings),
+            "Rotating an explicitly bound legacy account merged, deleted, or duplicated other accounts.");
         Check(original.NovaPoshtaConnections.Single().ApiKey == OldKey && full.NovaPoshtaConnections.Count == 30,
             "Failed validation mutated the settings.");
         return Task.CompletedTask;
@@ -147,17 +163,21 @@ internal static class SimpleShippingSettingsTests
             var historyPath = Path.Combine(directory, "label-attempts.dpapi");
             var history = new DpapiLabelHistoryStore(historyPath);
             await history.SaveAsync(new("synthetic-attempt", "synthetic-job", PrinterName, DateTimeOffset.UtcNow,
-                LabelSubmissionState.SubmissionUnknown, [new(ShippingCarrier.NovaPoshta, Account, "20400000000001", "synthetic-document", 1, "synthetic-fingerprint")]));
+                LabelSubmissionState.Submitted, [new(ShippingCarrier.NovaPoshta, Account, "20400000000001", "synthetic-document", 1, "synthetic-fingerprint")]));
             var historyBefore = await File.ReadAllBytesAsync(historyPath);
-            var first = NovaPoshtaKeySettings.Apply(Original, Prom(), OldKey);
+            var first = Bound with { NovaPoshtaStoreBindings = [new(ShopA, Account), new(ShopB, Account)] };
             await new DpapiShippingSettingsStore(path).SaveAsync(first);
             var restarted = await new DpapiShippingSettingsStore(path).LoadAsync();
             var id = restarted.NovaPoshtaConnections.Single().Id;
             await new DpapiShippingSettingsStore(path).SaveAsync(NovaPoshtaKeySettings.Apply(restarted, Prom(), NewKey));
             var restored = await new DpapiShippingSettingsStore(path).LoadAsync();
             Check(restored.NovaPoshtaConnections.Single().Id == id && restored.NovaPoshtaConnections.Single().ApiKey == NewKey &&
-                restored.NovaPoshtaStoreBindings.Single() == new NovaPoshtaStoreBinding(ShopA, id), "Restart lost the simplified key or stable binding.");
+                restored.NovaPoshtaStoreBindings.SequenceEqual(first.NovaPoshtaStoreBindings), "Restart lost the shared key or stable bindings.");
             OtherSettingsUnchanged(Original, restored);
+            var row = new WaybillRowViewModel(new(ShippingCarrier.NovaPoshta, id, "Synthetic account", "synthetic-document",
+                "20400000000001", null, "", "", "", null, 1));
+            row.ApplyAccountAliases(restored); row.ApplyHistory(await history.LoadAsync());
+            Check(row.HasPrintedLabel, "Rotating the key orphaned the existing waybill print history.");
             Check(!Encoding.UTF8.GetString(await File.ReadAllBytesAsync(path)).Contains(NewKey, StringComparison.Ordinal) &&
                 (await File.ReadAllBytesAsync(historyPath)).SequenceEqual(historyBefore), "Saved key is plaintext or label history changed.");
         }
@@ -258,10 +278,9 @@ internal static class SimpleShippingSettingsTests
             Field<PasswordBox>(window, "_npKey").Password = NewKey;
             await Save(window, store);
             var binding = store.Value.NovaPoshtaStoreBindings.Single(b => b.MarketplaceConnectionId == ShopB);
-            Check(binding.NovaPoshtaConnectionId != Account && store.Value.NovaPoshtaConnections.Single(c => c.Id == binding.NovaPoshtaConnectionId).ApiKey == NewKey &&
-                store.Value.NovaPoshtaConnections.Single(c => c.Id == Account).ApiKey == OldKey &&
+            Check(binding.NovaPoshtaConnectionId == Account && store.Value.NovaPoshtaConnections.Single().ApiKey == NewKey &&
                 store.Value.NovaPoshtaStoreBindings.Single(b => b.MarketplaceConnectionId == ShopA).NovaPoshtaConnectionId == Account,
-                "Settings saved the key against a different shop or changed the old shop's key.");
+                "Settings created a duplicate NP account or changed an existing shop binding.");
             OtherSettingsUnchanged(Bound, store.Value);
         }
         finally { window.Close(); }
@@ -315,14 +334,16 @@ internal static class SimpleShippingSettingsTests
             Check(key.Password == "", "Typed key carried into another shop.");
             key.Password = NewKey; shops.SelectedValue = ShopA;
             Check(key.Password == OldKey, "Changing shops discarded the first shop's draft.");
+            Nodes(window).OfType<Button>().Single(b => Equals(b.Content, "Зберегти")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await Task.Yield();
+            Check(store.Saves == 0 && store.Value.NovaPoshtaConnections.Count == 0 &&
+                Field<TextBlock>(window, "_status").Text.Contains("різні ключі", StringComparison.Ordinal),
+                "Conflicting drafts silently overwrote the same connection or created two carrier accounts.");
+            key.Password = NewKey;
             await Save(window, store);
-            foreach (var pair in new[] { (ShopA, OldKey), (ShopB, NewKey) })
-            {
-                var id = store.Value.NovaPoshtaStoreBindings.Single(b => b.MarketplaceConnectionId == pair.Item1).NovaPoshtaConnectionId;
-                Check(store.Value.NovaPoshtaConnections.Single(c => c.Id == id).ApiKey == pair.Item2,
-                    "Saving multiple shop drafts mixed or lost their keys.");
-            }
-            Check(store.Value.NovaPoshtaConnections.Count == 2, "Separate shop drafts unexpectedly shared one account.");
+            Check(store.Value.NovaPoshtaConnections.Single().ApiKey == NewKey && store.Value.NovaPoshtaStoreBindings.Count == 2 &&
+                store.Value.NovaPoshtaStoreBindings.All(binding => binding.NovaPoshtaConnectionId == store.Value.NovaPoshtaConnections.Single().Id),
+                "Identical drafts created multiple accounts or lost store bindings.");
         }
         finally { window.Close(); }
     }
@@ -410,6 +431,40 @@ internal static class SimpleShippingSettingsTests
             Check(store.Value.NovaPoshtaConnections.Single().ApiKey == NewKey &&
                 store.Value.NovaPoshtaStoreBindings.Single().MarketplaceConnectionId == ShopA &&
                 store.Value.Print == original.Print && printer.Inspections == 0, "Saving a key requires a printer or invents a printer configuration.");
+        }
+        finally { window.Close(); }
+    }
+    private static async Task DeliveryTokenRotationUi()
+    {
+        var original = Bound;
+        var store = new MemoryStore(original);
+        var window = new LabelSettingsWindow(store, new Printer(), original, Market());
+        try
+        {
+            Field<PasswordBox>(window, "_token").Password = "synthetic_rotated_rd_token";
+            await Save(window, store);
+            Check(store.Value.RozetkaDeliveryToken == "synthetic_rotated_rd_token" &&
+                store.Value.RozetkaDeliveryConnectionId == original.RozetkaDeliveryConnectionId &&
+                store.Value.NovaPoshtaConnections.SequenceEqual(original.NovaPoshtaConnections) &&
+                store.Value.NovaPoshtaStoreBindings.SequenceEqual(original.NovaPoshtaStoreBindings) &&
+                store.Value.Print == original.Print, "RD token rotation changed a connection identity or unrelated settings.");
+            var row = new WaybillRowViewModel(new(ShippingCarrier.RozetkaDelivery, store.Value.RozetkaDeliveryConnectionId,
+                "Synthetic Delivery", "synthetic-rd-document", "synthetic-rd-waybill", null, "", "", "", null, 1));
+            row.ApplyHistory([new("old-rd-attempt", "old-rd-job", PrinterName, DateTimeOffset.UtcNow,
+                LabelSubmissionState.Submitted, [new(ShippingCarrier.RozetkaDelivery, original.RozetkaDeliveryConnectionId,
+                    "synthetic-rd-waybill", "synthetic-rd-document", 1, "synthetic-rd-fingerprint")])]);
+            Check(row.HasPrintedLabel, "RD token rotation orphaned carrier print history.");
+            var reopened = new LabelSettingsWindow(store, new Printer(), store.Value, Market());
+            try
+            {
+                Check(Field<PasswordBox>(reopened, "_token").Password == "", "Reopening exposed the saved Delivery token.");
+                store.Saves = 0;
+                await Save(reopened, store);
+                Check(store.Value.RozetkaDeliveryToken == "synthetic_rotated_rd_token" &&
+                    store.Value.RozetkaDeliveryConnectionId == original.RozetkaDeliveryConnectionId,
+                    "Blank RD save cleared the saved token or recreated its connection.");
+            }
+            finally { reopened.Close(); }
         }
         finally { window.Close(); }
     }

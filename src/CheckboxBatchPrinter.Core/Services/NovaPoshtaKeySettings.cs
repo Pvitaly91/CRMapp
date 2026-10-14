@@ -2,8 +2,8 @@ using CheckboxBatchPrinter.Core.Models;
 
 namespace CheckboxBatchPrinter.Core.Services;
 
-// The simple UI still creates an explicit shop -> account binding. It never searches
-// other accounts, and saving a key is not evidence that a TTN/PDF can be printed.
+// Key rotation updates the existing carrier account, including shared shop bindings.
+// Saving a key is not evidence that a TTN/PDF can be printed.
 public static class NovaPoshtaKeySettings
 {
     public static bool HasSavedKey(ShippingLabelSettings settings, string? storeId)
@@ -23,16 +23,27 @@ public static class NovaPoshtaKeySettings
             throw new InvalidOperationException("Перевірте формат API-ключа Нової пошти. Значення ключа приховано.");
 
         var binding = latest.NovaPoshtaStoreBindings.SingleOrDefault(b => b.MarketplaceConnectionId == selectedStore.Id);
-        var account = binding is null ? null : latest.NovaPoshtaConnections.SingleOrDefault(c => c.Id == binding.NovaPoshtaConnectionId)
-            ?? throw new InvalidOperationException("Збережене NP-підключення магазину недоступне. Потрібно відновити прив’язку магазину.");
-        if (account?.ApiKey == key) return latest;
-        var shared = account is not null && latest.NovaPoshtaStoreBindings.Any(b =>
-            b.NovaPoshtaConnectionId == account.Id && b.MarketplaceConnectionId != selectedStore.Id);
-        if (account is not null && !shared)
-            return latest with { NovaPoshtaConnections = latest.NovaPoshtaConnections.Select(c => c.Id == account.Id ? c with { ApiKey = key } : c).ToArray() };
+        var account = binding is null
+            ? latest.NovaPoshtaConnections.Count switch
+            {
+                0 => null,
+                1 => latest.NovaPoshtaConnections[0],
+                _ => throw new InvalidOperationException("Збережено кілька підключень Нової пошти. Спочатку відновіть прив’язку цього магазину до потрібного наявного підключення; нове підключення не створено.")
+            }
+            : latest.NovaPoshtaConnections.SingleOrDefault(c => c.Id == binding.NovaPoshtaConnectionId)
+                ?? throw new InvalidOperationException("Збережене NP-підключення магазину недоступне. Потрібно відновити прив’язку магазину.");
+        if (account is not null)
+        {
+            if (account.ApiKey == key && binding is not null) return latest;
+            return latest with
+            {
+                NovaPoshtaConnections = latest.NovaPoshtaConnections.Select(c => c.Id == account.Id ? c with { ApiKey = key } : c).ToArray(),
+                NovaPoshtaStoreBindings = binding is not null ? latest.NovaPoshtaStoreBindings
+                    : latest.NovaPoshtaStoreBindings.Append(new NovaPoshtaStoreBinding(selectedStore.Id, account.Id)).ToArray()
+            };
+        }
 
-        if (latest.NovaPoshtaConnections.Count >= 30)
-            throw new InvalidOperationException("Досягнуто межі 30 NP-підключень. Новий ключ не збережено; наявні підключення не змінені.");
+        // Create only the first carrier account. Subsequent saves retain its identity/history.
         var created = new NovaPoshtaConnection(Guid.NewGuid().ToString("N"), "Нова пошта — підключення магазину", key);
         return latest with
         {

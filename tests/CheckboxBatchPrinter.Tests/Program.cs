@@ -28,7 +28,7 @@ internal static class Program
         ("retry", TestRetryAsync),
         ("API errors", TestApiErrorAsync),
         ("cashier sign-in rejects credentials without storing them", TestCashierSignInErrorAsync),
-        ("cashier sign-in stores credentials only after success", TestCashierSignInSuccessAsync)
+        ("cashier sign-in and password rotation keep one credential slot and existing print history", TestCashierSignInSuccessAsync)
     ];
 
     [STAThread]
@@ -390,6 +390,25 @@ internal static class Program
         Equal("cashier-test", (await settings.LoadAsync()).Login);
         Equal("test-password", await credentials.LoadPasswordAsync());
         Equal("test-access-token", await authentication.GetAccessTokenAsync());
+        var account = PrintAccountContext.Create(await settings.LoadAsync());
+        var directory = Path.Combine(Path.GetTempPath(), "checkbox-credential-rotation-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var path = Path.Combine(directory, "history.json");
+            var history = new JsonPrintHistoryStore(path);
+            await history.MarkPrintedAsync(account, ["synthetic-printed-receipt"], "Synthetic printer");
+            var before = await File.ReadAllBytesAsync(path);
+            foreach (var password in new[] { "synthetic-rotated-password", "synthetic-newest-password" })
+            {
+                await authentication.SignInAndStoreAsync(" cashier-test ", password);
+                Equal(password, await credentials.LoadPasswordAsync());
+                Equal(account, PrintAccountContext.Create(await settings.LoadAsync()));
+                Equal(1, (await new JsonPrintHistoryStore(path).LoadAsync(account)).Count);
+                SequenceEqual(before, await File.ReadAllBytesAsync(path));
+            }
+            True(!account.Contains("cashier-test", StringComparison.OrdinalIgnoreCase));
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
     }
 
     private static HttpResponseMessage JsonResponse<T>(T value) => new(HttpStatusCode.OK)

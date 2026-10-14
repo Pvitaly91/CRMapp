@@ -33,11 +33,20 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
         AddPromCommand = new RelayCommand(_ => Add(MarketplaceKind.Prom), _ => !IsBusy && CanEdit);
         AddRozetkaCommand = new RelayCommand(_ => Add(MarketplaceKind.Rozetka), _ => !IsBusy && CanEdit);
         TestCommand = new AsyncRelayCommand(_ => TestAsync(), _ => Selected is not null && !IsBusy && CanEdit);
+        Connections.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(PromConnectionButtonText));
+            OnPropertyChanged(nameof(RozetkaConnectionButtonText));
+        };
     }
     public ObservableCollection<MarketplaceConnection> Connections { get; } = [];
     public ICommand AddPromCommand { get; }
     public ICommand AddRozetkaCommand { get; }
     public ICommand TestCommand { get; }
+    public string PromConnectionButtonText => ConnectionButtonText(MarketplaceKind.Prom);
+    public string RozetkaConnectionButtonText => ConnectionButtonText(MarketplaceKind.Rozetka);
+    private string ConnectionButtonText(MarketplaceKind kind) =>
+        (Connections.Any(c => c.Marketplace == kind) ? "Налаштувати " : "Підключити ") + kind;
     public event EventHandler? CredentialsCleared;
     public event EventHandler? CredentialFieldsChanged;
     public MarketplaceConnection? Selected
@@ -190,6 +199,18 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
     private void Add(MarketplaceKind kind)
     {
         if (!CanEdit) return;
+        // The service button edits an existing account, including a disabled one.
+        // Keep old multi-store profiles intact and prefer their explicitly selected
+        // account; replacing its token must retain order, link and history identities.
+        var existing = Selected?.Marketplace == kind && Connections.Contains(Selected) ? Selected :
+            Connections.FirstOrDefault(c => c.Marketplace == kind && c.Enabled) ??
+            Connections.FirstOrDefault(c => c.Marketplace == kind);
+        if (existing is not null)
+        {
+            Selected = existing;
+            Status = $"{kind}: змініть токен у цьому підключенні та натисніть «Зберегти».";
+            return;
+        }
         var connection = new MarketplaceConnection { Marketplace = kind, Name = kind + " — магазин", Enabled = true };
         Connections.Add(connection); Selected = connection;
     }

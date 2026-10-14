@@ -80,12 +80,14 @@
             <TabItem x:Name="MarketplaceTab" Header="Маркетплейси">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="14" DataContext="{Binding Marketplace}">
-                        <TextBlock Text="Лише читання замовлень. Prom: токен із правом читання замовлень. Rozetka: API-токен із кабінету «Налаштування → Безпека API». Для іншого магазину створіть нове підключення; для ротації токена використовуйте існуюче."
+                        <TextBlock Text="Лише читання замовлень. Prom: токен із правом читання замовлень. Rozetka: API-токен із кабінету «Налаштування → Безпека API». Виберіть сервіс, введіть або замініть токен і натисніть «Зберегти». Токен оновлюється в тому самому підключенні."
                                    TextWrapping="Wrap" Background="#EDF6FF" Padding="10" />
                         <StackPanel IsEnabled="{Binding CanEdit}">
                         <WrapPanel>
-                            <Button Content="Додати Prom" Command="{Binding AddPromCommand}" />
-                            <Button Content="Додати Rozetka" Command="{Binding AddRozetkaCommand}" />
+                            <Button x:Name="PromConnectionButton" Content="{Binding PromConnectionButtonText}" Command="{Binding AddPromCommand}"
+                                    ToolTip="Відкрити налаштування Prom. Якщо підключення вже є, токен змінюється в ньому зі збереженням історії." />
+                            <Button x:Name="RozetkaConnectionButton" Content="{Binding RozetkaConnectionButtonText}" Command="{Binding AddRozetkaCommand}"
+                                    ToolTip="Відкрити налаштування Rozetka. Якщо підключення вже є, токен змінюється в ньому зі збереженням історії." />
                         </WrapPanel>
                         <ComboBox ItemsSource="{Binding Connections}" SelectedItem="{Binding Selected}" DisplayMemberPath="Name" />
                         <TextBlock x:Name="MarketplaceCredentialIndicator" Text="{Binding CredentialStatus}" Tag="{Binding CredentialStatusKind}" Style="{StaticResource CredentialIndicatorStyle}" />

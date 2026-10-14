@@ -7,7 +7,7 @@ using CheckboxBatchPrinter.Core.Services;
 
 namespace CheckboxBatchPrinter.Tests;
 
-internal static class FiscalLinkTests
+internal static partial class FiscalLinkTests
 {
     private const string ReceiptId = "f1000000-0000-0000-0000-000000000001";
     private const string OtherId = "f1000000-0000-0000-0000-000000000002";
@@ -21,6 +21,11 @@ internal static class FiscalLinkTests
     private static readonly MarketplaceRange Range = MarketplaceSyncService.BuildRange(new(2026,9,24),new(2026,9,24),0);
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
+        ("fiscal lookup cache retains positive proof briefly per cashier and rechecks context assertions", LookupSessionCacheAsync),
+        ("fiscal lookup negative cache retries only after expiry and does not block unrelated codes", LookupNegativeCacheAsync),
+        ("fiscal lookup account cooldown suppresses fanout and respects Retry-After without blocking another cashier", LookupAccountPauseAsync),
+        ("fiscal lookup active and queued cancellation do not poison cache or duplicate concurrent HTTP", LookupCancellationAndConcurrentCacheAsync),
+        ("fiscal lookup cashier change evicts response from old account cache", LookupAccountChangeEvictsProofAsync),
         ("fiscal API-to-matcher: Rozetka list PRRO and new-order URL link automatically", ListToMatcherAsync),
         ("fiscal API-to-matcher: absent detail PRRO uses read-only status, not no-receipt guess", DetailStatusAsync),
         ("fiscal API-to-matcher: null detail PRRO preserves list key case and zeroes", NullExpansionAsync),
@@ -29,6 +34,9 @@ internal static class FiscalLinkTests
         ("fiscal URL parser: exact host route and formatting query only, no external navigation", UrlValidationAsync),
         ("fiscal API-to-matcher: foreign URL and bare fiscal code cannot prove a link", UntrustedAndBareAsync),
         ("fiscal API-to-verifier-to-matcher: code plus organization and unique Checkbox lookup", FiscalCodeLookupAsync),
+        ("fiscal Rozetka PRRO without cash context resolves through authenticated exact Checkbox lookup when type=link is unavailable", BareRozetkaPrroLookupAsync),
+        ("fiscal bare code lookup requires the typed Rozetka PRRO source, provider, owner, document and valid code", BareRozetkaPrroProvenanceAsync),
+        ("fiscal bare Rozetka PRRO retains lookup, context, collision, account and decision guards", BareRozetkaPrroGuardsAsync),
         ("fiscal verifier: empty, denied, collision and changed account never manufacture proof", LookupFailureAsync),
         ("fiscal verifier: failures count toward request bound and duplicate keys do not retry", LookupBoundAsync),
         ("fiscal verifier: cashier change during HTTP read discards new and previous proof", AccountChangesDuringLookupAsync),
@@ -202,20 +210,41 @@ internal static class FiscalLinkTests
         const string code = Code;
         var order = await Fetch($"https://api.checkbox.ua/api/v1/receipts/{code}/html?organization_id={Organization}", code);
         var settings = new Settings(); var account = PrintAccountContext.Create(await settings.LoadAsync());
-        foreach (var mode in new[] { 0, 1, 2, 3 })
+        foreach (var mode in new[] { 0, 1, 2, 3, 4 })
         {
+            var target = mode == 4 ? order with { FiscalReferences = order.FiscalReferences.Append(order.FiscalReferences.First() with
+                { CashRegisterFiscalNumber = "000123" }).ToArray() } : order;
             using var http = new HttpClient(new Handler(_ => mode switch
             {
                 0 => ReceiptPage(),
                 1 => new(HttpStatusCode.Forbidden),
                 2 => ReceiptPage(Receipt(code: code), Receipt(OtherId, code)),
-                _ => ReceiptPage(Receipt(code: code, organization: OtherId))
+                3 => ReceiptPage(Receipt(code: code, organization: OtherId)),
+                _ => ReceiptPage(Receipt(code: code, cash: "another-cash"))
             }));
             var verifier = new FiscalReferenceVerifier(new CheckboxApiClient(http, new Auth(), new Logger()), settings);
-            var verified = (await verifier.VerifyAsync([order], account)).Single();
-            True(Match(verified, Receipt(code: code), account: account).State != ReceiptLinkState.Exact);
+            var verified = (await verifier.VerifyAsync([target], account)).Single();
+            True(Match(verified, Receipt(code: code, cash: mode == 4 ? "another-cash" : "000123"), account: account).State != ReceiptLinkState.Exact);
             True(verified.FiscalReferences.All(r => r.VerifiedReceiptId.Length == 0));
             True(verified.FiscalDataStatus.Length > 0);
+        }
+        // Context from another document/order or an untrusted assertion must not
+        // poison the confirmed document's exact, authenticated lookup.
+        foreach (var mode in new[] { "other-document", "other-order", "other-provider", "no-source" })
+        {
+            var unrelated = order.FiscalReferences.First() with { CashRegisterFiscalNumber = "another-cash" };
+            unrelated = mode switch
+            {
+                "other-document" => unrelated with { DocumentId = "return" },
+                "other-order" => unrelated with { Order = order.Key with { OrderId = "other" } },
+                "other-provider" => unrelated with { Provider = "another-provider" },
+                _ => unrelated with { Source = "" }
+            };
+            using var http = new HttpClient(new Handler(_ => ReceiptPage(Receipt())));
+            var verifier = new FiscalReferenceVerifier(new CheckboxApiClient(http, new Auth(), new Logger()), settings);
+            var verified = (await verifier.VerifyAsync([order with { FiscalReferences = order.FiscalReferences.Append(unrelated).ToArray() }], account)).Single();
+            Equal(ReceiptLinkState.Exact, Match(verified, account: account).State);
+            True(verified.FiscalReferences.Take(order.FiscalReferences.Count).All(reference => reference.VerifiedReceiptId == ReceiptId));
         }
     }
     private static async Task ContextIsolationAsync()
@@ -331,11 +360,11 @@ internal static class FiscalLinkTests
             True(contextualCodes.Length > 0);
             True(contextualCodes
                 .All(reference => reference.VerifiedReceiptId == ReceiptId && reference.VerifiedAccountContext == account));
-            // The adapter also retains the original list assertion without seller
-            // context; a successful lookup must not upgrade that bare code.
+            // The original typed Seller PRRO assertion can share the authenticated
+            // lookup, even when Seller omits the organization/cashier fields.
             True(verified.FiscalReferences.Where(reference => reference.Kind == FiscalDocumentKeyKind.FiscalCode &&
                     reference.OrganizationId.Length == 0 && reference.CashRegisterFiscalNumber.Length == 0)
-                .All(reference => reference.VerifiedReceiptId.Length == 0 && reference.VerifiedAccountContext.Length == 0));
+                .All(reference => reference.VerifiedReceiptId == ReceiptId && reference.VerifiedAccountContext == account));
         }
     }
 

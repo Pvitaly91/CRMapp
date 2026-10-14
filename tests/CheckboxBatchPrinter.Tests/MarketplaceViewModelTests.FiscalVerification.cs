@@ -14,6 +14,7 @@ internal static partial class MarketplaceViewModelTests
     [
         ("STA fiscal verification uses the requested Kyiv period and current receipt evidence without reading unrelated cached history", () => StaAsync(FiscalVerificationPeriodAsync)),
         ("STA an unrelated cached fiscal archive does not invoke the Checkbox fiscal verifier", () => StaAsync(FiscalVerificationUnrelatedHistoryAsync)),
+        ("STA bare Seller PRRO code links the visible Rozetka order after complete receipt details and authenticated Checkbox verification", () => StaAsync(BareRozetkaFiscalVerificationUiAsync)),
         ("STA first current return detail read selects its historical original for code verification without probing unrelated history", () => StaAsync(FiscalVerificationReturnOriginalAsync)),
         ("STA pending fiscal verification never publishes an unverified candidate snapshot before the exact relation", () => StaAsync(FiscalVerificationPendingPublicationAsync)),
         ("STA failed or cancelled fiscal verification cannot publish its candidate snapshot from cleanup", () => StaAsync(FiscalVerificationFailedPublicationAsync))
@@ -24,6 +25,64 @@ internal static partial class MarketplaceViewModelTests
         var order = Order() with { Key = new(MarketplaceKind.Prom, "prom-test", id), Number = id, CreatedAt = created };
         return order with { FiscalReferences = [new(FiscalDocumentKeyKind.FiscalCode, code,
             "synthetic documented fiscal code", order.Key, "Checkbox", "sale", CashRegisterFiscalNumber: "123")] };
+    }
+
+    private static async Task BareRozetkaFiscalVerificationUiAsync()
+    {
+        const string code = "SYNTH-00001";
+        var order = await FiscalLinkTests.FetchUnavailableRozetkaPrroAsync(code);
+        foreach (var parallel in new[] { true, false })
+        {
+            var fixture = new Fixture();
+            fixture.Settings.Market.Connections.Clear();
+            fixture.Settings.Market.Connections.Add(new() { Id = order.Key.ConnectionId, Marketplace = MarketplaceKind.Rozetka, Enabled = true });
+            fixture.Rozetka.Orders = [order];
+            fixture.ReceiptSource.Rows = [new ReceiptRecord
+            {
+                Id = ReceiptOne, FiscalCode = code, Serial = 4940, Type = ReceiptTypes.Sell, Status = "DONE",
+                TotalSumMinor = 38000, FiscalDate = new(2026, 9, 24, 12, 0, 0, TimeSpan.FromHours(3))
+            }];
+            fixture.Details.Values[ReceiptOne] = new(ReceiptOne, [new("Synthetic battery switch 12/24V 100A", "", 2, 190, 380)]);
+            var calls = 0;
+            using var http = new HttpClient(new FiscalVerificationHandler(request =>
+            {
+                Equal("/api/v1/receipts/search", request.RequestUri!.AbsolutePath);
+                Equal($"?fiscal_code={code}&self_receipts=true&limit=2&offset=0", request.RequestUri.Query);
+                calls++;
+                return new(HttpStatusCode.OK) { Content = new StringContent(JsonSerializer.Serialize(new
+                {
+                    results = new[] { new { id = ReceiptOne, fiscal_code = code, type = "SELL" } }
+                }), Encoding.UTF8, "application/json") };
+            }));
+            var verifier = new FiscalReferenceVerifier(new CheckboxApiClient(http, fixture.Authentication, new Logger()), fixture.Settings);
+            var (main, workspace) = CreateFiscalVerificationWorkspace(fixture, verifier);
+            main.DateFrom = new(2026, 9, 24);
+            main.DateTo = new(2026, 9, 24);
+            try
+            {
+                if (parallel) await main.RefreshAllAsync();
+                else
+                {
+                    await ExecuteAsync(main.RefreshCommand);
+                    await ExecuteAsync(workspace.SyncCommand);
+                }
+                Equal(1, calls);
+                var receiptRow = main.Receipts.Single();
+                Equal(ReceiptLinkState.Exact, receiptRow.OrderMatch!.State);
+                Equal(order.Key, receiptRow.OrderMatch.Order!.Key);
+                Equal("100", receiptRow.OrderNumber);
+                Equal("Rozetka", receiptRow.Marketplace);
+                True(receiptRow.LinkExplanation.Contains("За фіскальним номером"));
+                Equal(1, workspace.AllOrderRows.Count);
+                var proof = workspace.AllOrderRows.Single().Model.FiscalReferences.Single();
+                Equal(ReceiptOne, proof.VerifiedReceiptId);
+                Equal("", proof.OrganizationId);
+                Equal("", proof.CashRegisterFiscalNumber);
+                Equal(0, fixture.Links.Saves);
+                Equal(0, fixture.Printer.Calls);
+            }
+            finally { main.CancelPendingOperations(); }
+        }
     }
 
     private static (MainViewModel Main, MarketplaceWorkspaceViewModel Workspace) CreateFiscalVerificationWorkspace(

@@ -180,6 +180,7 @@ internal static partial class MarketplaceViewModelTests
                 await OrderSelectionBackgroundDashboardAsync();
                 await CredentialIndicatorsXamlAsync();
                 await RozetkaSettingsWindowRoundTripAsync();
+                await MarketplaceConfigureButtonsReuseConnectionsAsync();
                 await RozetkaDuplicateDashboardAsync();
                 await WaybillsDashboardAsync();
                 await DashboardTextSelectionAsync();

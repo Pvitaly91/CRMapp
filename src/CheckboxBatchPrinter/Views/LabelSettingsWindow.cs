@@ -65,13 +65,13 @@ public sealed class LabelSettingsWindow : Window
         }
         Add(npBasic, "API-ключ Нової пошти", _npKey); npBasic.Children.Add(_npStatus);
         _npKey.PasswordChanged += (_, _) => UpdateNpIndicator();
-        _npKey.ToolTip = "Ключ вводиться лише локально й зберігається захищено. Порожнє поле залишає попередній ключ. Збереження не перевіряє доступ до накладної.";
+        _npKey.ToolTip = "Ключ вводиться лише локально й зберігається захищено. Новий ключ оновлює наявне підключення Нової пошти для всіх пов’язаних із ним магазинів. Порожнє поле залишає попередній ключ. Збереження не перевіряє доступ до накладної.";
         _npStores.SelectionChanged += (_, _) => { CommitNpDraft(); ShowNpStore(); };
         var selectedOrder = currentOrder?.Invoke();
         if (selectedOrder?.Key.Marketplace == MarketplaceKind.Prom) _npStores.SelectedValue = selectedOrder.Key.ConnectionId;
         if (_npStores.SelectedItem is null && _promStores.Length == 1) _npStores.SelectedIndex = 0;
         ShowNpStore();
-        npBasic.Children.Add(new TextBlock { Text = "Порожнє поле залишає попередній ключ.", FontSize = 11, Margin = new Thickness(0,2,0,4) });
+        npBasic.Children.Add(new TextBlock { Text = "Новий ключ оновлює наявне підключення. Порожнє поле залишає попередній ключ.", TextWrapping = TextWrapping.Wrap, FontSize = 11, Margin = new Thickness(0,2,0,4) });
 
         root.Children.Add(new TextBlock
         {
@@ -205,6 +205,12 @@ public sealed class LabelSettingsWindow : Window
     }
     private ShippingLabelSettings ApplyNpDrafts(ShippingLabelSettings latest)
     {
+        string TargetAccount(string storeId) =>
+            latest.NovaPoshtaStoreBindings.SingleOrDefault(b => b.MarketplaceConnectionId == storeId)?.NovaPoshtaConnectionId
+            ?? (latest.NovaPoshtaConnections.Count == 1 ? latest.NovaPoshtaConnections[0].Id
+                : latest.NovaPoshtaConnections.Count == 0 ? "first-account" : "unbound-" + storeId);
+        if (_npDrafts.GroupBy(d => TargetAccount(d.Key)).Any(group => group.Select(d => d.Value).Distinct(StringComparer.Ordinal).Count() > 1))
+            throw new InvalidOperationException("Для одного підключення Нової пошти введено різні ключі в кількох магазинах. Залиште один актуальний ключ; налаштування не збережено.");
         foreach (var draft in _npDrafts)
             latest = NovaPoshtaKeySettings.Apply(latest, _promStores.SingleOrDefault(s => s.Id == draft.Key), draft.Value);
         return latest;
