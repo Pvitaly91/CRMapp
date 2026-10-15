@@ -66,12 +66,14 @@ Rozetka використовує `types=1` (всі групи). Старий `ty
 | Статус оплати | `payment_data.status` | `payment.payment_status` / `status_payment` | payments — факт способів/сум чека, не статус marketplace order |
 | Покупець | `client_*_name`, `phone` | `user_title`, `user.contact_fio`, `user_phone` | не використовується як точний ключ |
 | Отримувач | окремий підтверджений об’єкт у GET-схемі відсутній | `delivery.recipient_title/phone` | — |
-| Сума | `price` без доставки | `cost_with_discount` із доставкою/знижками | `total_sum` у копійках |
+| Сума | `price` без доставки | `amount_with_discount` без доставки після знижки; fallback `amount`. `cost_with_discount/cost` — лише fallback за відсутності суми товарів; відома платна доставка блокує зіставлення такого fallback | `total_sum` у копійках |
 | Товар | `products[].name_multilang.uk` (резерв: `name`), `sku/quantity/price/total_price` | `purchases[].item_name/item.article/quantity/price_with_discount/cost_with_discount` | `goods[].good.name/code/price`, `goods[].quantity/sum` |
 | Доставка/ТТН | `delivery_option`, `delivery_provider_data.declaration_number` | `delivery`, `ttn`, `carrier.carrier_track_num` | — |
 | Фіскальні дані замовлення | GET-схема не документує | `prro.prro_receipt_fiscal_code`, опціональний PRRO URL | `id`, `fiscal_code`, `related_receipt_id` |
 
 Prom і Rozetka грошові значення читаються як `decimal` у звичайних одиницях, без ділення на 100. Невідомий формат суми зберігається сирим текстом, не підміняється нулем. Окрема валюта у перевірених order-схемах не знайдена — залишається невідомою. Checkbox integer-ціни/суми діляться на 100, integer quantity — на 1000. Prom quantity — звичайна кількість одиниць із можливою дробовою частиною, Rozetka — ціла кількість товарів.
+
+Уточнення Rozetka 15.10.2026: офіційна [модель замовлення](https://api-seller.rozetka.com.ua/apidoc/#api-Models-OrderDetails) розділяє суму товарів `amount_with_discount` та оплату з доставкою `cost_with_discount`. Доставка залишається окремим `DeliveryCost`; з checkout-суми нічого не віднімається. Некоректна явно надана сума товарів не замінюється fallback і позначається невідомою. Подробиці — [ROZETKA_CONTRACT_NOTES.md](ROZETKA_CONTRACT_NOTES.md).
 
 Уточнення 24.09.2026: у реальному локальному кеші Prom `price` містить явний суфікс `грн`. Виправлений parser підтримує його та інші явні UAH-позначення, кому/крапку для копійок і коректно згруповані пробіли тисяч; UAH визначається із суфікса, а не припускається з назви маркетплейсу. Без суфікса валюта лишається невідомою. Подробиці та межі — у [PROM_CONTRACT_NOTES.md](PROM_CONTRACT_NOTES.md).
 

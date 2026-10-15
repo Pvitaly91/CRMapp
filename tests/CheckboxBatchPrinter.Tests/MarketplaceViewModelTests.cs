@@ -153,7 +153,8 @@ internal static partial class MarketplaceViewModelTests
         ("STA explicitly started marketplace sync survives tab exit and automatic cancellation", () => StaAsync(AutomaticBasketManualSyncAsync)),
         ("STA invalid no-Checkbox dates cancel automatic refresh and restored dates allow one new attempt", () => StaAsync(AutomaticBasketInvalidDatesAsync)),
         ("STA Main Settings and OrderLink XAML initialize without showing windows", XamlSmokeProcessAsync),
-        .. EstablishedRefreshScenarios
+        .. EstablishedRefreshScenarios,
+        .. RozetkaGoodsTotalScenarios
     ];
 
     public static void RunIsolatedXamlSmoke()

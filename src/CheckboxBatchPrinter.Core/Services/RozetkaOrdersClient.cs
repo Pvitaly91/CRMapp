@@ -397,7 +397,19 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport, Time
         { Source = "Rozetka.carrier.carrier_track_num" });
         var amount = Money(row, "amount");
         var discountedAmount = Money(row, "amount_with_discount");
-        var rawTotal = First(Text(row, "cost_with_discount"), Text(row, "cost"), Text(row, "amount"));
+        // Seller distinguishes merchandise amount from checkout cost, which also
+        // contains delivery. Compare receipts with the explicit merchandise field;
+        // never derive it by subtracting an assumed delivery charge.
+        var goodsTotal = First(Field(row, "amount_with_discount").ToString(), Field(row, "amount").ToString());
+        var rawTotal = goodsTotal.Length > 0 ? goodsTotal : First(Text(row, "cost_with_discount"), Text(row, "cost"));
+        var total = ParseMoney(rawTotal);
+        var deliveryCost = Money(delivery, "cost");
+        var amountIssue = goodsTotal.Length > 0 && (total is null or < 0m)
+            ? "Rozetka: сума товарів некоректна; загальна сума з доставкою не використовується замість неї."
+            : goodsTotal.Length == 0 && deliveryCost is > 0m
+                ? "Rozetka: API надав лише загальну суму з доставкою; сума товарів окремо не підтверджена."
+                : "";
+        if (total is < 0m) total = null;
         var fiscalNumber = Text(Field(row, "prro"), "prro_receipt_fiscal_code");
         var key = new OrderKey(MarketplaceKind.Rozetka, connection.Id, id);
         return new MarketplaceOrder
@@ -410,9 +422,9 @@ public sealed class RozetkaOrdersClient(MarketplaceHttpTransport transport, Time
             PaymentMethod = First(Text(payment, "payment_method_name"), Text(row, "payment_type_name"), Text(row, "payment_type_title")),
             Buyer = buyerName.Length + buyerPhone.Length == 0 ? null : new(buyerName, buyerPhone),
             Recipient = recipientName.Length + recipientPhone.Length == 0 ? null : new(recipientName, recipientPhone),
-            Total = ParseMoney(rawTotal), RawTotal = rawTotal, Currency = "", DeliveryMethod = carrier,
+            Total = total, RawTotal = rawTotal, Currency = "", DeliveryMethod = carrier, AmountComparisonIssue = amountIssue,
             Discount = amount.HasValue && discountedAmount.HasValue ? amount.Value - discountedAmount.Value : null,
-            DeliveryCost = Money(delivery, "cost"), Items = items, Shipments = shipments,
+            DeliveryCost = deliveryCost, Items = items, Shipments = shipments,
             ItemsComplete = purchases.ValueKind == JsonValueKind.Array && purchases.GetArrayLength() > 0 && items.Count == purchases.GetArrayLength(),
             FiscalReceiptNumbers = fiscalNumber.Length == 0 ? [] : [fiscalNumber],
             FiscalReceiptUrls = receiptUrl is null ? [] : [receiptUrl], ReceiptIds = [],

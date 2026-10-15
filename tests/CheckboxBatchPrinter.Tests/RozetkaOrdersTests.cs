@@ -12,6 +12,9 @@ internal static partial class RozetkaOrdersTests
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
         ("Rozetka API-token Bearer auth, complete pagination, money and distinct buyer/recipient", PaginationAsync),
+        ("Rozetka merchandise amount excludes delivery in list and detail responses", MerchandiseAmountAsync),
+        ("Rozetka merchandise fields take priority while malformed values stay unknown", MerchandiseAmountPriorityAsync),
+        ("Rozetka checkout-only amounts retain compatibility but known delivery prevents automatic matching", CheckoutAmountGuardAsync),
         ("Rozetka locker delivery name routes the primary TTN while unknown partner carrier IDs stay unresolved", LockerDeliveryNameAsync),
         ("Rozetka detail hydration and optional fiscal link are read-only", DetailAsync),
         ("Rozetka optional PRRO denial preserves the order and rejects unknown UUID inference", PrroUnavailableAsync),
@@ -83,7 +86,7 @@ internal static partial class RozetkaOrdersTests
         True(result.Complete); Equal(3, pages.Count); Equal(3, result.Orders.Count);
         var first = result.Orders.Single(o => o.Number == "100");
         Equal("Покупець А", first.Buyer!.Name); Equal("Одержувач Б", first.Recipient!.Name);
-        Equal(123.45m, first.Total); Equal(10m, first.Discount); Equal(13.45m, first.DeliveryCost);
+        Equal(110m, first.Total); Equal("110.00", first.RawTotal); Equal(10m, first.Discount); Equal(13.45m, first.DeliveryCost);
         Equal("SKU-test", first.Items.Single().Sku); Equal(2m, first.Items.Single().Quantity); Equal(55m, first.Items.Single().UnitPrice);
         Equal("Картка", first.PaymentMethod); Equal("Сплачено", first.PaymentStatus);
         Equal(2, first.Shipments.Count); Equal(TimeSpan.FromHours(3), first.CreatedAt!.Value.Offset);

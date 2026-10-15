@@ -45,7 +45,8 @@
 | Оплата | `payment.payment_method_name`, `payment.payment_status.title/name`; fallback `payment_type_name`, `payment_type_title`, `status_payment.title/name`, `payment_status` |
 | Покупець | `user_title.full_name`, `user.contact_fio`, `user_phone` |
 | Отримувач | `delivery.recipient_title`, `delivery.recipient_phone` |
-| Фінальна сума | `cost_with_discount` (із доставкою/знижками), fallback `cost`, `amount`; оригінал `RawTotal` |
+| Сума товарів для таблиці та зіставлення чека | `amount_with_discount` (після знижки, без доставки), fallback `amount`; оригінал вибраного поля — `RawTotal` |
+| Загальна сума покупця | `cost_with_discount` / `cost` включають доставку. Використовуються лише як сумісний fallback, коли обох полів суми товарів немає; за відомої додатної `delivery.cost` такий fallback має `AmountComparisonIssue` й не дозволяє зіставлення за сумою |
 | Знижка товарів | різниця наданих `amount` та `amount_with_discount`; не обчислюється, якщо одне з полів відсутнє |
 | Доставка | `delivery.delivery_service_name`, `delivery.cost`, `delivery.city.city_name/title`, `place_street/house/number` |
 | ТТН | `ttn`; додаткова накладна перевізника `carrier.carrier_track_num`, його `carrier_inner_id` |
@@ -54,6 +55,8 @@
 | Посилання на фіскальний документ | `content.url` окремого read-only PRRO endpoint, display-only `FiscalReceiptUrls` |
 
 Грошові суми документовані як decimal (`123.45`) та наведені як рядки у JSON; клієнт читає їх через `decimal`, без ділення на 100. Окреме поле валюти в перевіреному order-контракті не знайдене, тому `Currency` залишається порожнім. Кількість документована як ціле число товарів, без тисячних часток.
+
+Уточнення 15.10.2026: повторно перевірено публічний `api_data.js`, модель `OrderDetails` та GET-методи списку/деталей. `amount_with_discount` означає вартість товарів після знижки без доставки; `cost_with_discount` — оплату разом із доставкою. Наприклад, за `amount_with_discount=390`, `delivery.cost=49`, `cost_with_discount=439` нормалізований `Total` дорівнює 390, а доставка зберігається окремо як 49. Значення не підганяється під чек і доставка не віднімається арифметично. Некоректне або від’ємне явно надане поле суми товарів залишає `Total` невідомим із поясненням; воно не замінюється сумою з доставкою. Нульове значення залишається нулем.
 
 Моделі: [Delivery](https://api-seller.rozetka.com.ua/apidoc/#api-Models-DeliveryDetails),
 [Purchase](https://api-seller.rozetka.com.ua/apidoc/#api-Models-PurchaseDetails),
