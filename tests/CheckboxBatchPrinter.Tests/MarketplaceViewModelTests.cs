@@ -27,6 +27,7 @@ internal static partial class MarketplaceViewModelTests
 
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
+        ("STA receipt combined date uses Kyiv time and chronological sorting with refresh notifications", () => StaAsync(ReceiptCombinedDateTimeAsync)),
         ("STA exact NP account cabinet markers publish independently of parcel tracking and local jobs", () => StaAsync(CabinetPrintPublicationAsync)),
         ("STA prepared label preview discloses cabinet marks only for ready selected shipment pages", () => StaAsync(CabinetPrintPreparedLabelsAsync)),
         ("STA a newly discovered cabinet print mark after label preview requires fresh confirmation", () => StaAsync(CabinetPrintLateMarkerBlocksLabelsAsync)),
@@ -179,6 +180,8 @@ internal static partial class MarketplaceViewModelTests
             try
             {
                 await XamlSmokeAsync();
+                await ReceiptLayoutDashboardAsync();
+                await ReceiptPickerDashboardAsync();
                 await OrdersDashboardAsync();
                 await PrintCandidatesDashboardAsync();
                 await OrderSelectionBackgroundDashboardAsync();
@@ -2312,7 +2315,7 @@ internal static partial class MarketplaceViewModelTests
             workspace.DetailsExpanded = false;
             var openColumn = marketplaceOrdersGrid.Columns.Single(c => c.Header?.ToString() == "Відкрити чек");
             marketplaceOrdersGrid.ScrollIntoView(amountOrder, openColumn); marketplaceOrdersGrid.UpdateLayout();
-            var openReceipt = VisualChildren<Button>(openColumn.GetCellContent(amountOrder)).Single(b => b.Command is not null);
+            var openReceipt = VisualChildren<Button>(openColumn.GetCellContent(amountOrder)).Single(b => ReferenceEquals(b.Command, main.PreviewCommand));
             True(ReferenceEquals(main.PreviewCommand, openReceipt.Command) && ReferenceEquals(amountRow, openReceipt.CommandParameter));
             await DrainDispatcherAsync();
             RenderSyntheticContent(mainWindow, "amount-links.png");
@@ -2794,6 +2797,12 @@ internal static partial class MarketplaceViewModelTests
         public int ChoiceCalls;
         public string? ChoiceReceiptId;
         public IReadOnlyList<OrderKey> ChoiceOrderKeys = [];
+        public string? ReceiptChoice;
+        public int ReceiptChoiceCalls;
+        public OrderKey? ReceiptChoiceOrderKey;
+        public IReadOnlyList<ReceiptRowViewModel> ReceiptChoiceRows = [];
+        public Func<ReceiptRowViewModel, Task>? ReceiptChoicePreview;
+        public Action? DuringReceiptChoice;
         public Action? AfterSettings;
         public PrintBatchConfirmation? Confirmation;
         public Action? DuringConfirmation;
@@ -2810,6 +2819,14 @@ internal static partial class MarketplaceViewModelTests
         public void ShowPreview(byte[] png, ReceiptRowViewModel receipt) => PreviewId = receipt.Id;
         public OrderLinkChoice? ChooseOrder(ReceiptRowViewModel receipt, ReceiptDetails? details, IReadOnlyList<MarketplaceOrder> orders, IReadOnlyList<MarketplaceOrder> candidates)
         { ChoiceCalls++; ChoiceReceiptId = receipt.Id; ChoiceOrderKeys = orders.Select(o => o.Key).ToArray(); return Choice; }
+        public string? ChooseReceipt(MarketplaceOrder order, IReadOnlyList<ReceiptRowViewModel> receipts,
+            Func<ReceiptRowViewModel, Task>? preview)
+        {
+            ReceiptChoiceCalls++; ReceiptChoiceOrderKey = order.Key;
+            ReceiptChoiceRows = receipts.ToArray(); ReceiptChoicePreview = preview;
+            DuringReceiptChoice?.Invoke();
+            return ReceiptChoice;
+        }
         public bool ConfirmUnlink() => true;
         public void CopyText(string text) => Copied = text;
     }

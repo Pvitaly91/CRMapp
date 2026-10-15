@@ -46,9 +46,12 @@ public sealed class UiDialogService(
 
     public void ShowPreview(byte[] png, ReceiptRowViewModel receipt)
     {
+        var owner = Application.Current.Windows.OfType<Window>()
+            .LastOrDefault(candidate => candidate.IsActive && candidate.IsVisible && candidate.Owner is not null)
+            ?? Application.Current.MainWindow;
         var window = new PreviewWindow(png, receipt)
         {
-            Owner = Application.Current.MainWindow
+            Owner = owner
         };
         window.ShowDialog();
     }

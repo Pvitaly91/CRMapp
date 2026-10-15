@@ -123,6 +123,12 @@ public sealed partial class MainViewModel : ObservableObject
         PreviewCommand = new AsyncRelayCommand(p => IsWaybillsTab && Waybills is not null ?
             Waybills.RunAsync(p as WaybillRowViewModel ?? Waybills.SelectedRow, false) : PreviewAsync(p),
             p => !IsBusy && (IsWaybillsTab ? Waybills?.PreviewCommand.CanExecute(p) == true : true));
+        if (Marketplace is not null)
+        {
+            Marketplace.CanChooseReceipt = () => !IsBusy;
+            Marketplace.PreviewReceipt = row => !IsBusy ? PreviewAsync(row) :
+                Task.FromException(new InvalidOperationException("Дочекайтеся завершення поточної операції."));
+        }
         SettingsCommand = new AsyncRelayCommand(_ => OpenSettingsAsync(), _ => !IsBusy);
         MarketplaceSettingsCommand = new AsyncRelayCommand(_ => OpenSettingsAsync(marketplace: true), _ => !IsBusy);
         if (Marketplace is not null) Marketplace.PropertyChanged += (_, e) =>
@@ -760,6 +766,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void RaiseCommands()
     {
+        if (Marketplace?.ChooseReceiptForOrderCommand is AsyncRelayCommand receiptPicker) receiptPicker.RaiseCanExecuteChanged();
         foreach (var command in new ICommand[] { RefreshCommand, RefreshAllCommand, CancelRefreshAllCommand, TodayCommand, SelectAllCommand, ClearSelectionCommand, PrintSelectedCommand, PrintOrdersWithReceiptsCommand, RetryFailedCommand, PreviewCommand, SettingsCommand, MarketplaceSettingsCommand })
         {
             if (command is RelayCommand relay) relay.RaiseCanExecuteChanged();

@@ -21,19 +21,21 @@ public sealed class ReceiptRowViewModel : ObservableObject
         if (!string.Equals(model.Id, Id, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Не можна замінити ID чека.", nameof(model));
         Model = model;
-        foreach (var name in new[] { nameof(RawType), nameof(Type), nameof(Status), nameof(LocalDate),
-            nameof(LocalTime), nameof(FiscalCode), nameof(Serial), nameof(Total), nameof(Payment), nameof(CashRegister) })
+        foreach (var name in new[] { nameof(RawType), nameof(Type), nameof(Status), nameof(LocalDateTime), nameof(LocalDate),
+            nameof(LocalTime), nameof(FiscalCode), nameof(Serial), nameof(Total), nameof(TotalDisplay), nameof(Payment), nameof(CashRegister) })
             OnPropertyChanged(name);
     }
     public string Id => Model.Id;
     public string RawType => Model.Type;
     public string Type => ReceiptTypes.ToUkrainian(Model.Type);
     public string Status => ReceiptStatuses.ToUkrainian(Model.Status);
-    public DateTime? LocalDate => Model.DisplayDate is { } date ? TimeZoneInfo.ConvertTime(date, DateRangeBuilder.KyivZone).Date : null;
-    public string LocalTime => Model.DisplayDate is { } date ? TimeZoneInfo.ConvertTime(date, DateRangeBuilder.KyivZone).ToString("HH:mm:ss") : "—";
+    public DateTime? LocalDateTime => Model.DisplayDate is { } date ? TimeZoneInfo.ConvertTime(date, DateRangeBuilder.KyivZone).DateTime : null;
+    public DateTime? LocalDate => LocalDateTime?.Date;
+    public string LocalTime => LocalDateTime?.ToString("HH:mm:ss") ?? "—";
     public string FiscalCode => string.IsNullOrWhiteSpace(Model.FiscalCode) ? "—" : Model.FiscalCode;
     public string Serial => Model.Serial == 0 ? "—" : Model.Serial.ToString();
     public decimal Total => Model.TotalSum;
+    public string TotalDisplay => Model.TotalKnown ? $"{Total:N2}" : "—";
     public string Payment => Model.PaymentDisplay;
     public string CashRegister => string.IsNullOrWhiteSpace(Model.CashRegisterFiscalNumber) ? "—" : Model.CashRegisterFiscalNumber;
 

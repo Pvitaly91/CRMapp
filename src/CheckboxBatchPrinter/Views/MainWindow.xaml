@@ -332,10 +332,14 @@
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <controls:DashboardTextColumn Header="Дата" Binding="{Binding LocalDate, StringFormat=dd.MM.yyyy}" Width="100" IsReadOnly="True" SortMemberPath="LocalDate" />
-                        <controls:DashboardTextColumn Header="Час" Binding="{Binding LocalTime}" Width="80" IsReadOnly="True" />
+                        <controls:DashboardTextColumn Header="Дата й час" Binding="{Binding LocalDateTime, StringFormat=dd.MM.yyyy HH:mm:ss, TargetNullValue=—}" Width="160" IsReadOnly="True" SortMemberPath="LocalDateTime" />
                         <controls:DashboardTextColumn Header="Сума" Binding="{Binding Total, StringFormat=N2}" Width="95" IsReadOnly="True"
                                                       ElementStyle="{StaticResource DashboardAmountTextStyle}" />
+                        <DataGridTemplateColumn Header="" Width="90" CanUserSort="False">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate><Button Content="Перегляд" Padding="6,2" Command="{Binding DataContext.PreviewCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" /></DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
                         <controls:DashboardTextColumn Header="Фіскальний номер" Binding="{Binding FiscalCode}" Width="160" IsReadOnly="True" />
                         <controls:DashboardTextColumn Header="Номер чека" Binding="{Binding Serial}" Width="105" IsReadOnly="True" />
                         <controls:DashboardTextColumn Header="Тип чека" Binding="{Binding Type}" Width="135" IsReadOnly="True" />
@@ -343,11 +347,6 @@
                         <controls:DashboardTextColumn Header="Статус" Binding="{Binding Status}" Width="105" IsReadOnly="True" />
                         <controls:DashboardTextColumn Header="Каса" Binding="{Binding CashRegister}" Width="130" IsReadOnly="True" />
                         <controls:DashboardTextColumn Header="Друк" Binding="{Binding PrintStatusText}" Width="120" IsReadOnly="True" />
-                        <DataGridTemplateColumn Header="" Width="90" CanUserSort="False">
-                            <DataGridTemplateColumn.CellTemplate>
-                                <DataTemplate><Button Content="Перегляд" Padding="6,2" Command="{Binding DataContext.PreviewCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" /></DataTemplate>
-                            </DataGridTemplateColumn.CellTemplate>
-                        </DataGridTemplateColumn>
                     </DataGrid.Columns>
                 </DataGrid>
             </TabItem>
@@ -509,6 +508,12 @@
                                                             </ToolTip>
                                                         </Button.ToolTip>
                                                     </Button>
+                                                <StackPanel>
+                                                <Button Content="Прив’язати" Tag="ChooseReceiptForOrder"
+                                                        Command="{Binding DataContext.Marketplace.ChooseReceiptForOrderCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}"
+                                                        Visibility="{Binding HasNoReceiptLink, Converter={StaticResource BoolToVisibility}}"
+                                                        ToolTip="Вибрати вільний завантажений чек і прив’язати до цього замовлення" />
                                                 <ItemsControl ItemsSource="{Binding LinkedReceipts}">
                                                     <ItemsControl.ItemTemplate>
                                                         <DataTemplate>
@@ -518,6 +523,7 @@
                                                         </DataTemplate>
                                                     </ItemsControl.ItemTemplate>
                                                 </ItemsControl>
+                                                </StackPanel>
                                                 </DockPanel>
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
@@ -597,10 +603,14 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <controls:DashboardTextColumn Header="Дата" Binding="{Binding LocalDate, StringFormat=dd.MM.yyyy}" Width="100" IsReadOnly="True" SortMemberPath="LocalDate" />
-                            <controls:DashboardTextColumn Header="Час" Binding="{Binding LocalTime}" Width="80" IsReadOnly="True" />
+                            <controls:DashboardTextColumn Header="Дата й час" Binding="{Binding LocalDateTime, StringFormat=dd.MM.yyyy HH:mm:ss, TargetNullValue=—}" Width="160" IsReadOnly="True" SortMemberPath="LocalDateTime" />
                             <controls:DashboardTextColumn Header="Сума" Binding="{Binding Total, StringFormat=N2}" Width="95" IsReadOnly="True"
                                                           ElementStyle="{StaticResource DashboardAmountTextStyle}" />
+                            <DataGridTemplateColumn Header="" Width="90" CanUserSort="False">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate><Button Content="Перегляд" Padding="6,2" Command="{Binding DataContext.PreviewCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" /></DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <controls:DashboardTextColumn Header="Фіскальний номер" Binding="{Binding FiscalCode}" Width="170" IsReadOnly="True" />
                             <controls:DashboardTextColumn Header="Номер чека" Binding="{Binding Serial}" Width="105" IsReadOnly="True" />
                             <controls:DashboardTextColumn Header="Тип чека" Binding="{Binding Type}" Width="150" IsReadOnly="True" />
@@ -628,11 +638,6 @@
                                 Visibility="{Binding IsChecked, Source={x:Reference ExtraOrderColumns}, Converter={StaticResource BoolToVisibility}}" />
                             <controls:DashboardTextColumn Header="ТТН" Binding="{Binding OrderTracking}" Width="155" IsReadOnly="True"
                                 Visibility="{Binding IsChecked, Source={x:Reference ExtraOrderColumns}, Converter={StaticResource BoolToVisibility}}" />
-                            <DataGridTemplateColumn Header="" Width="90" CanUserSort="False">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate><Button Content="Перегляд" Padding="6,2" Command="{Binding DataContext.PreviewCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" /></DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
                         </DataGrid.Columns>
                     </DataGrid>
                         </Grid>

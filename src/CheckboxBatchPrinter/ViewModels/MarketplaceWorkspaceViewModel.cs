@@ -83,6 +83,8 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
         LinkCommand = new AsyncRelayCommand(_ => LinkAsync(), _ => _account.Length > 0 && _selected is not null && !IsBusy && !IsWorkspaceRefreshing && _canApply && HasEnabledConnections);
         LinkSelectedOrderCommand = new AsyncRelayCommand(_ => LinkAsync(_selectedOrder?.Model), _ =>
             _account.Length > 0 && _selected is not null && _selectedOrder is not null && Orders.Contains(_selectedOrder) && !IsBusy && !IsWorkspaceRefreshing && _canApply && HasEnabledConnections);
+        ChooseReceiptForOrderCommand = new AsyncRelayCommand(parameter => ChooseReceiptForOrderAsync(parameter as MarketplaceOrderRowViewModel),
+            parameter => CanChooseReceiptForOrder(parameter as MarketplaceOrderRowViewModel));
         AutoMatchCommand = new AsyncRelayCommand(_ => RefreshAutoLinksAsync(), _ => !IsBusy && !IsWorkspaceRefreshing && _canApply && HasEnabledConnections && _account.Length > 0 && _rows.Count > 0);
         UnlinkCommand = new AsyncRelayCommand(_ => UnlinkAsync(), _ => _selected is not null && !IsBusy && !IsWorkspaceRefreshing && _canApply && HasEnabledConnections &&
             (_selected.OrderMatch?.Order is not null || _decisions.Any(d => d.AccountContext == _account && d.ReceiptId == _selected.Id && d.ConfirmedOrder is not null)));
@@ -159,6 +161,9 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
     public ICommand CancelCommand { get; }
     public ICommand LinkCommand { get; }
     public ICommand LinkSelectedOrderCommand { get; }
+    public ICommand ChooseReceiptForOrderCommand { get; }
+    public Func<ReceiptRowViewModel, Task>? PreviewReceipt { get; set; }
+    public Func<bool>? CanChooseReceipt { get; set; }
     public ICommand AutoMatchCommand { get; }
     public ICommand UnlinkCommand { get; }
     public ICommand CopyNumberCommand { get; }
@@ -1144,7 +1149,7 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
     }
     private void RaiseCommands()
     {
-        foreach (var command in new[] { SyncCommand, ExpandCommand, CancelCommand, LinkCommand, LinkSelectedOrderCommand, AutoMatchCommand, UnlinkCommand })
+        foreach (var command in new[] { SyncCommand, ExpandCommand, CancelCommand, LinkCommand, LinkSelectedOrderCommand, ChooseReceiptForOrderCommand, AutoMatchCommand, UnlinkCommand })
         { if (command is RelayCommand relay) relay.RaiseCanExecuteChanged(); if (command is AsyncRelayCommand asyncRelay) asyncRelay.RaiseCanExecuteChanged(); }
     }
 }

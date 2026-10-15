@@ -215,7 +215,7 @@ public sealed class ReceiptTabViewModel : ObservableObject, IDisposable
                (UsesOrders && row.MatchesOrderSearch(query));
     }
 
-    private static decimal? ParseSearchAmount(string query)
+    internal static decimal? ParseSearchAmount(string query)
     {
         if (query.Length > 128) return null;
         var text = query.Trim();

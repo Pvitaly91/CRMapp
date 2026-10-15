@@ -16,6 +16,14 @@ public sealed class OrderLinkDialogService : IOrderLinkDialogService
         return window.ShowDialog() == true ? window.Choice : null;
     }
 
+    public string? ChooseReceipt(MarketplaceOrder order, IReadOnlyList<ReceiptRowViewModel> receipts,
+        Func<ReceiptRowViewModel, Task>? preview)
+    {
+        var window = new ReceiptPickerWindow(new ReceiptPickerViewModel(order, receipts, preview));
+        if (Application.Current?.MainWindow is { } owner) window.Owner = owner;
+        return window.ShowDialog() == true ? window.ReceiptId : null;
+    }
+
     public bool ConfirmUnlink() => ShowMessage(
         "Відв’язати замовлення від цього чека? Локальний зв’язок буде прибрано. Повторне автоматичне зв’язування вимкнеться, доки ви не виберете замовлення вручну.",
         "Відв’язати замовлення", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes;

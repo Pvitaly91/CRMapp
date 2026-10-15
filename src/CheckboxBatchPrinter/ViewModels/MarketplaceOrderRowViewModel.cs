@@ -81,6 +81,7 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
     public string LinkExplanation { get; private set; } = "";
     public bool HasConfirmedLink { get; private set; }
     public bool HasSuggestedLink { get; private set; }
+    public bool HasNoReceiptLink => !HasConfirmedLink && !HasSuggestedLink && LinkedReceipts.Count == 0;
 
     public void UpdateTrackingStatuses(IEnumerable<OrderShipmentTrackingStatus> statuses)
     {
@@ -206,7 +207,7 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
             (outsideRange > 0 ? $"; збережено поза списком: {outsideRange}" : "");
         foreach (var property in new[] { nameof(Model), nameof(Marketplace), nameof(StoreName), nameof(Number), nameof(CreatedAt),
             nameof(TotalDisplay), nameof(BuyerDisplay), nameof(TrackingDisplay), nameof(ShipmentLinks), nameof(HasDispatchedShipments), nameof(DispatchToolTip), nameof(DeliveryDisplay), nameof(Status), nameof(LinkStatus),
-            nameof(LinkedReceiptsDisplay), nameof(LinkedReceipts), nameof(LinkExplanation), nameof(HasConfirmedLink), nameof(HasSuggestedLink) }) OnPropertyChanged(property);
+            nameof(LinkedReceiptsDisplay), nameof(LinkedReceipts), nameof(LinkExplanation), nameof(HasConfirmedLink), nameof(HasSuggestedLink), nameof(HasNoReceiptLink) }) OnPropertyChanged(property);
     }
 }
 

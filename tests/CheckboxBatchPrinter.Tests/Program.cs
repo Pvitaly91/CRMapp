@@ -121,6 +121,7 @@ internal static class Program
         Tests.AddRange(MarketplaceViewModelTests.ShippingScenarios);
         Tests.AddRange(MarketplaceViewModelTests.DirectNpShippingScenarios);
         Tests.AddRange(MarketplaceViewModelTests.All);
+        Tests.AddRange(MarketplaceViewModelTests.ReceiptPickerScenarios);
         Tests.AddRange(MarketplaceViewModelTests.HeaderToggleScenarios);
         Tests.AddRange(MarketplaceViewModelTests.PrintCandidateScenarios);
         Tests.AddRange(MarketplaceViewModelTests.OrderSelectionBackgroundScenarios);
