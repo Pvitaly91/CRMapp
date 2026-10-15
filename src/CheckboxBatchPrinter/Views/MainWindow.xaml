@@ -221,7 +221,16 @@
                 </DataTrigger>
             </Style.Triggers>
         </Style>
-        <Style x:Key="ReceiptGridStyle" TargetType="DataGrid">
+        <!-- Coalesce thumb movement; keep selectable text cells cached between horizontal positions. -->
+        <Style x:Key="DashboardGridPerformanceStyle" TargetType="DataGrid">
+            <Setter Property="EnableColumnVirtualization" Value="False" />
+            <Setter Property="EnableRowVirtualization" Value="True" />
+            <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
+            <Setter Property="ScrollViewer.IsDeferredScrollingEnabled" Value="True" />
+            <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
+            <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
+        </Style>
+        <Style x:Key="ReceiptGridStyle" TargetType="DataGrid" BasedOn="{StaticResource DashboardGridPerformanceStyle}">
             <Setter Property="AutoGenerateColumns" Value="False" />
             <Setter Property="CanUserAddRows" Value="False" />
             <Setter Property="CanUserDeleteRows" Value="False" />
@@ -484,6 +493,7 @@
                             </StackPanel>
                             </ScrollViewer>
                             <DataGrid x:Name="MarketplaceOrdersGrid" Grid.Row="1" ItemsSource="{Binding Marketplace.Orders}"
+                                      Style="{StaticResource DashboardGridPerformanceStyle}"
                                       SelectedItem="{Binding Marketplace.SelectedOrder, Mode=OneWayToSource}"
                                       AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False"
                                       IsReadOnly="True" SelectionMode="Extended" SelectionUnit="CellOrRowHeader" HeadersVisibility="Column"
