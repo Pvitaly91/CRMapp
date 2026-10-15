@@ -6,6 +6,34 @@
         Icon="/CheckboxBatchPrinter;component/Resources/app-icon.ico"
         WindowStartupLocation="CenterScreen" Background="#F5F7FA" PreviewKeyDown="Window_PreviewKeyDown">
     <Window.Resources>
+        <Style x:Key="LinkReceiptButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="#176BAA" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="BorderBrush" Value="#12568A" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}" RecognizesAccessKey="True" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Background" Value="#145D94" /></Trigger>
+                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="Chrome" Property="Background" Value="#104A76" /></Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Chrome" Property="BorderBrush" Value="#082F49" /></Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Chrome" Property="Background" Value="#CBD5E1" />
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="#94A3B8" />
+                                <Setter Property="Foreground" Value="#475569" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <DataTemplate x:Key="PrintCandidatesIcon">
             <Viewbox Width="14" Height="14" IsHitTestVisible="False">
                 <Canvas Width="20" Height="20">
@@ -509,7 +537,7 @@
                                                         </Button.ToolTip>
                                                     </Button>
                                                 <StackPanel>
-                                                <Button Content="Прив’язати" Tag="ChooseReceiptForOrder"
+                                                <Button Content="Прив’язати" Tag="ChooseReceiptForOrder" Style="{StaticResource LinkReceiptButtonStyle}"
                                                         Command="{Binding DataContext.Marketplace.ChooseReceiptForOrderCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding}"
                                                         Visibility="{Binding HasNoReceiptLink, Converter={StaticResource BoolToVisibility}}"
