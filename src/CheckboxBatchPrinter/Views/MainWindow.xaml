@@ -337,7 +337,7 @@
                                   VerticalScrollBarVisibility="Disabled" Margin="0,0,0,3">
                         <StackPanel x:Name="AllReceiptsPrintToolbar" Orientation="Horizontal">
                             <Button x:Name="AllReceiptsRetryFailedButton" Content="Повторити невдалі" Command="{Binding RetryFailedCommand}" />
-                            <Button x:Name="AllReceiptsPrintSelectedButton" Content="Друк вибраних видимих" Command="{Binding PrintSelectedCommand}" FontWeight="Bold"
+                            <Button x:Name="AllReceiptsPrintSelectedButton" Content="Друк чеків" Command="{Binding PrintSelectedCommand}" FontWeight="Bold"
                                     Background="#1769AA" Foreground="White" ToolTip="Ctrl+P — друк вибраних видимих чеків цієї таблиці" Padding="18,7" />
                         </StackPanel>
                     </ScrollViewer>
@@ -606,24 +606,22 @@
                                       ToolTip="Перетягніть ліворуч або праворуч, щоб змінити ширину таблиць" />
 
                         <Grid x:Name="CheckboxReceiptsPane" Grid.Column="2">
-                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
                             <ScrollViewer x:Name="OrdersReceiptsPrintToolbarScroll" HorizontalScrollBarVisibility="Auto"
                                           VerticalScrollBarVisibility="Disabled" Margin="0,0,0,3">
                                 <StackPanel x:Name="OrdersReceiptsPrintToolbar" Orientation="Horizontal">
+                                    <TextBlock Text="Чеки Checkbox" FontWeight="SemiBold" VerticalAlignment="Center" Margin="2,0,8,0"
+                                               ToolTip="Для ручної прив’язки виберіть рядок чека та замовлення." />
                                     <Button x:Name="OrdersReceiptsRetryFailedButton" Content="Повторити невдалі" Command="{Binding RetryFailedCommand}" />
-                                    <Button x:Name="OrdersReceiptsPrintSelectedButton" Content="Друк вибраних видимих" Command="{Binding PrintSelectedCommand}" FontWeight="Bold"
+                                    <Button x:Name="OrdersReceiptsPrintSelectedButton" Content="Друк чеків" Command="{Binding PrintSelectedCommand}" FontWeight="Bold"
                                             Background="#1769AA" Foreground="White" ToolTip="Ctrl+P — друк вибраних видимих чеків цієї таблиці" Padding="18,7" />
+                                    <TextBlock Text="Зв’язки:" VerticalAlignment="Center" Margin="8,0,4,0" />
+                                    <ComboBox x:Name="OrdersReceiptsLinksFilter" Width="150" VerticalAlignment="Center"
+                                              ItemsSource="{Binding Marketplace.Filters}" SelectedItem="{Binding Marketplace.Filter}"
+                                              ToolTip="Фільтр лише чеків — не приховує замовлення ліворуч." />
                                 </StackPanel>
                             </ScrollViewer>
-                            <WrapPanel Grid.Row="1" Margin="2,0,2,3">
-                                <TextBlock Text="Чеки Checkbox" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,12,0" />
-                                <TextBlock Text="Зв’язки чеків:" VerticalAlignment="Center" />
-                                <ComboBox Width="175" ItemsSource="{Binding Marketplace.Filters}" SelectedItem="{Binding Marketplace.Filter}"
-                                          ToolTip="Фільтр лише чеків — не приховує замовлення ліворуч." />
-                                <TextBlock Text="Для ручної прив’язки виберіть рядок чека та замовлення." Foreground="#667085"
-                                           FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0" />
-                            </WrapPanel>
-                    <DataGrid x:Name="OrdersReceiptsGrid" Grid.Row="2" ItemsSource="{Binding OrdersReceiptsTab.View}" Style="{StaticResource ReceiptGridStyle}"
+                    <DataGrid x:Name="OrdersReceiptsGrid" Grid.Row="1" ItemsSource="{Binding OrdersReceiptsTab.View}" Style="{StaticResource ReceiptGridStyle}"
                               CurrentCellChanged="Dashboard_CurrentCellChanged"
                               SelectedItem="{Binding OrdersReceiptsTab.SelectedReceipt, Mode=OneWayToSource}"
                               Sorting="DataGrid_Sorting" MouseDoubleClick="ReceiptsGrid_MouseDoubleClick">

@@ -26,7 +26,7 @@ internal static partial class MarketplaceViewModelTests
         {
             var footer = (Border)window.FindName("ReceiptPrintFooter");
             True(!VisualChildren<Button>(footer).Any(button =>
-                button.Content?.ToString() is "Повторити невдалі" or "Друк вибраних видимих"),
+                button.Content?.ToString() is "Повторити невдалі" or "Друк чеків"),
                 "Receipt print actions must no longer occupy the bottom footer.");
             var waybillFooter = (Border)window.FindName("WaybillPrintFooter");
             var waybillButtons = VisualChildren<Button>(waybillFooter).ToArray();
