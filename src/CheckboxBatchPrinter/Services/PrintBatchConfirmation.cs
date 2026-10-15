@@ -6,10 +6,12 @@ public sealed record PrintBatchItem(int Position, string ReceiptId, string Recei
 public sealed record CombinedPrintConfirmation(PrintBatchConfirmation Receipts, int PreviouslyPrintedReceipts);
 
 /// <summary>Detached, immutable confirmation data, never bound to live receipt/order rows.</summary>
-public sealed class PrintBatchConfirmation(string printerName, int hiddenSelectedCount, IEnumerable<PrintBatchItem> items)
+public sealed class PrintBatchConfirmation(string printerName, int hiddenSelectedCount, IEnumerable<PrintBatchItem> items, int previouslyPrintedCount = 0)
 {
     public string PrinterName { get; } = printerName;
     public int HiddenSelectedCount { get; } = hiddenSelectedCount;
     public IReadOnlyList<PrintBatchItem> Items { get; } = Array.AsReadOnly(items.ToArray());
     public int Count => Items.Count;
+    public int PreviouslyPrintedCount { get; } = previouslyPrintedCount;
+    public bool HasPreviouslyPrinted => PreviouslyPrintedCount > 0;
 }

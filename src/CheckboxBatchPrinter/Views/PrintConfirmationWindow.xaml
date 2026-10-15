@@ -8,12 +8,17 @@
             <TextBlock Text="{Binding PrinterName, StringFormat=Принтер: {0}}" FontWeight="SemiBold" TextWrapping="Wrap" />
             <TextBlock Text="{Binding Count, StringFormat=Чеків у пакеті: {0}}" Margin="0,6" />
             <TextBlock Text="{Binding HiddenSelectedCount, StringFormat=Прихованих вибраних (НЕ включені): {0}}" Foreground="#8B4500" />
+            <StackPanel Visibility="{Binding HasPreviouslyPrinted, Converter={StaticResource BoolToVisibility}}" Margin="0,8,0,0">
+                <TextBlock Text="{Binding PreviouslyPrintedCount, StringFormat=Уже передавалися на друк або результат невідомий: {0}}" Foreground="#8B4500" TextWrapping="Wrap" />
+                <CheckBox x:Name="RepeatAcknowledgement" Content="Я перевірив результат і хочу повторно надрукувати ці чеки"
+                          Checked="RepeatAcknowledgement_Changed" Unchecked="RepeatAcknowledgement_Changed" Margin="0,5,0,0" />
+            </StackPanel>
             <TextBlock Text="Порядок друку наведено нижче. Це копії існуючих чеків, без повторної фіскалізації."
                        TextWrapping="Wrap" Margin="0,10,0,0" />
         </StackPanel>
         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
             <Button Content="Скасувати" IsCancel="True" MinWidth="100" />
-            <Button Content="Надрукувати цей пакет" Click="Confirm_Click" MinWidth="175" />
+            <Button x:Name="ConfirmButton" Content="Надрукувати цей пакет" Click="Confirm_Click" MinWidth="175" />
         </StackPanel>
         <DataGrid ItemsSource="{Binding Items}" AutoGenerateColumns="False" IsReadOnly="True"
                   CanUserAddRows="False" CanUserDeleteRows="False" CanUserSortColumns="False"

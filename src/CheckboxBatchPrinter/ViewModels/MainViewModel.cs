@@ -97,6 +97,7 @@ public sealed partial class MainViewModel : ObservableObject
         };
         if (Marketplace is not null) ((System.Collections.Specialized.INotifyCollectionChanged)Marketplace.Orders).CollectionChanged += (_, _) =>
         {
+            ObserveOrderReceiptSelection();
             PublishShipmentTrackingStatuses();
             QueueShipmentTrackingRefresh();
         };
@@ -118,6 +119,7 @@ public sealed partial class MainViewModel : ObservableObject
         PrintSelectedCommand = new AsyncRelayCommand(_ => IsWaybillsTab && Waybills is not null ? Waybills.RunAsync(null, true) : PrintSelectedAsync(),
             _ => !IsBusy && (IsWaybillsTab ? Waybills?.PrintSelectedCommand.CanExecute(null) == true : VisibleSelectedCount > 0));
         PrintOrdersWithReceiptsCommand = new AsyncRelayCommand(_ => PrintOrdersWithReceiptsAsync(), _ => CanPrintOrdersWithReceipts);
+        PrintOrderReceiptsCommand = new AsyncRelayCommand(_ => PrintOrderReceiptsAsync(), _ => CanPrintOrderReceipts);
         RetryFailedCommand = new AsyncRelayCommand(_ => IsWaybillsTab && Waybills is not null ? Waybills.RunAsync(null, true, true) : RetryFailedAsync(),
             _ => !IsBusy && (IsWaybillsTab ? Waybills?.RetryFailedCommand.CanExecute(null) == true : FailedCount > 0));
         PreviewCommand = new AsyncRelayCommand(p => IsWaybillsTab && Waybills is not null ?
@@ -151,6 +153,7 @@ public sealed partial class MainViewModel : ObservableObject
             };
         }
         ApplyDisplayDates();
+        ObserveOrderReceiptSelection();
     }
 
     public ObservableCollection<ReceiptRowViewModel> Receipts { get; } = [];
@@ -587,7 +590,11 @@ public sealed partial class MainViewModel : ObservableObject
                 _dialogs.ShowError("Касира Checkbox змінено. Натисніть «Оновити» перед друком.");
                 return;
             }
-            var confirmation = new PrintBatchConfirmation(settings.PrinterName, hiddenCount, items);
+            var printHistory = await _printHistoryStore.LoadAsync(accountContext);
+            var previouslyPrinted = selected.Count(row => row.PrintStatus == PrintItemStatus.Done ||
+                printHistory.Keys.Any(id => id.Equals(row.Id, StringComparison.OrdinalIgnoreCase)) ||
+                _combinedReceiptTransferRisks.Contains((accountContext, row.Id.ToUpperInvariant())));
+            var confirmation = new PrintBatchConfirmation(settings.PrinterName, hiddenCount, items, previouslyPrinted);
             if (!_dialogs.ConfirmPrint(confirmation)) return;
             foreach (var row in selected) { row.PrintStatus = PrintItemStatus.Waiting; row.PrintError = string.Empty; }
             if (selected.Length == 1)
@@ -600,6 +607,7 @@ public sealed partial class MainViewModel : ObservableObject
                     row.PrintStatus = PrintItemStatus.Downloading;
                     var png = await _imageService.GetPngAsync(row.Id, (int)Math.Round(settings.EffectivePaperWidthMm), cancellationToken);
                     row.PrintStatus = PrintItemStatus.Printing;
+                    _combinedReceiptTransferRisks.Add((accountContext, row.Id.ToUpperInvariant()));
                     await _printService.PrintReceiptAsync(new PrintReceiptDocument(png, row.Id, items[0].OrderNumber, items[0].TrackingText), settings, cancellationToken);
                     row.PrintStatus = PrintItemStatus.Done;
                     tab.SetMarked(row, false);
@@ -640,6 +648,7 @@ public sealed partial class MainViewModel : ObservableObject
                 if (loaded.Count > 0)
                 {
                     foreach (var item in loaded) item.Row.PrintStatus = PrintItemStatus.Printing;
+                    foreach (var item in loaded) _combinedReceiptTransferRisks.Add((accountContext, item.Row.Id.ToUpperInvariant()));
                     await _printService.PrintReceiptsAsSingleJobAsync(loaded.Select(x => x.Document).ToArray(), settings);
                     foreach (var item in loaded)
                     {
@@ -659,6 +668,7 @@ public sealed partial class MainViewModel : ObservableObject
                         accountContext,
                         printedRows.Select(row => row.Id).ToArray(),
                         settings.PrinterName);
+                    foreach (var row in printedRows) _combinedReceiptTransferRisks.Remove((accountContext, row.Id.ToUpperInvariant()));
                 }
                 catch (Exception exception)
                 {
@@ -767,7 +777,7 @@ public sealed partial class MainViewModel : ObservableObject
     private void RaiseCommands()
     {
         if (Marketplace?.ChooseReceiptForOrderCommand is AsyncRelayCommand receiptPicker) receiptPicker.RaiseCanExecuteChanged();
-        foreach (var command in new ICommand[] { RefreshCommand, RefreshAllCommand, CancelRefreshAllCommand, TodayCommand, SelectAllCommand, ClearSelectionCommand, PrintSelectedCommand, PrintOrdersWithReceiptsCommand, RetryFailedCommand, PreviewCommand, SettingsCommand, MarketplaceSettingsCommand })
+        foreach (var command in new ICommand[] { RefreshCommand, RefreshAllCommand, CancelRefreshAllCommand, TodayCommand, SelectAllCommand, ClearSelectionCommand, PrintSelectedCommand, PrintOrdersWithReceiptsCommand, PrintOrderReceiptsCommand, RetryFailedCommand, PreviewCommand, SettingsCommand, MarketplaceSettingsCommand })
         {
             if (command is RelayCommand relay) relay.RaiseCanExecuteChanged();
             if (command is AsyncRelayCommand asyncRelay) asyncRelay.RaiseCanExecuteChanged();

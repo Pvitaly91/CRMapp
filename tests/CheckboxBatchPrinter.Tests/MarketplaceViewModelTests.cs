@@ -181,6 +181,7 @@ internal static partial class MarketplaceViewModelTests
             {
                 await XamlSmokeAsync();
                 await ReceiptLayoutDashboardAsync();
+                await ReceiptPrintToolbarDashboardAsync();
                 await ReceiptPickerDashboardAsync();
                 await OrdersDashboardAsync();
                 await PrintCandidatesDashboardAsync();
