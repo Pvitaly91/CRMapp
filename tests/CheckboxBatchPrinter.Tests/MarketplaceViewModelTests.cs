@@ -127,8 +127,8 @@ internal static partial class MarketplaceViewModelTests
         ("STA automatic cache failures never block matching or base workflow", () => StaAsync(CachedAutomaticFailureIsolationAsync)),
         ("STA saved pairs survive incomplete newly enabled connection coverage", () => StaAsync(CachedAutomaticCoverageAsync)),
         ("STA migrating proven Rozetka aliases removes duplicates and restores new Prom links without bypassing incomplete coverage", () => StaAsync(CredentialMigrationCoverageAsync)),
-        ("STA obsolete Rozetka amount pair is discarded through alias consolidation and incomplete sync", () => StaAsync(CredentialAliasSavedSuggestionAsync)),
-        ("STA cold-start unified refresh discards obsolete Rozetka alias pairs before fiscal verification", () => StaAsync(CredentialAliasColdStartFiscalAsync)),
+        ("STA keyless Rozetka fallback survives alias consolidation incomplete sync and restart", () => StaAsync(CredentialAliasSavedSuggestionAsync)),
+        ("STA cold-start unified refresh retains keyless Rozetka alias pairs without redundant fiscal verification", () => StaAsync(CredentialAliasColdStartFiscalAsync)),
         ("automatic alias projection validates both source and canonical fingerprints and never resolves conflicting saved pairs", CredentialAliasFingerprintGuardsAsync),
         ("STA August display, probable link, filters and selection survive September background sync", () => StaAsync(HistoricalBackgroundRangeAsync)),
         ("STA recent background orders are cached and appear when switching to today", () => StaAsync(BackgroundTodayCacheAsync)),
@@ -155,7 +155,7 @@ internal static partial class MarketplaceViewModelTests
         ("STA Main Settings and OrderLink XAML initialize without showing windows", XamlSmokeProcessAsync),
         .. EstablishedRefreshScenarios,
         .. RozetkaGoodsTotalScenarios,
-        .. RozetkaIdOnlyScenarios
+        .. RozetkaFallbackScenarios
     ];
 
     public static void RunIsolatedXamlSmoke()

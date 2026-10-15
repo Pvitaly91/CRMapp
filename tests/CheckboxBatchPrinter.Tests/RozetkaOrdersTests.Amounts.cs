@@ -46,8 +46,8 @@ internal static partial class RozetkaOrdersTests
         var details = new Dictionary<string, ReceiptDetails> { [receipt.Id] = new(receipt.Id, [new("Synthetic cable", "", 1, 390, 390)])
             { ItemsComplete = true, ItemListComplete = true } };
         var match = new ReceiptOrderMatchingService().MatchAll([receipt], "synthetic-account", [goods], [], true, details)[receipt.Id];
-        True(match.Order is null); True(match.State != ReceiptLinkState.Suggested);
-        Equal(AutomaticLinkBasis.None, match.Basis);
+        Equal(ReceiptLinkState.Suggested, match.State); Equal(goods.Key, match.Order!.Key);
+        Equal(AutomaticLinkBasis.AmountAndProducts, match.Basis);
     }
 
     private static async Task MerchandiseAmountPriorityAsync()

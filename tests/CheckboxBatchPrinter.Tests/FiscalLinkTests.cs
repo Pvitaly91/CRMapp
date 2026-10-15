@@ -45,6 +45,7 @@ internal static partial class FiscalLinkTests
         ("fiscal matching: same serial or code on another cash register is not a link", ContextIsolationAsync),
         ("fiscal Rozetka code and cash register require an authenticated receipt UUID while Prom retains contextual code matching", RozetkaCodeRequiresUuidAsync),
         ("fiscal Rozetka direct UUID and verified UUID retain identity, account, conflict and manual guards", RozetkaUuidIdentityGuardsAsync),
+        ("fiscal Rozetka missing keys allow product fallback until a later Seller UUID replaces it", RozetkaNoFiscalKeyFallbackAsync),
         ("fiscal matching: independent sale/return documents and manual decisions survive", MultipleAndManualAsync),
         ("fiscal cache: raw evidence persists but account verification does not", SerializationAsync),
         ("fiscal Prom adapter: schema-only response or arbitrary comment UUID stays unlinked", PromReadShapeAsync),

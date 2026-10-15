@@ -12,7 +12,7 @@ internal static partial class MarketplaceViewModelTests
 {
     private static IReadOnlyList<(string Name, Func<Task> Test)> RozetkaGoodsTotalScenarios =>
     [
-        ("STA real Rozetka goods390 and delivery49 display separately without amount links or receipt basket reads", () => StaAsync(RozetkaGoodsAmountDisplayAsync)),
+        ("STA Rozetka goods390 and delivery49 link the goods receipt when fiscal ID is missing", () => StaAsync(RozetkaGoodsAmountDisplayAsync)),
         ("STA Rozetka checkout including delivery cannot substitute the goods receipt amount", () => StaAsync(RozetkaCheckoutDoesNotLinkAsync)),
         ("STA missing Rozetka goods fields cannot infer an automatic link from checkout minus delivery", () => StaAsync(RozetkaMissingGoodsAmountAsync))
     ];
@@ -123,10 +123,15 @@ internal static partial class MarketplaceViewModelTests
             True(order.Model.FiscalReferences.Count == 0 && order.Model.ReceiptIds.Count == 0 &&
                 order.Model.FiscalReceiptNumbers.Count == 0, "Synthetic fiscal failure unexpectedly supplied exact evidence.");
             True(order.Model.FiscalDataStatus.Contains("15005"));
-            True(fixture.Main.Receipts.All(row => row.OrderMatch?.Order is null),
-                "Rozetka was linked by amount despite missing an exact receipt ID.");
-            Equal(0, fixture.State.Details.Calls);
-            True(!order.HasSuggestedLink && !order.HasConfirmedLink && order.LinkedReceipts.Count == 0);
+            var linked = fixture.Main.Receipts.Single(row => row.Id == ReceiptOne);
+            Equal(ReceiptLinkState.Suggested, linked.OrderMatch!.State);
+            Equal(AutomaticLinkBasis.AmountAndProducts, linked.OrderMatch.Basis);
+            Equal(order.Key, linked.OrderMatch.Order!.Key);
+            True(fixture.Main.Receipts.Single(row => row.Id == ReceiptTwo).OrderMatch?.Order is null,
+                "Delivery-inclusive checkout must not replace the goods total.");
+            Equal(1, fixture.State.Details.Calls);
+            True(fixture.State.Details.RequestedIds.SequenceEqual([ReceiptOne]));
+            True(order.HasSuggestedLink && !order.HasConfirmedLink && order.LinkedReceipts.Count == 1);
             True(!hydrate || fixture.DetailCalls >= 1, "Unexpanded list row was not hydrated.");
             fixture.AssertReadOnly();
         }

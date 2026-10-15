@@ -28,7 +28,8 @@ internal static partial class BasketMatchingTests
         ("basket matching: fiscal keys and fiscal contradictions are never bypassed", FiscalPriorityAsync),
         ("basket matching: discounts invalid totals extra quantities and differing prices do not link", AdjustmentsAsync),
         ("basket parser safety: incomplete items allow amount basis, known adjustments remain blocked", ParserSafetyAsync),
-        ("basket marketplace policy: only Prom uses amount products and payment hypotheses", MarketplacePolicyAsync),
+        ("basket marketplace policy: keyless Rozetka uses Prom amount rules and participates in ambiguity", MarketplacePolicyAsync),
+        ("basket marketplace policy: unresolved malformed and conflicting Rozetka fiscal keys block amount fallback", MarketplacePolicyUnresolvedAsync),
         ("basket marketplace policy: Rozetka UUID and manual links keep priority over Prom hypotheses", MarketplacePolicyAuthoritativeAsync)
     ];
 

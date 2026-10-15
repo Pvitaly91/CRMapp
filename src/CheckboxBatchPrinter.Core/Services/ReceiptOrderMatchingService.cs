@@ -61,13 +61,15 @@ public sealed class ReceiptOrderMatchingService
                 retainedOrders.Add(established.Key);
                 continue;
             }
-            if (match.State != ReceiptLinkState.Suggested || match.Order is null ||
-                match.Order.Key.Marketplace != MarketplaceKind.Prom || reserved.Contains(match.Order.Key)) continue;
-            if ((currentOrders.GetValueOrDefault(match.Order.Key) ?? match.Order).IsCanceled) continue;
+            if (match.State != ReceiptLinkState.Suggested || match.Order is null || reserved.Contains(match.Order.Key)) continue;
+            var currentSuggestedOrder = currentOrders.GetValueOrDefault(match.Order.Key) ?? match.Order;
+            if (currentSuggestedOrder.IsCanceled || !AutomaticReceiptLinkPolicy.CanUseAmountFallback(currentSuggestedOrder)) continue;
             if (result.TryGetValue(id, out var evidence))
             {
                 if (evidence.State is ReceiptLinkState.Manual or ReceiptLinkState.Exact or ReceiptLinkState.Conflict) continue;
-                result[id] = match;
+                if (evidence.State == ReceiptLinkState.Incomplete && evidence.Candidates.Any(AutomaticReceiptLinkPolicy.HasFiscalKey))
+                    continue;
+                result[id] = match with { Order = currentSuggestedOrder };
             }
             // Saved links also reserve orders whose receipts are outside the selected date range.
             retainedOrders.Add(match.Order.Key);
@@ -165,7 +167,7 @@ public sealed class ReceiptOrderMatchingService
         var candidates = allowedExact;
         if (receipt.Type == ReceiptTypes.Sell && receipt.DisplayDate is { } receiptDate)
         {
-            candidates = candidates.Concat(available.Where(order => order.Key.Marketplace == MarketplaceKind.Prom &&
+            candidates = candidates.Concat(available.Where(order => AutomaticReceiptLinkPolicy.CanUseAmountFallback(order) &&
                     !order.IsCanceled && !rejected.Contains(order.Key) &&
                     order.Total == receipt.TotalSum && (string.IsNullOrWhiteSpace(order.Currency) ||
                         string.Equals(order.Currency, "UAH", StringComparison.OrdinalIgnoreCase)) &&
@@ -185,7 +187,7 @@ public sealed class ReceiptOrderMatchingService
                 ? "Прив’язку знято вручну; автоматичне відновлення вимкнено." +
                     (coverageComplete ? "" : " Перевірка діапазону неповна.")
                 : coverageComplete ? receipt.Type == ReceiptTypes.Sell
-                    ? "Не знайдено замовлення Prom за сумою в той самий день (Київ). Для Rozetka потрібен ID чека."
+                    ? "Не знайдено замовлення за сумою в той самий день (Київ). Для Rozetka з фіскальним ключем спочатку потрібне підтвердження ID чека."
                     : "Не знайдено у перевіреному діапазоні" : "Перевірка неповна / API недоступне", []);
     }
 

@@ -13,7 +13,7 @@ internal static partial class MarketplaceViewModelTests
     public static IReadOnlyList<(string Name, Func<Task> Test)> RozetkaDuplicateScenarios =>
     [
         ("STA identical Rozetka accounts collapse cached rows without changing manual alias links after F5 and restart", () => StaAsync(RozetkaDuplicateCachedManualAsync)),
-        ("STA duplicate Rozetka baskets remain unlinked without receipt ID and an alias rejection cannot be bypassed", () => StaAsync(RozetkaDuplicateBasketAsync)),
+        ("STA keyless duplicate Rozetka baskets produce one canonical fallback and respect alias rejection", () => StaAsync(RozetkaDuplicateBasketAsync)),
         ("STA changed Rozetka API token separates rows and restores the original saved manual connection key", () => StaAsync(RozetkaDuplicateTokenChangeAsync)),
         ("Rozetka deduplication requires complete readable exact credentials and an enabled account", RozetkaDuplicateCredentialProofAsync),
         ("Rozetka duplicate primary is deterministic while other accounts and Prom identities stay separate", RozetkaDuplicateIdentityBoundariesAsync),
@@ -88,10 +88,17 @@ internal static partial class MarketplaceViewModelTests
             await main.RefreshAsync(); main.SelectedTabIndex = 1; await main.PrepareOrdersAsync();
             Equal(1, workspace.Orders.Cast<object>().Count()); Equal(2, fixture.Cache.Snapshot.Orders.Count);
             var receipt = main.Receipts.Single();
-            True(receipt.OrderMatch?.Order is null && receipt.OrderMatch?.State != ReceiptLinkState.Suggested,
-                rejected ? "Rejecting an alias must reject the canonical order rather than expose its other copy."
-                    : "Identical Rozetka products cannot create a link without a receipt ID.");
-            Equal(0, fixture.Details.Calls);
+            if (rejected)
+                True(receipt.OrderMatch?.Order is null && receipt.OrderMatch?.State != ReceiptLinkState.Suggested,
+                    "Rejecting an alias must reject the canonical order rather than expose its other copy.");
+            else
+            {
+                Equal(ReceiptLinkState.Suggested, receipt.OrderMatch!.State);
+                Equal(fixture.Rozetka.Orders[0].Key, receipt.OrderMatch.Order?.Key);
+                Equal(AutomaticLinkBasis.AmountAndProducts, receipt.OrderMatch.Basis);
+                Equal(1, receipt.OrderMatch.CompetingOrderCount);
+            }
+            Equal(1, fixture.Details.Calls);
             Equal(1, fixture.Rozetka.FetchCalls); Equal(0, fixture.Source.FetchCalls);
             Equal(rejected ? 1 : 0, fixture.Links.Saves);
             Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);

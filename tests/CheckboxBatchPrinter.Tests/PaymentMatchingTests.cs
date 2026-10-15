@@ -165,10 +165,16 @@ internal static class PaymentMatchingTests
         })
             Check(Match(receipts, [unknown, online], Details(receipts, [unknown, online])).Values.All(m => m.Order is null), "Unknown order payment was dropped from the graph.");
         var rozetka = cod with { Key = cod.Key with { Marketplace = MarketplaceKind.Rozetka } };
-        var promOnly = Match(receipts, [rozetka, online], Details(receipts, [rozetka, online]));
-        Check(promOnly.Values.All(m => m.Order?.Key.Marketplace != MarketplaceKind.Rozetka),
-            "Rozetka payment entered the Prom-only heuristic graph.");
-        Equal(online.Key, promOnly[receipts[1].Id].Order!.Key);
+        var crossMarketplace = Match(receipts, [rozetka, online], Details(receipts, [rozetka, online]));
+        Equal(rozetka.Key, crossMarketplace[receipts[0].Id].Order!.Key);
+        Equal(online.Key, crossMarketplace[receipts[1].Id].Order!.Key);
+        Equal(AutomaticLinkBasis.AmountAndPayment, crossMarketplace[receipts[0].Id].Basis);
+        foreach (var method in new[] { "", "Картка", "1", "NovaPay або RozetkaPay", "Пром-оплата" })
+        {
+            var unknown = rozetka with { PaymentMethod = method };
+            Check(Match(receipts, [unknown, online], Details(receipts, [unknown, online])).Values.All(m => m.Order is null),
+                "A generic or Prom-specific Rozetka payment method was incorrectly inferred.");
+        }
         foreach (var label in new[] { "", "Картка", "Безготівкова оплата", "Платіж", "NovaPay або RozetkaPay", "SuperNovaPay" })
             Check(Match([Receipt(1, label), receipts[1]], [cod, online], Details(receipts, [cod, online])).Values.All(m => m.Order is null), "Unknown receipt payment was dropped.");
     }

@@ -11,16 +11,17 @@ namespace CheckboxBatchPrinter.Tests;
 
 internal static partial class MarketplaceViewModelTests
 {
-    private static IReadOnlyList<(string Name, Func<Task> Test)> RozetkaIdOnlyScenarios =>
+    private static IReadOnlyList<(string Name, Func<Task> Test)> RozetkaFallbackScenarios =>
     [
-        ("STA Rozetka equal amount and products stay unlinked without basket reads while Prom still suggests", () => StaAsync(RozetkaIdOnlyMixedMarketplaceAsync)),
-        ("STA old saved Rozetka suggestions are discarded on cache load F5 and restart", () => StaAsync(RozetkaIdOnlyDropsSavedSuggestionsAsync)),
+        ("STA Rozetka without fiscal ID uses the same basket matching as Prom", () => StaAsync(RozetkaIdOnlyMixedMarketplaceAsync)),
+        ("STA saved Rozetka fallback survives cache load F5 and restart without new basket reads", () => StaAsync(RozetkaIdOnlyDropsSavedSuggestionsAsync)),
+        ("STA later Rozetka receipt ID replaces the earlier amount fallback", () => StaAsync(RozetkaLaterReceiptIdAsync)),
         ("STA real Seller and verified Checkbox receipt UUIDs link Rozetka despite different amounts and products", () => StaAsync(RozetkaIdOnlyExactMismatchAsync))
     ];
 
     private static MarketplaceOrder RozetkaIdOnlyOrder() => BasketOrder() with
     {
-        Key = new(MarketplaceKind.Rozetka, "rz-id-only", "100"), Number = "100", Total = 200,
+        Key = new(MarketplaceKind.Rozetka, "rz-id-only", "100"), Number = "100", Total = 200, Currency = "",
         Items = [new("Synthetic Rozetka goods", "RZ-ID-ONLY", 1, 200, 200)], ItemListComplete = true
     };
 
@@ -57,11 +58,13 @@ internal static partial class MarketplaceViewModelTests
             Equal(AutomaticLinkBasis.AmountAndProducts, promReceipt.OrderMatch.Basis);
             Equal(prom.Key, promReceipt.OrderMatch.Order!.Key);
             var rozetkaReceipt = main.Receipts.Single(row => row.Id == ReceiptTwo);
-            True(rozetkaReceipt.OrderMatch?.Order is null, "Rozetka was linked by matching amount/products without a receipt UUID.");
-            True(fixture.Details.RequestedIds.SequenceEqual([ReceiptOne]), "Rozetka triggered an unnecessary receipt basket request.");
+            Equal(ReceiptLinkState.Suggested, rozetkaReceipt.OrderMatch!.State);
+            Equal(AutomaticLinkBasis.AmountAndProducts, rozetkaReceipt.OrderMatch.Basis);
+            Equal(rozetka.Key, rozetkaReceipt.OrderMatch.Order!.Key);
+            True(fixture.Details.RequestedIds.ToHashSet().SetEquals([ReceiptOne, ReceiptTwo]), "Both marketplaces need basket details when fiscal keys are absent.");
             var rozetkaRow = workspace.AllOrderRows.Single(row => row.Key == rozetka.Key);
-            True(!rozetkaRow.HasSuggestedLink && !rozetkaRow.HasConfirmedLink && rozetkaRow.LinkedReceipts.Count == 0);
-            Equal("Prom", promReceipt.LinkedMarketplace); Equal("", rozetkaReceipt.LinkedMarketplace);
+            True(rozetkaRow.HasSuggestedLink && !rozetkaRow.HasConfirmedLink && rozetkaRow.LinkedReceipts.Count == 1);
+            Equal("Prom", promReceipt.LinkedMarketplace); Equal("Rozetka", rozetkaReceipt.LinkedMarketplace);
             Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
         }
         finally { main.CancelPendingOperations(); }
@@ -98,22 +101,56 @@ internal static partial class MarketplaceViewModelTests
         {
             await main.RefreshAsync(); await workspace.EnsureAttachedAsync();
             Equal(0, fixture.Rozetka.FetchCalls);
-            True(main.Receipts.Single().OrderMatch?.Order is null, "A serialized Rozetka amount link survived cache loading.");
-            True(workspace.AllOrderRows.Single().LinkedReceipts.Count == 0);
+            Equal(ReceiptLinkState.Suggested, main.Receipts.Single().OrderMatch!.State);
+            Equal(order.Key, main.Receipts.Single().OrderMatch!.Order!.Key);
+            Equal(1, workspace.AllOrderRows.Single().LinkedReceipts.Count);
             await main.RefreshAllAsync();
-            True(main.Receipts.Single().OrderMatch?.Order is null, "F5 recreated an obsolete Rozetka amount link.");
+            Equal(ReceiptLinkState.Suggested, main.Receipts.Single().OrderMatch!.State);
             Equal(0, fixture.Details.Calls);
             var updated = await automatic.LoadAsync(account, 30);
-            True(!updated.Links.ContainsKey(receipt.Id), "The rejected Rozetka suggestion remained persisted.");
+            True(updated.Links.ContainsKey(receipt.Id), "An accepted Rozetka fallback was lost from persisted links.");
             var (restarted, restored) = CreateIdOnlyWorkspace(fixture, automatic, automaticMode: false);
             try
             {
                 await restarted.RefreshAsync(); await restored.EnsureAttachedAsync();
-                True(restarted.Receipts.Single().OrderMatch?.Order is null);
-                True(restored.AllOrderRows.Single().LinkedReceipts.Count == 0);
+                Equal(ReceiptLinkState.Suggested, restarted.Receipts.Single().OrderMatch!.State);
+                Equal(order.Key, restarted.Receipts.Single().OrderMatch!.Order!.Key);
+                Equal(1, restored.AllOrderRows.Single().LinkedReceipts.Count);
                 Equal(0, fixture.Details.Calls);
             }
             finally { restarted.CancelPendingOperations(); }
+            Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
+        }
+        finally { main.CancelPendingOperations(); }
+    }
+
+    private static async Task RozetkaLaterReceiptIdAsync()
+    {
+        var fixture = new Fixture(); var automatic = new AutomaticCache();
+        var order = RozetkaIdOnlyOrder();
+        fixture.Settings.Market.Connections.Clear();
+        fixture.Settings.Market.Connections.Add(new()
+            { Id = order.Key.ConnectionId, Marketplace = MarketplaceKind.Rozetka, Enabled = true });
+        fixture.Rozetka.Orders = [order];
+        fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 10000), Receipt(ReceiptTwo, 2, 20000)];
+        fixture.Details.Values[ReceiptTwo] = new(ReceiptTwo, order.Items) { ItemListComplete = true };
+        var (main, workspace) = CreateIdOnlyWorkspace(fixture, automatic);
+        try
+        {
+            await main.RefreshAllAsync();
+            Equal(ReceiptLinkState.Suggested, main.Receipts.Single(row => row.Id == ReceiptTwo).OrderMatch!.State);
+            var detailCalls = fixture.Details.Calls;
+            fixture.Rozetka.Orders = [order with { ReceiptIds = [ReceiptOne], RetrievedAtUtc = DateTimeOffset.UtcNow.AddSeconds(1) }];
+            await main.RefreshAllAsync();
+            var exact = main.Receipts.Single(row => row.Id == ReceiptOne);
+            Equal(ReceiptLinkState.Exact, exact.OrderMatch!.State);
+            Equal(order.Key, exact.OrderMatch.Order!.Key);
+            True(main.Receipts.Single(row => row.Id == ReceiptTwo).OrderMatch?.Order is null,
+                "The earlier amount fallback survived a different authoritative receipt ID.");
+            Equal(exact, workspace.AllOrderRows.Single().LinkedReceipts.Single());
+            Equal(detailCalls, fixture.Details.Calls);
+            var saved = await automatic.LoadAsync(PrintAccountContext.Create(fixture.Settings.App), 30);
+            True(!saved.Links.ContainsKey(ReceiptTwo), "The replaced fallback remained persisted.");
             Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls); Equal(0, fixture.History.Saves);
         }
         finally { main.CancelPendingOperations(); }

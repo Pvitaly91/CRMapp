@@ -13,7 +13,7 @@ internal static class CanceledOrderMatchingTests
         ("canceled orders: canceled Honda competitor does not block the NovaPay receipt", Run(CanceledCompetitor)),
         ("canceled orders: exact status variants exclude canceled documents without guessing unknown statuses", Run(StatusVariants)),
         ("canceled orders: cancellation removes saved suggestions and releases their receipts", Run(CancellationAfterLink)),
-        ("canceled orders: Rozetka never reserves guessed links and cancellation retains fiscal evidence", Run(RozetkaCancellationAfterLink)),
+        ("canceled orders: Rozetka cancellation releases saved fallback while retaining fiscal evidence", Run(RozetkaCancellationAfterLink)),
         ("canceled orders: manual and exact fiscal links retain priority", Run(AuthoritativeLinks))
     ];
     private static Func<Task> Run(Action action) => () => { action(); return Task.CompletedTask; };
@@ -121,8 +121,8 @@ internal static class CanceledOrderMatchingTests
         var service = new CachedReceiptOrderMatchingService(new Clock());
         var cache = new AutomaticMatchCache();
         var saved = service.MatchAll(cache, [receipt], Account, [original], [], true, Details(receipt)).Matches[receipt.Id];
-        Check(saved.Order is null && saved.State != ReceiptLinkState.Suggested && cache.Links.Count == 0,
-            "An active Rozetka order must not create a saved amount guess.");
+        Check(saved.Order?.Key == original.Key && saved.State == ReceiptLinkState.Suggested && cache.Links.Count == 1,
+            "The active keyless Rozetka order did not establish the fallback needed to test cancellation.");
         foreach (var canceled in new[]
         {
             original with { SourceStatus = "45", Status = "Скасовано покупцем" },

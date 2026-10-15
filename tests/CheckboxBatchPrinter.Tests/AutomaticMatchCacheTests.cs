@@ -18,8 +18,9 @@ internal static partial class AutomaticMatchCacheTests
         ("automatic cache: verified fiscal evidence, details and scope are fingerprinted", Run(FingerprintInputs)),
         ("automatic cache: retention, algorithm version and account isolation are bounded", RetentionAndAccounts),
         ("automatic cache: corrupt optional file rebuilds independently of durable decisions", Corruption),
-        ("automatic cache: legacy Rozetka guesses are discarded without losing Prom links or receipt details", MarketplacePolicyRestart),
-        ("automatic cache: old and forbidden graphs cannot restore or reserve Rozetka guesses", Run(MarketplacePolicyGraphs)),
+        ("automatic cache: keyless Rozetka fallback survives DPAPI restart and refresh beside Prom links", MarketplacePolicyRestart),
+        ("automatic cache: keyless Rozetka saved links survive graph invalidation and aliases until fiscal evidence arrives", Run(MarketplacePolicyGraphs)),
+        ("automatic cache: new Rozetka IDs replace fallback and unresolved keys cannot replay saved guesses", Run(MarketplacePolicyNewFiscalEvidence)),
         ("automatic cache: Rozetka exact and manual links remain valid across graph replay", Run(MarketplacePolicyAuthoritative))
     ];
 

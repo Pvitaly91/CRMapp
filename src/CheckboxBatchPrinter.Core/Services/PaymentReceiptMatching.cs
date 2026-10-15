@@ -4,7 +4,7 @@ using CheckboxBatchPrinter.Core.Models;
 
 namespace CheckboxBatchPrinter.Core.Services;
 
-/// <summary>Bounded payment evidence for Prom, never an inference of the receipt's marketplace.</summary>
+/// <summary>Bounded payment evidence for eligible order baskets, never an inference of the receipt's marketplace.</summary>
 internal static class PaymentReceiptMatching
 {
     internal sealed record Check(PaymentComparison State, string Reason = "");
@@ -17,16 +17,19 @@ internal static class PaymentReceiptMatching
     {
         var expected = OrderProvider(order); var actual = ReceiptProvider(receipt);
         if (expected == Provider.Unknown || actual == Provider.Unknown) return new(PaymentComparison.Insufficient);
+        var marketplace = order.Key.Marketplace == MarketplaceKind.Rozetka ? "Rozetka" : "Prom";
         return expected == actual ? new(PaymentComparison.Match,
-            $"Оплата узгоджена: «{order.PaymentMethod}» у Prom і {actual} у чеку.") : new(PaymentComparison.Contradiction,
-            $"Оплата відрізняється: «{order.PaymentMethod}» у Prom відповідає {expected}; у чеку {actual}. Це не визначає маркетплейс чека.");
+            $"Оплата узгоджена: «{order.PaymentMethod}» у {marketplace} і {actual} у чеку.") : new(PaymentComparison.Contradiction,
+            $"Оплата відрізняється: «{order.PaymentMethod}» у {marketplace} відповідає {expected}; у чеку {actual}. Це не визначає маркетплейс чека.");
     }
 
     private static Provider OrderProvider(MarketplaceOrder order)
     {
-        if (order.Key.Marketplace != MarketplaceKind.Prom) return Provider.Unknown;
+        if (!AutomaticReceiptLinkPolicy.CanUseAmountFallback(order)) return Provider.Unknown;
         var method = Normalize(order.PaymentMethod);
-        if (method is "ПРОМ-ОПЛАТА" or "ПРОМ ОПЛАТА" or "ПРОМОПЛАТА" or "ROZETKAPAY" or "ROZETKA PAY" or
+        if (order.Key.Marketplace == MarketplaceKind.Prom && method is "ПРОМ-ОПЛАТА" or "ПРОМ ОПЛАТА" or "ПРОМОПЛАТА")
+            return Provider.RozetkaPay;
+        if (method is "ROZETKAPAY" or "ROZETKA PAY" or
             "ПЛАТІЖ ROZETKAPAY" or "ПЛАТЕЖ ROZETKAPAY") return Provider.RozetkaPay;
         if (method is "NOVAPAY" or "NOVA PAY" or "ПЛАТІЖ NOVAPAY" or "ПЛАТЕЖ NOVAPAY") return Provider.NovaPay;
         // Generic COD is not always NovaPay: e.g. Rozetka Delivery has its own COD.

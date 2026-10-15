@@ -42,7 +42,8 @@ internal static partial class FiscalLinkTests
 
         // Disk cache may keep the code and cashier assertion, never authenticated UUID proof.
         var persisted = JsonSerializer.Deserialize<MarketplaceOrder>(JsonSerializer.Serialize(verified))!;
-        True(Match(persisted, account: account).State != ReceiptLinkState.Exact);
+        var restored = Match(persisted, account: account);
+        True(restored.State != ReceiptLinkState.Exact && restored.State != ReceiptLinkState.Suggested && restored.Order is null);
     }
 
     private static async Task RozetkaUuidIdentityGuardsAsync()
@@ -70,7 +71,11 @@ internal static partial class FiscalLinkTests
             proof with { VerifiedReceiptId = Guid.Empty.ToString("D") },
             proof with { VerifiedReceiptId = "4961" },
             proof with { VerifiedAccountContext = "other-account" }
-        }) True(Match(order with { FiscalReferences = [invalid] }, receipt).State != ReceiptLinkState.Exact);
+        })
+        {
+            var unresolved = Match(order with { FiscalReferences = [invalid], Total = receipt.TotalSum }, receipt);
+            True(unresolved.State != ReceiptLinkState.Exact && unresolved.State != ReceiptLinkState.Suggested && unresolved.Order is null);
+        }
         foreach (var invalidId in new[] { "4961", Guid.Empty.ToString("D") })
             True(Match(order with { ReceiptIds = [invalidId] }, Receipt(id: invalidId, total: 39000)).State != ReceiptLinkState.Exact);
 
@@ -79,5 +84,33 @@ internal static partial class FiscalLinkTests
         Equal(ReceiptLinkState.Conflict, Match(order with { FiscalReferences = [proof, reference with { Value = "other-code" }] }, receipt).State);
         var manual = new ReceiptOrderDecision { AccountContext = "account", ReceiptId = receipt.Id, ConfirmedOrder = order.Key };
         Equal(ReceiptLinkState.Manual, Match(order, receipt, [manual]).State);
+    }
+
+    private static async Task RozetkaNoFiscalKeyFallbackAsync()
+    {
+        var parsed = await Fetch(url: "", code: "");
+        True(parsed.FiscalReferences.Count == 0 && parsed.ReceiptIds.Count == 0 &&
+            parsed.FiscalReceiptNumbers.Count == 0 && parsed.FiscalReceiptUrls.Count == 0);
+        var order = parsed with { Items = [new("Synthetic keyless Rozetka goods", "", 1, 100, 100)],
+            ItemsComplete = true, ItemListComplete = true };
+        var receipt = new ReceiptRecord { Id = ReceiptId, Type = ReceiptTypes.Sell, Status = "DONE",
+            FiscalDate = parsed.CreatedAt!.Value.AddHours(1), TotalSumMinor = 10000 };
+        var details = new Dictionary<string, ReceiptDetails>
+            { [ReceiptId] = new(ReceiptId, order.Items) { ItemListComplete = true } };
+        var matcher = new ReceiptOrderMatchingService();
+        var fallback = matcher.MatchAll([receipt], "account", [order], [], true, details)[ReceiptId];
+        Equal(ReceiptLinkState.Suggested, fallback.State); Equal(AutomaticLinkBasis.AmountAndProducts, fallback.Basis);
+        Equal(order.Key, fallback.Order!.Key);
+
+        // The next Seller response supplies a different document UUID. It wins over
+        // the previous amount hypothesis even when its receipt total differs.
+        var issued = await Fetch(Url.Replace(ReceiptId, OtherId), code: "");
+        issued = issued with { Items = order.Items, ItemsComplete = true, ItemListComplete = true };
+        var actual = Receipt(OtherId, code: "", total: 39000);
+        var updated = matcher.MatchAll([receipt, actual], "account", [issued], [], true, details,
+            existingLinks: new Dictionary<string, ReceiptOrderMatch> { [ReceiptId] = fallback });
+        True(updated[ReceiptId].Order is null);
+        Equal(ReceiptLinkState.Exact, updated[OtherId].State); Equal(order.Key, updated[OtherId].Order!.Key);
+        Equal(100m, updated[OtherId].Order!.Total); Equal(390m, actual.TotalSum);
     }
 }

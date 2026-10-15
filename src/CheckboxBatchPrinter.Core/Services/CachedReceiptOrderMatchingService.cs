@@ -8,7 +8,7 @@ namespace CheckboxBatchPrinter.Core.Services;
 /// <summary>Keep assigned pairs and search only documents without a link. Manual/fiscal decisions have priority.</summary>
 public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider = null)
 {
-    public const string AlgorithmVersion = "same-kyiv-day-prom-only-amount-v16";
+    public const string AlgorithmVersion = "same-kyiv-day-rozetka-id-first-fallback-v17";
     private const string PreviousAlgorithmVersion = "same-kyiv-day-clean-names-payment-v8";
     public const int MaximumDetails = 5000;
     public const int MaximumSnapshots = 8;
@@ -98,6 +98,8 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
         if (!entry.Matches.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(receipts.DistinctBy(r => Normalize(r.Id)).Select(r => r.Id)) ||
             entry.Matches.Values.SelectMany(m => m.Candidates.Concat(m.GroupOrders).Concat(m.Order is null ? [] : [m.Order]))
                 .Any(k => !currentOrders.ContainsKey(k))) return false;
+        if (entry.Matches.Values.Any(m => m.State == ReceiptLinkState.Suggested &&
+                (m.Order is null || !AutomaticReceiptLinkPolicy.CanUseAmountFallback(currentOrders[m.Order])))) return false;
         matches = entry.Matches.ToDictionary(p => p.Key, p => Unpack(p.Value, currentOrders, scope?.Description ?? ""));
         return true;
     }
@@ -158,9 +160,11 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
             var saved = link.Match;
             if (!IsAllowedSuggestion(saved) || saved.Order is null) continue;
             var key = normalizeKey(saved.Order);
-            if (key.Marketplace != MarketplaceKind.Prom || key == saved.Order || !originals.TryGetValue(saved.Order, out var original) || original.IsCanceled ||
+            if (key.Marketplace != saved.Order.Marketplace || key == saved.Order || !originals.TryGetValue(saved.Order, out var original) || original.IsCanceled ||
                 !canonical.TryGetValue(key, out var current) || current.IsCanceled ||
                 saved.OrderFingerprint != OrderFingerprint(original)) continue;
+            if (!AutomaticReceiptLinkPolicy.CanUseAmountFallback(original) || !AutomaticReceiptLinkPolicy.CanUseAmountFallback(current))
+            { cache.Links.Remove(id); continue; }
             var projected = original with
             {
                 Key = key,
@@ -203,7 +207,7 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
                 byReceipt.TryGetValue(id, out var receipt) && saved.ReceiptFingerprint != ReceiptFingerprint(receipt))
             { cache.Links.Remove(id); continue; }
             if (!byOrder.TryGetValue(saved.Order, out var order)) continue;
-            if (order.IsCanceled) { cache.Links.Remove(id); continue; }
+            if (order.IsCanceled || !AutomaticReceiptLinkPolicy.CanUseAmountFallback(order)) { cache.Links.Remove(id); continue; }
             if (saved.OrderFingerprint != OrderFingerprint(order)) { cache.Links.Remove(id); continue; }
             var receiptId = byReceipt.TryGetValue(id, out var currentReceipt) ? currentReceipt.Id : id;
             const string prefix = "Збережений автозв’язок; новий пошук виконується лише серед замовлень без зв’язку. ";
@@ -232,7 +236,7 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
         {
             if (loading?.Contains(Normalize(receipt.Id)) == true ||
                 !matches.TryGetValue(receipt.Id, out var match) || match.State != ReceiptLinkState.Suggested ||
-                match.Order?.Key.Marketplace != MarketplaceKind.Prom) continue;
+                match.Order is null || !AutomaticReceiptLinkPolicy.CanUseAmountFallback(match.Order)) continue;
             var id = Normalize(receipt.Id);
             var saved = Pack(match, receipt);
             var linkedAt = cache.Links.TryGetValue(id, out var previous) && previous.Match.Order == saved.Order
@@ -269,10 +273,10 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
             .OrderByDescending(s => s.CachedAtUtc).Take(MaximumSnapshots).ToList();
     }
 
-    // A saved probable pair must obey the same marketplace policy as a new one.
-    // Old Rozetka pairs are removed individually, preserving Prom links and details.
+    // This is only the stored shape check. Rozetka eligibility depends on the
+    // current order's fiscal assertions and is checked before any reuse/reservation.
     private static bool IsAllowedSuggestion(CachedReceiptMatch match) =>
-        match.State == ReceiptLinkState.Suggested && match.Order?.Marketplace == MarketplaceKind.Prom;
+        match.State == ReceiptLinkState.Suggested && match.Order?.Marketplace is MarketplaceKind.Prom or MarketplaceKind.Rozetka;
 
     private static bool BindAccount(AutomaticMatchCache cache, string account)
     {

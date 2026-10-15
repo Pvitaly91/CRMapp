@@ -34,7 +34,7 @@ internal static class BasketReceiptMatching
                 .Select(m => m.Order!.Key)).Concat(existingLinkedOrders ?? new HashSet<OrderKey>()).ToHashSet();
         var freeReceipts = receipts.Where(r => r.Type == ReceiptTypes.Sell && r.Status == "DONE" &&
             matches[r.Id].State is not (ReceiptLinkState.Manual or ReceiptLinkState.Exact or ReceiptLinkState.Suggested)).ToArray();
-        var freeOrders = orders.Where(o => o.Key.Marketplace == MarketplaceKind.Prom &&
+        var freeOrders = orders.Where(o => AutomaticReceiptLinkPolicy.CanUseAmountFallback(o) &&
             !o.IsCanceled && !reservedOrders.Contains(o.Key)).ToArray();
         var edges = new List<Edge>();
         foreach (var receipt in freeReceipts)
@@ -235,7 +235,7 @@ internal static class BasketReceiptMatching
     }
 
     internal static bool PotentialPair(ReceiptRecord receipt, MarketplaceOrder order, AmountMatchScope scope) =>
-        order.Key.Marketplace == MarketplaceKind.Prom && !order.IsCanceled &&
+        AutomaticReceiptLinkPolicy.CanUseAmountFallback(order) && !order.IsCanceled &&
         (string.IsNullOrWhiteSpace(order.Currency) || order.Currency.Equals("UAH", StringComparison.OrdinalIgnoreCase)) &&
         (!receipt.TotalKnown || order.Total is null || order.Total == receipt.TotalSum) &&
         (order.CreatedAt is not { } created ||
@@ -330,8 +330,9 @@ internal static class BasketReceiptMatching
         items.GroupBy(i => ProductNameIdentity.Normalize(i.Name))
         .ToDictionary(g => g.Key, g => g.All(i => i.Quantity is > 0m) ? (decimal?)g.Sum(i => i.Quantity!.Value) : null);
 
-    private static bool HasFiscalEvidence(MarketplaceOrder o) => o.ReceiptIds.Count > 0 || o.FiscalReferences.Count > 0 ||
-        o.FiscalReceiptNumbers.Count > 0 || o.FiscalReceiptUrls.Count > 0;
+    private static bool HasFiscalEvidence(MarketplaceOrder o) => o.Key.Marketplace == MarketplaceKind.Rozetka
+        ? AutomaticReceiptLinkPolicy.HasFiscalKey(o)
+        : o.ReceiptIds.Count > 0 || o.FiscalReferences.Count > 0 || o.FiscalReceiptNumbers.Count > 0 || o.FiscalReceiptUrls.Count > 0;
 
     internal static string NormalizeId(string value) => Guid.TryParse(value, out var id) ? id.ToString("D") : value;
 }

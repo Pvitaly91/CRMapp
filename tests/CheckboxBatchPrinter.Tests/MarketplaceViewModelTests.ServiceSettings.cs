@@ -133,6 +133,10 @@ internal static partial class MarketplaceViewModelTests
         await files.Settings.Inner.SaveAsync(new() { Connections = [disabled] });
         var disabledOnly = files.CreateMarketplace(); await disabledOnly.LoadAsync(); disabledOnly.Selected = null;
         disabledOnly.AddRozetkaCommand.Execute(null);
+        // Selecting the account starts an async DPAPI read; let it finish before the
+        // fixture removes its temporary secret directory at the end of this test.
+        await disabledOnly.CredentialStatusRefresh;
         Equal(SettingsRozetkaBId, disabledOnly.Selected!.Id); Equal(1, disabledOnly.Connections.Count); True(!disabledOnly.Selected.Enabled);
+        Equal("Saved", disabledOnly.CredentialStatusKind);
     }
 }

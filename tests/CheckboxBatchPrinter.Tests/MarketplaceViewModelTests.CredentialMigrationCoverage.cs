@@ -186,18 +186,22 @@ internal static partial class MarketplaceViewModelTests
         fixture.Rozetka.Orders = [canonical, competitor]; fixture.Rozetka.Complete = false;
         var (main, workspace) = fixture.Create(automaticCache: automatic);
         await main.RefreshAsync(); main.SelectedTabIndex = 1; await main.PrepareOrdersAsync();
-        True(main.Receipts.Single().OrderMatch?.Order is null);
+        Equal(ReceiptLinkState.Suggested, main.Receipts.Single().OrderMatch!.State);
+        Equal(canonical.Key, main.Receipts.Single().OrderMatch!.Order?.Key);
         await ExecuteAsync(main.RefreshAllCommand);
-        True(main.Receipts.Single().OrderMatch?.Order is null);
+        Equal(ReceiptLinkState.Suggested, main.Receipts.Single().OrderMatch!.State);
+        Equal(canonical.Key, main.Receipts.Single().OrderMatch!.Order?.Key);
         True(!fixture.Cache.Snapshot.States.Single(state => state.ConnectionId == currentId).Complete);
         Equal(2, workspace.AllOrderRows.Count);
         Equal(0, fixture.Details.Calls);
         var stored = await automatic.LoadAsync(account, 30);
-        True(!stored.Links.ContainsKey(ReceiptOne));
+        Equal(canonical.Key, stored.Links[ReceiptOne].Match.Order);
 
         var (restarted, restored) = fixture.Create(automaticCache: automatic);
         await restarted.RefreshAsync(); restarted.SelectedTabIndex = 1; await restarted.PrepareOrdersAsync();
-        True(restarted.Receipts.Single().OrderMatch?.Order is null);
+        Equal(ReceiptLinkState.Suggested, restarted.Receipts.Single().OrderMatch!.State);
+        Equal(canonical.Key, restarted.Receipts.Single().OrderMatch!.Order?.Key);
+        Equal(0, fixture.Details.Calls);
         Equal(2, restored.AllOrderRows.Count); Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
         main.CancelPendingOperations(); restarted.CancelPendingOperations();
     }
@@ -274,9 +278,10 @@ internal static partial class MarketplaceViewModelTests
             await main.RefreshAllAsync();
             Equal(1, verifier.Calls.Count);
             Equal(unrelatedFiscal.Key, verifier.Calls.Single().Single().Key);
-            True(main.Receipts.Single().OrderMatch?.Order is null);
+            Equal(ReceiptLinkState.Suggested, main.Receipts.Single().OrderMatch!.State);
+            Equal(canonical.Key, main.Receipts.Single().OrderMatch!.Order?.Key);
             Equal(3, workspace.AllOrderRows.Count);
-            True(!(await automatic.LoadAsync(account, 30)).Links.ContainsKey(ReceiptOne));
+            Equal(canonical.Key, (await automatic.LoadAsync(account, 30)).Links[ReceiptOne].Match.Order);
             True(!fixture.Cache.Snapshot.States.Single(state => state.ConnectionId == currentId).Complete);
             Equal(0, fixture.Details.Calls); Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
         }
