@@ -6,14 +6,23 @@
         Loaded="Window_Loaded" UseLayoutRounding="True">
     <DockPanel>
         <Border DockPanel.Dock="Top" Background="White" Padding="10" BorderBrush="#D1D5DB" BorderThickness="0,0,0,1">
-            <StackPanel Orientation="Horizontal">
-                <TextBlock Text="Офіційне PNG-представлення Checkbox" FontWeight="SemiBold" VerticalAlignment="Center" />
-                <TextBlock x:Name="ReceiptInfo" Margin="16,0,0,0" Foreground="#667085" VerticalAlignment="Center" />
-            </StackPanel>
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0">
+                    <Button x:Name="FitWholeButton" Content="Увесь чек" Padding="8,3" IsEnabled="False"
+                            Click="FitWholeButton_Click" ToolTip="Умістити чек повністю у вікні" />
+                    <Button x:Name="FitWidthButton" Content="За шириною" Padding="8,3"
+                            Click="FitWidthButton_Click" ToolTip="Збільшити чек до ширини вікна; довгий чек можна прокручувати" />
+                </StackPanel>
+                <StackPanel>
+                <TextBlock Text="Офіційне PNG-представлення Checkbox" FontWeight="SemiBold" VerticalAlignment="Center" TextWrapping="Wrap" />
+                <TextBlock x:Name="ReceiptInfo" Margin="0,3,0,0" Foreground="#667085" VerticalAlignment="Center" TextWrapping="Wrap" />
+                </StackPanel>
+            </DockPanel>
         </Border>
         <ScrollViewer x:Name="PreviewScroll" HorizontalScrollBarVisibility="Disabled"
-                      VerticalScrollBarVisibility="Auto" Padding="18" SizeChanged="PreviewScroll_SizeChanged">
-            <Border Background="White" Padding="4" HorizontalAlignment="Center" VerticalAlignment="Top">
+                      VerticalScrollBarVisibility="Auto" Padding="18" SizeChanged="PreviewScroll_SizeChanged"
+                      ScrollChanged="PreviewScroll_ScrollChanged">
+            <Border x:Name="ReceiptPaper" Background="White" Padding="4" HorizontalAlignment="Center" VerticalAlignment="Top">
                 <Image x:Name="ReceiptImage" Stretch="Uniform" StretchDirection="DownOnly"
                        HorizontalAlignment="Center" VerticalAlignment="Top" />
             </Border>
