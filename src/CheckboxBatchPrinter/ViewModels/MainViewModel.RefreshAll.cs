@@ -140,6 +140,7 @@ public sealed partial class MainViewModel
         finally
         {
             publication?.Dispose();
+            if (Marketplace is not null) await Marketplace.FlushAcceptedLinksAsync();
             if (Marketplace is not null) Marketplace.IsWorkspaceRefreshing = false;
             if (Waybills is not null) Waybills.IsWorkspaceRefreshing = false;
             _refreshAllCancellation = null;

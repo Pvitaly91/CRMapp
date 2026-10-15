@@ -85,7 +85,7 @@ public sealed partial class MarketplaceWorkspaceViewModel
         var byReceiptId = _rows.Select(row => row.Model).GroupBy(receipt => NormalizeId(receipt.Id))
             .ToDictionary(group => group.Key, group => group.First());
         var previousOrders = ActiveOrders.GroupBy(order => order.Key).ToDictionary(group => group.Key, group => group.First());
-        var established = _establishedLinks.Restore(_account, byReceiptId.Values.ToArray(), orders,
+        var established = _establishedLinks.Restore(_automaticCache, _account, byReceiptId.Values.ToArray(), orders,
             ActiveDecisions, EnabledConnectionIds);
         orders = established.Orders;
         var establishedKeys = established.Matches.Values.Where(match => match.Order is not null)
@@ -98,8 +98,11 @@ public sealed partial class MarketplaceWorkspaceViewModel
             .ToDictionary(decision => NormalizeId(decision.ReceiptId));
         var unchangedLinked = establishedKeys.Concat(savedSuggested).Concat(manual.Values.Select(decision => decision.ConfirmedOrder!))
             .ToHashSet();
-        unchangedLinked.RemoveWhere(key => !previousOrders.TryGetValue(key, out var previous) ||
-            orders.FirstOrDefault(order => order.Key == key) is not { } current || !SameFiscalDocuments(previous, current));
+        // A persisted exact pair has already been checked against the current raw
+        // documents above, even on a cold start with no previously published snapshot.
+        unchangedLinked.RemoveWhere(key => !establishedKeys.Contains(key) &&
+            (!previousOrders.TryGetValue(key, out var previous) ||
+             orders.FirstOrDefault(order => order.Key == key) is not { } current || !SameFiscalDocuments(previous, current)));
         var linkedReceipts = established.Matches.Where(pair => pair.Value.Order is not null)
             .ToDictionary(pair => NormalizeId(pair.Key), pair => pair.Value.Order!.Key);
         foreach (var (id, decision) in manual) linkedReceipts[id] = decision.ConfirmedOrder!;

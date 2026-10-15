@@ -107,6 +107,7 @@ public sealed partial class MarketplaceWorkspaceViewModel
                 if (Labels is { IsPrintOperationActive: true } printing)
                     _ = ReapplyAfterPrintingAsync(printing, generation, configurationVersion, accountVersion, display, background);
                 else ApplyMatches();
+                await FlushAcceptedLinksAsync();
             }
             _parallelPublishing = false;
             _backgroundSyncing = false;
@@ -167,6 +168,9 @@ public sealed partial class MarketplaceWorkspaceViewModel
             (returnsComplete ? "" : " Деталі повернення недоступні.");
         _loadingDetails.UnionWith(DetailTargets(from, to).Take(100).Select(r => r.Id));
         ApplyMatches();
+        await FlushAcceptedLinksAsync();
+        token.ThrowIfCancellationRequested();
+        if (!IsCurrentParallelContext(generation, configurationVersion, accountVersion, display)) return false;
         if (ordersComplete && ReceiptCoverageFresh && _account.Length > 0 && HasReceiptCoverage(from, to))
             await LoadBasketDetailsAsync(generation, token, from, to);
         if (Labels is { } printing) await printing.WaitForPrintOperationAsync(token);
@@ -189,7 +193,7 @@ public sealed partial class MarketplaceWorkspaceViewModel
             if (IsCurrentParallelContext(generation, configurationVersion, accountVersion, display))
             {
                 _backgroundSyncing = background;
-                try { ApplyMatches(); }
+                try { ApplyMatches(); await FlushAcceptedLinksAsync(); }
                 finally { _backgroundSyncing = false; }
             }
         }

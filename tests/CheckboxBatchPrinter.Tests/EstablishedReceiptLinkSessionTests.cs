@@ -4,7 +4,7 @@ using CheckboxBatchPrinter.Core.Services;
 
 namespace CheckboxBatchPrinter.Tests;
 
-internal static class EstablishedReceiptLinkSessionTests
+internal static partial class EstablishedReceiptLinkSessionTests
 {
     private const string Account = "session-cashier";
     private const string Shop = "77000000000000000000000000000001";
@@ -13,23 +13,24 @@ internal static class EstablishedReceiptLinkSessionTests
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
         Test("established session: unchanged fiscal links survive fresh order data and reserve allocations", StableRefresh),
-        Test("established session: account and connection changes clear runtime proof and restart never restores it", AccountAndRestart),
+        Test("established session: account and connection changes clear runtime proof and an unloaded session has none", AccountAndRestart),
         Test("established session: missing or changed pair evidence invalidates only that pair", ChangedEvidence),
         Test("established session: manual decisions and canceled orders override prior exact links", DecisionsAndCancellation),
         Test("established session: new exact and unresolved fiscal claims block reuse without leaking proof", CompetingClaims),
         Test("established session: repeated captures keep out-of-range pairs but never promote suggestions or inherited returns", CaptureScope),
         Test("established session: separate sale and return documents retain both accepted proofs", MultipleDocuments),
-        Test("established session: runtime storage remains bounded and capture rejects fabricated exact results", BoundAndCaptureGuard)
+        Test("established session: runtime storage remains bounded and capture rejects fabricated exact results", BoundAndCaptureGuard),
+        .. PersistenceScenarios
     ];
     private static (string, Func<Task>) Test(string name, Action test) => (name, () => { test(); return Task.CompletedTask; });
     private static void Yes(bool condition) { if (!condition) throw new InvalidOperationException("Established session assertion failed."); }
     private static void Equal<T>(T expected, T actual)
     { if (!EqualityComparer<T>.Default.Equals(expected, actual)) throw new InvalidOperationException($"Expected {expected}; got {actual}."); }
     private static ReceiptRecord Receipt(int n = 1, long amount = 10000, string type = ReceiptTypes.Sell, string? code = null,
-        string branch = "", string paymentLabel = "") => new()
+        string branch = "", string paymentLabel = "", DateTimeOffset? fiscalDate = null) => new()
     {
         Id = $"77000000-0000-0000-0000-{n:D12}", FiscalCode = code ?? $"CODE-{n:D6}",
-        Status = "DONE", Type = type, Serial = n, TotalSumMinor = amount, FiscalDate = Time,
+        Status = "DONE", Type = type, Serial = n, TotalSumMinor = amount, FiscalDate = fiscalDate ?? Time,
         OrganizationId = "78000000-0000-0000-0000-000000000001", CashRegisterFiscalNumber = "12345", BranchName = branch,
         Payments = paymentLabel.Length == 0 ? [] : [new("CASH", paymentLabel, amount)]
     };

@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace CheckboxBatchPrinter.Core.Models;
 
 /// <summary>Disposable, account-scoped optimization; never a source of manual decisions.</summary>
@@ -9,7 +11,22 @@ public sealed class AutomaticMatchCache
     public List<CachedMatchingSnapshot> Snapshots { get; set; } = [];
     public Dictionary<string, CachedAutomaticLink> Links { get; set; } = new(StringComparer.Ordinal);
     public int LinkSchema { get; set; }
+    public Dictionary<string, CachedExactReceiptLink> ExactLinks { get; set; } = new(StringComparer.Ordinal);
+    public int ExactLinkSchema { get; set; } = 1;
+    public Dictionary<string, DateTimeOffset> ExactLinkMigrationAttempts { get; set; } = new(StringComparer.Ordinal);
+    [JsonIgnore] public bool ExactLinksChanged { get; set; }
+    [JsonIgnore] public long ExactLinksRevision { get; set; }
 }
+
+// An accepted relationship, bound to the surrounding Checkbox account and unchanged
+// raw fiscal documents. Generic MarketplaceOrder verification flags remain JsonIgnore.
+public sealed record CachedExactReceiptLink(OrderKey Order, string ReceiptFingerprint, string FiscalFingerprint,
+    IReadOnlyList<CachedFiscalAttestation> Attestations, IReadOnlyList<string> EnabledConnectionIds, DateTimeOffset AcceptedAtUtc)
+{
+    public int Schema { get; init; } = 1;
+}
+
+public sealed record CachedFiscalAttestation(FiscalDocumentReference Reference, string ReceiptId);
 
 public sealed record CachedAutomaticLink(CachedReceiptMatch Match, DateTimeOffset LinkedAtUtc);
 

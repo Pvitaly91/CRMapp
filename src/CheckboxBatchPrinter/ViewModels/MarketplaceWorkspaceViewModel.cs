@@ -464,6 +464,8 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
                 account.Length > 0 && _matcher.HasVerifiedSnapshot(_automaticCache, account, MatchScope, EnabledConnectionIds);
             Status = "Локальні дані завантажено. Натисніть «Оновити все» для перевірки API.";
             ApplyMatches();
+            await FlushAcceptedLinksAsync();
+            if (generation != _generation || token.IsCancellationRequested) return;
             if (_showingCachedMatches) Status = "Автоприв’язки відновлено з кешу. Оновлення перевірить нові й змінені документи.";
             Status += _cacheNotice;
         }
@@ -607,6 +609,9 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
                 (returnsComplete ? "" : " Деталі повернення недоступні.");
             _loadingDetails.UnionWith(DetailTargets(syncFrom, syncTo).Take(100).Select(r => r.Id));
             ApplyMatches();
+            await FlushAcceptedLinksAsync();
+            token.ThrowIfCancellationRequested();
+            if (generation != _generation) return;
             if (ordersComplete && ReceiptCoverageFresh && _account.Length > 0 && HasReceiptCoverage(syncFrom, syncTo))
                 await LoadBasketDetailsAsync(generation, token, syncFrom, syncTo);
             ApplyMatches();
@@ -628,6 +633,7 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
             if (generation == _generation && ReferenceEquals(_cancel, cancel))
             {
                 _loadingDetails.Clear(); ApplyMatches();
+                await FlushAcceptedLinksAsync();
                 await SaveAutomaticCacheAsync(generation, token);
                 if (generation == _generation && ReferenceEquals(_cancel, cancel)) { _cancel = null; IsBusy = false; }
             }
@@ -762,6 +768,7 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
             if (generation == _generation && ReferenceEquals(_cancel, cancel))
             {
                 _loadingDetails.Clear(); ApplyMatches();
+                await FlushAcceptedLinksAsync();
                 await SaveAutomaticCacheAsync(generation, cancel.Token);
                 if (generation == _generation && ReferenceEquals(_cancel, cancel)) { _cancel = null; IsBusy = false; }
             }
@@ -895,7 +902,12 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
         if (_automaticCacheStore is null || _account.Length == 0 || generation != _generation || token.IsCancellationRequested) return;
         var account = _account;
         var cache = _automaticCache;
-        try { await _automaticCacheStore.SaveAsync(account, cache, _config.CacheDays, token); }
+        var exactRevision = cache.ExactLinksRevision;
+        try
+        {
+            await _automaticCacheStore.SaveAsync(account, cache, _config.CacheDays, token);
+            if (cache.ExactLinksRevision == exactRevision) cache.ExactLinksChanged = false;
+        }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception)
         {
@@ -904,6 +916,11 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
             Status += _cacheNotice;
         }
     }
+
+    // Accepted local evidence must reach disk before a later network operation can
+    // be cancelled. Account/generation checks and the store's copy still isolate the write.
+    public Task FlushAcceptedLinksAsync() => _canApply && _automaticCache.ExactLinksChanged
+        ? SaveAutomaticCacheAsync(_generation, CancellationToken.None) : Task.CompletedTask;
 
     private void ApplyMatches(bool? backgroundOnly = null)
     {
@@ -915,7 +932,7 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
         var orders = ActiveOrders;
         _matcher.NormalizeConnectionAliases(_automaticCache, _account, _snapshot.Orders, orders, _deduplication.NormalizeKey);
         var decisions = ActiveDecisions;
-        var established = _establishedLinks.Restore(_account, _rows.Select(row => row.Model).ToArray(),
+        var established = _establishedLinks.Restore(_automaticCache, _account, _rows.Select(row => row.Model).ToArray(),
             orders, decisions, EnabledConnectionIds);
         orders = established.Orders;
         var interactiveCoverageComplete = _coverageComplete && ReceiptCoverageFresh;
@@ -964,7 +981,7 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
                 ? new(ReceiptLinkState.NotChecked, null, "Маркетплейси не підключено. Звичайний друк доступний.", [])
                 : matches.TryGetValue(row.Id, out var match) ? match : row.OrderMatch ??
                     new(ReceiptLinkState.Incomplete, null, "Цей діапазон ще не перевірено.", []);
-        _establishedLinks.Capture(_account, _rows.Select(row => row.Model).ToArray(),
+        _establishedLinks.Capture(_automaticCache, _account, _rows.Select(row => row.Model).ToArray(),
             _rows.Where(row => row.OrderMatch is not null).ToDictionary(row => row.Id, row => row.OrderMatch!), EnabledConnectionIds);
         RefreshOrderRows(orders);
         var linked = _rows.Where(r => r.OrderMatch?.Order is not null).Select(r => r.OrderMatch!.Order!.Key).ToHashSet();

@@ -45,7 +45,8 @@ public sealed class DpapiAutomaticMatchCacheStore(string path, TimeProvider? tim
         caches.RemoveAll(c => c.AccountContext == accountContext);
         caches.Add(copy);
         foreach (var item in caches) CachedReceiptOrderMatchingService.Prune(item, _clock.GetUtcNow());
-        caches = caches.Where(c => c.Details.Count > 0 || c.Snapshots.Count > 0 || c.Links.Count > 0)
+        caches = caches.Where(c => c.Details.Count > 0 || c.Snapshots.Count > 0 || c.Links.Count > 0 || c.ExactLinks.Count > 0 ||
+                c.ExactLinkMigrationAttempts.Count > 0)
             .OrderByDescending(NewestEntry).Take(MaxAccounts).ToList();
         // Bound the serialized payload as well as entry counts; unusually large API product lists
         // must not produce a file that our own guarded reader will subsequently reject.
@@ -85,6 +86,8 @@ public sealed class DpapiAutomaticMatchCacheStore(string path, TimeProvider? tim
 
     private static DateTimeOffset NewestEntry(AutomaticMatchCache cache) => cache.Details.Values.Select(d => d.CachedAtUtc)
         .Concat(cache.Snapshots.Select(s => s.CachedAtUtc)).Concat(cache.Links.Values.Select(l => l.LinkedAtUtc))
+        .Concat(cache.ExactLinks.Values.Select(link => link.AcceptedAtUtc))
+        .Concat(cache.ExactLinkMigrationAttempts.Values)
         .DefaultIfEmpty(DateTimeOffset.MinValue).Max();
 
     private static bool ValidKey(OrderKey? key) => key is not null && Enum.IsDefined(key.Marketplace) &&

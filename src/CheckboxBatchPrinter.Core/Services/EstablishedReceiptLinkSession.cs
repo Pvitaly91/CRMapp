@@ -8,15 +8,16 @@ namespace CheckboxBatchPrinter.Core.Services;
 public sealed record EstablishedLinkReuse(IReadOnlyList<MarketplaceOrder> Orders,
     IReadOnlyDictionary<string, ReceiptOrderMatch> Matches);
 
-/// <summary>Retains accepted exact links only for this process/account. It never creates or persists fiscal evidence.</summary>
-public sealed class EstablishedReceiptLinkSession
+/// <summary>Revalidates accepted exact pairs; cache-aware overloads also retain their narrowly bound attestations.</summary>
+public sealed partial class EstablishedReceiptLinkSession(TimeProvider? timeProvider = null)
 {
     private const int MaximumPairs = 5000;
     private readonly Dictionary<string, Entry> _pairs = new(StringComparer.Ordinal);
     private string _account = "";
     private string[] _connections = [];
+    private readonly TimeProvider _clock = timeProvider ?? TimeProvider.System;
     private sealed record Entry(OrderKey Order, string ReceiptFingerprint, string FiscalFingerprint,
-        IReadOnlyList<FiscalDocumentReference> Verified, ReceiptOrderMatch Match);
+        IReadOnlyList<FiscalDocumentReference> Verified, ReceiptOrderMatch Match, DateTimeOffset AcceptedAtUtc);
 
     public void Capture(string account, IReadOnlyList<ReceiptRecord> receipts,
         IReadOnlyDictionary<string, ReceiptOrderMatch> matches, IReadOnlyList<string> enabledConnectionIds)
@@ -35,7 +36,12 @@ public sealed class EstablishedReceiptLinkSession
             var verified = order.FiscalReferences.Where(reference => reference.Order == order.Key &&
                 reference.VerifiedAccountContext == account && CheckboxReceiptReference.SameId(reference.VerifiedReceiptId, receipt.Id)).ToArray();
             if (!_pairs.ContainsKey(key) && _pairs.Count >= MaximumPairs) _pairs.Remove(_pairs.Keys.First());
-            _pairs[key] = new(order.Key, ReceiptFingerprint(receipt), FiscalFingerprint(order), verified, match);
+            var receiptFingerprint = ReceiptFingerprint(receipt);
+            var fiscalFingerprint = FiscalFingerprint(order);
+            var acceptedAt = _pairs.TryGetValue(key, out var previous) && previous.Order == order.Key &&
+                previous.ReceiptFingerprint == receiptFingerprint && previous.FiscalFingerprint == fiscalFingerprint
+                ? previous.AcceptedAtUtc : _clock.GetUtcNow();
+            _pairs[key] = new(order.Key, receiptFingerprint, fiscalFingerprint, verified, match, acceptedAt);
         }
     }
 
@@ -91,7 +97,9 @@ public sealed class EstablishedReceiptLinkSession
             restored[candidate.Receipt.Id] = candidate.Entry.Match with
             {
                 Order = acceptedOrders[candidate.Entry.Order], Candidates = [], GroupOrders = [],
-                CompetingReceiptIds = [], CompetingOrderCount = 0
+                CompetingReceiptIds = [], CompetingOrderCount = 0,
+                Explanation = "Збережений точний фіскальний зв’язок. " +
+                    FiscalReferenceMatching.Evaluate(acceptedOrders[candidate.Entry.Order], candidate.Receipt, account, receipts).Basis
             };
         // Failed candidates must not leak their provisional authentication evidence.
         return new(orders.Select(order => acceptedOrders.GetValueOrDefault(order.Key) ?? order).ToArray(), restored);

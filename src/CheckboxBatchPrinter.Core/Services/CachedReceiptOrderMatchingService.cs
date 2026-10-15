@@ -249,6 +249,7 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
     {
         cache.RetentionDays = Math.Clamp(cache.RetentionDays, 1, 90);
         var cutoff = now.AddDays(-cache.RetentionDays);
+        EstablishedReceiptLinkSession.PruneExactLinks(cache, now);
         if (cache.LinkSchema == 0)
         {
             // Import assigned pairs from the immediately previous release once, before invalidating its graph cache.
@@ -291,7 +292,7 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
     private static bool ConnectionsMatch(IReadOnlyList<string>? stored, IReadOnlyList<string>? current) =>
         (stored ?? []).SequenceEqual(NormalizeConnections(current), StringComparer.Ordinal);
 
-    private static string ReceiptFingerprint(ReceiptRecord receipt) => Hash(JsonSerializer.Serialize(receipt));
+    internal static string ReceiptFingerprint(ReceiptRecord receipt) => Hash(JsonSerializer.Serialize(receipt));
     private static string Normalize(string id) => Guid.TryParse(id, out var uuid) ? uuid.ToString("D") : id;
     private static string Hash(string input) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(input)));
 
@@ -323,7 +324,7 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
         }));
     }
 
-    private static string OrderFingerprint(MarketplaceOrder order) => Hash(JsonSerializer.Serialize(new
+    internal static string OrderFingerprint(MarketplaceOrder order) => Hash(JsonSerializer.Serialize(new
     {
         order.Key, order.Total, order.Currency, order.CreatedAt, order.Items,
         order.PaymentMethod, order.DeliveryMethod, ShippingCarriers = order.Shipments.Select(s => s.Carrier).Order(StringComparer.Ordinal).ToArray(),

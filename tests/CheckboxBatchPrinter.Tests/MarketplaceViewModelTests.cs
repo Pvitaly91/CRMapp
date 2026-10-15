@@ -155,7 +155,8 @@ internal static partial class MarketplaceViewModelTests
         ("STA Main Settings and OrderLink XAML initialize without showing windows", XamlSmokeProcessAsync),
         .. EstablishedRefreshScenarios,
         .. RozetkaGoodsTotalScenarios,
-        .. RozetkaFallbackScenarios
+        .. RozetkaFallbackScenarios,
+        .. ExactPersistenceScenarios
     ];
 
     public static void RunIsolatedXamlSmoke()
