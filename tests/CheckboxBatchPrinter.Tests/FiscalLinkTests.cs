@@ -43,6 +43,8 @@ internal static partial class FiscalLinkTests
         ("fiscal verifier: exact document UUID avoids redundant code lookup while retaining code and cashier conflicts", UuidAvoidsCodeLookupAsync),
         ("fiscal verifier: unrelated or untrusted UUID cannot skip another document's code lookup", UuidLookupDocumentIsolationAsync),
         ("fiscal matching: same serial or code on another cash register is not a link", ContextIsolationAsync),
+        ("fiscal Rozetka code and cash register require an authenticated receipt UUID while Prom retains contextual code matching", RozetkaCodeRequiresUuidAsync),
+        ("fiscal Rozetka direct UUID and verified UUID retain identity, account, conflict and manual guards", RozetkaUuidIdentityGuardsAsync),
         ("fiscal matching: independent sale/return documents and manual decisions survive", MultipleAndManualAsync),
         ("fiscal cache: raw evidence persists but account verification does not", SerializationAsync),
         ("fiscal Prom adapter: schema-only response or arbitrary comment UUID stays unlinked", PromReadShapeAsync),
@@ -65,9 +67,9 @@ internal static partial class FiscalLinkTests
         { Content = new StringContent(JsonSerializer.Serialize(value), Encoding.UTF8, "application/json") };
     private static HttpResponseMessage Page(object row) => Json(new { success = true, content = new { orders = new[] { row }, _meta = new { currentPage = 1, pageCount = 1 } } });
     private static HttpResponseMessage Detail(object? prro = null) => Json(new { success = true, content = new { id = 100, purchases = Array.Empty<object>(), prro, user = new { contact_fio = "Synthetic" }, ttn = "SYNTHETIC-TTN" } });
-    private static ReceiptRecord Receipt(string id = ReceiptId, string code = Code, string cash = "000123", string type = "SELL", string organization = Organization) => new()
+    private static ReceiptRecord Receipt(string id = ReceiptId, string code = Code, string cash = "000123", string type = "SELL", string organization = Organization, long total = 10000) => new()
     { Id = id, FiscalCode = code, CashRegisterFiscalNumber = cash, OrganizationId = organization, Type = type,
-        Serial = 42, TotalSumMinor = 10000, FiscalDate = new DateTimeOffset(2026,9,24,12,0,0,TimeSpan.FromHours(3)) };
+        Serial = 42, TotalSumMinor = total, FiscalDate = new DateTimeOffset(2026,9,24,12,0,0,TimeSpan.FromHours(3)) };
     private static ReceiptOrderMatch Match(MarketplaceOrder order, ReceiptRecord? receipt = null,
         IReadOnlyList<ReceiptOrderDecision>? decisions = null, IReadOnlyList<ReceiptRecord>? scope = null, string account = "account")
     {
@@ -202,7 +204,7 @@ internal static partial class FiscalLinkTests
         var verified = (await verifier.VerifyAsync([order], account)).Single();
         Equal(1, calls); // Code and code URL share one lookup.
         var match = Match(verified, Receipt(code: code), account: account);
-        Equal(ReceiptLinkState.Exact, match.State); Equal("За фіскальним номером", match.Explanation);
+        Equal(ReceiptLinkState.Exact, match.State); Equal("За UUID чека (підтверджено через фіскальний номер)", match.Explanation);
         True(Match(verified, Receipt(code: code), account: "another-account").State != ReceiptLinkState.Exact);
     }
     private static async Task LookupFailureAsync()
@@ -252,7 +254,7 @@ internal static partial class FiscalLinkTests
         var original = await Fetch(url: "https://unknown.example/receipt");
         var code = original.FiscalReferences.Single() with { CashRegisterFiscalNumber = "000123" };
         var order = original with { FiscalReferences = [code] };
-        Equal(ReceiptLinkState.Exact, Match(order).State);
+        True(Match(order).State != ReceiptLinkState.Exact);
         True(Match(order, Receipt(cash: "000456")).State != ReceiptLinkState.Exact);
         True(Match(order, Receipt(code: Code.ToLowerInvariant())).State != ReceiptLinkState.Exact);
         Equal(ReceiptLinkState.Conflict, Match(order, scope: [Receipt(), Receipt(OtherId)]).State);

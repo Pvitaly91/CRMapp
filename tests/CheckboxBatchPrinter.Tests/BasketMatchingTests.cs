@@ -8,7 +8,7 @@ using CheckboxBatchPrinter.Core.Services;
 
 namespace CheckboxBatchPrinter.Tests;
 
-internal static class BasketMatchingTests
+internal static partial class BasketMatchingTests
 {
     private const string Id = "a7000000-0000-0000-0000-000000000001";
     private const string OtherId = "a7000000-0000-0000-0000-000000000002";
@@ -27,7 +27,9 @@ internal static class BasketMatchingTests
         ("basket matching: saved manual rejected and suppression decisions take priority", DecisionsAsync),
         ("basket matching: fiscal keys and fiscal contradictions are never bypassed", FiscalPriorityAsync),
         ("basket matching: discounts invalid totals extra quantities and differing prices do not link", AdjustmentsAsync),
-        ("basket parser safety: incomplete items allow amount basis, known adjustments remain blocked", ParserSafetyAsync)
+        ("basket parser safety: incomplete items allow amount basis, known adjustments remain blocked", ParserSafetyAsync),
+        ("basket marketplace policy: only Prom uses amount products and payment hypotheses", MarketplacePolicyAsync),
+        ("basket marketplace policy: Rozetka UUID and manual links keep priority over Prom hypotheses", MarketplacePolicyAuthoritativeAsync)
     ];
 
     private static ReceiptRecord Receipt(string id = Id, string type = ReceiptTypes.Sell, string status = "DONE") => new()

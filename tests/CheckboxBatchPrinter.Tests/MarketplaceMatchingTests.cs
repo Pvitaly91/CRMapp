@@ -59,7 +59,10 @@ internal static class MarketplaceMatchingTests
         var matcher = new ReceiptOrderMatchingService();
         var result = matcher.Match(Receipt(), "cashier-a", orders, [], true);
         Equal(ReceiptLinkState.Candidates, result.State);
-        Equal(3, result.Candidates.Count);
+        Equal(2, result.Candidates.Count);
+        True(result.Candidates.All(order => order.Key.Marketplace == MarketplaceKind.Prom));
+        var rozetkaOnly = matcher.Match(Receipt(), "cashier-a", [orders[1]], [], true);
+        Equal(ReceiptLinkState.NotFound, rozetkaOnly.State); Equal(0, rozetkaOnly.Candidates.Count);
         True(result.Order is null);
         var single = matcher.Match(Receipt(), "cashier-a", [orders[0]], [], true);
         Equal(ReceiptLinkState.Candidates, single.State);

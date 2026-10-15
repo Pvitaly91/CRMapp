@@ -12,7 +12,7 @@ internal static partial class MarketplaceViewModelTests
 {
     private static IReadOnlyList<(string Name, Func<Task> Test)> RozetkaGoodsTotalScenarios =>
     [
-        ("STA real Rozetka goods amount loads receipt basket and links390 while checkout439 stays unlinked", () => StaAsync(RozetkaGoodsAmountLinksAsync)),
+        ("STA real Rozetka goods390 and delivery49 display separately without amount links or receipt basket reads", () => StaAsync(RozetkaGoodsAmountDisplayAsync)),
         ("STA Rozetka checkout including delivery cannot substitute the goods receipt amount", () => StaAsync(RozetkaCheckoutDoesNotLinkAsync)),
         ("STA missing Rozetka goods fields cannot infer an automatic link from checkout minus delivery", () => StaAsync(RozetkaMissingGoodsAmountAsync))
     ];
@@ -110,7 +110,7 @@ internal static partial class MarketplaceViewModelTests
         public void Dispose() { Main.CancelPendingOperations(); _http.Dispose(); }
     }
 
-    private static async Task RozetkaGoodsAmountLinksAsync()
+    private static async Task RozetkaGoodsAmountDisplayAsync()
     {
         foreach (var hydrate in new[] { false, true })
         {
@@ -123,19 +123,10 @@ internal static partial class MarketplaceViewModelTests
             True(order.Model.FiscalReferences.Count == 0 && order.Model.ReceiptIds.Count == 0 &&
                 order.Model.FiscalReceiptNumbers.Count == 0, "Synthetic fiscal failure unexpectedly supplied exact evidence.");
             True(order.Model.FiscalDataStatus.Contains("15005"));
-            var receipt = fixture.Main.Receipts.Single(row => row.Id == ReceiptOne);
-            True(fixture.State.Details.RequestedIds.Contains(ReceiptOne), "Goods390 receipt was excluded from basket loading.");
-            Equal(ReceiptLinkState.Suggested, receipt.OrderMatch!.State);
-            Equal(AutomaticLinkBasis.AmountAndProducts, receipt.OrderMatch.Basis);
-            Equal(ProductComparison.Match, receipt.OrderMatch.Products); Equal(order.Key, receipt.OrderMatch.Order!.Key);
-            True(receipt.LinkExplanation.Contains("Валюта API не підтверджена"));
-            True(order.HasSuggestedLink && !order.HasConfirmedLink); Equal(receipt, order.LinkedReceipts.Single());
-            True(fixture.Main.Receipts.Single(row => row.Id == ReceiptTwo).OrderMatch?.Order is null,
-                "Checkout439 receipt stole the goods390 order.");
-            fixture.Workspace.SelectedReceipt = receipt;
-            True(fixture.Workspace.DetailsText.Contains($"Замовлення: {390m:N2}"));
-            True(fixture.Workspace.DetailsText.Contains($"вартість: {49m:N2}"));
-            True(!fixture.Workspace.DetailsText.Contains("439"));
+            True(fixture.Main.Receipts.All(row => row.OrderMatch?.Order is null),
+                "Rozetka was linked by amount despite missing an exact receipt ID.");
+            Equal(0, fixture.State.Details.Calls);
+            True(!order.HasSuggestedLink && !order.HasConfirmedLink && order.LinkedReceipts.Count == 0);
             True(!hydrate || fixture.DetailCalls >= 1, "Unexpanded list row was not hydrated.");
             fixture.AssertReadOnly();
         }

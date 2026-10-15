@@ -11,7 +11,10 @@ internal static class FiscalReferenceMatching
     {
         var references = order.FiscalReferences.Where(r => r.Order == order.Key && r.Source.Length > 0 &&
             r.DocumentId.Length > 0 && string.Equals(r.Provider, "Checkbox", StringComparison.OrdinalIgnoreCase)).ToArray();
-        var exact = order.ReceiptIds.Any(id => CheckboxReceiptReference.SameId(id, receipt.Id));
+        var requiresReceiptUuid = order.Key.Marketplace == MarketplaceKind.Rozetka;
+        var hasReceiptUuid = Guid.TryParse(receipt.Id, out var receiptUuid) && receiptUuid != Guid.Empty;
+        var exact = (!requiresReceiptUuid || hasReceiptUuid) &&
+            order.ReceiptIds.Any(id => CheckboxReceiptReference.SameId(id, receipt.Id));
         var basis = exact ? "За UUID чека" : "";
         var conflict = false;
         foreach (var document in references.GroupBy(r => r.DocumentId))
@@ -29,7 +32,7 @@ internal static class FiscalReferenceMatching
                 .Where(code => code.Length > 0).Distinct(StringComparer.Ordinal).ToArray();
             var idMatches = ids.Any(id => CheckboxReceiptReference.SameId(id, receipt.Id));
             var codeMatches = receipt.FiscalCode.Length > 0 && codes.Contains(receipt.FiscalCode, StringComparer.Ordinal);
-            var verifiedMatches = keys.Any(r => r.VerifiedAccountContext == account &&
+            var verifiedMatches = hasReceiptUuid && keys.Any(r => r.VerifiedAccountContext == account &&
                 CheckboxReceiptReference.SameId(r.VerifiedReceiptId, receipt.Id));
             if (!idMatches && !verifiedMatches && (!codeMatches || keys.Any(r => !CheckboxReceiptReference.ContextMatches(r, receipt)))) continue;
             // Contradictions inside ONE fiscal document are never resolved by choosing the convenient key.
@@ -55,8 +58,15 @@ internal static class FiscalReferenceMatching
                 // Reject collisions even within the loaded account/range. No implicit one-row scope.
                 var matches = scope?.Where(r => r.FiscalCode == receipt.FiscalCode &&
                     keys.All(k => CheckboxReceiptReference.ContextMatches(k, r))).Select(r => r.Id).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-                if (matches?.Length == 1 && CheckboxReceiptReference.SameId(matches[0], receipt.Id))
-                { exact = true; basis = "За фіскальним номером"; }
+                // Rozetka links require the receipt UUID itself. A local code/cashier
+                // match may be unique, but only an authenticated lookup can resolve
+                // that assertion to a UUID in the current Checkbox account.
+                if (matches?.Length == 1 && CheckboxReceiptReference.SameId(matches[0], receipt.Id) &&
+                    (!requiresReceiptUuid || verifiedMatches))
+                {
+                    exact = true;
+                    basis = requiresReceiptUuid ? "За UUID чека (підтверджено через фіскальний номер)" : "За фіскальним номером";
+                }
                 else if (matches?.Length > 1) conflict = true;
             }
         }

@@ -6,7 +6,7 @@ using CheckboxBatchPrinter.Core.Services;
 
 namespace CheckboxBatchPrinter.Tests;
 
-internal static class AutomaticMatchCacheTests
+internal static partial class AutomaticMatchCacheTests
 {
     private const string Account = "synthetic-checkbox-account";
     private static readonly DateTimeOffset Time = new(2026, 9, 27, 10, 0, 0, TimeSpan.FromHours(3));
@@ -17,7 +17,10 @@ internal static class AutomaticMatchCacheTests
         ("automatic cache: manual suppressions and exact evidence invalidate probable results", Run(DecisionsAndEvidence)),
         ("automatic cache: verified fiscal evidence, details and scope are fingerprinted", Run(FingerprintInputs)),
         ("automatic cache: retention, algorithm version and account isolation are bounded", RetentionAndAccounts),
-        ("automatic cache: corrupt optional file rebuilds independently of durable decisions", Corruption)
+        ("automatic cache: corrupt optional file rebuilds independently of durable decisions", Corruption),
+        ("automatic cache: legacy Rozetka guesses are discarded without losing Prom links or receipt details", MarketplacePolicyRestart),
+        ("automatic cache: old and forbidden graphs cannot restore or reserve Rozetka guesses", Run(MarketplacePolicyGraphs)),
+        ("automatic cache: Rozetka exact and manual links remain valid across graph replay", Run(MarketplacePolicyAuthoritative))
     ];
 
     private static Func<Task> Run(Action action) => () => { action(); return Task.CompletedTask; };

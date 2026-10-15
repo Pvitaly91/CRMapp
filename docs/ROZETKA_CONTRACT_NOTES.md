@@ -45,7 +45,7 @@
 | Оплата | `payment.payment_method_name`, `payment.payment_status.title/name`; fallback `payment_type_name`, `payment_type_title`, `status_payment.title/name`, `payment_status` |
 | Покупець | `user_title.full_name`, `user.contact_fio`, `user_phone` |
 | Отримувач | `delivery.recipient_title`, `delivery.recipient_phone` |
-| Сума товарів для таблиці та зіставлення чека | `amount_with_discount` (після знижки, без доставки), fallback `amount`; оригінал вибраного поля — `RawTotal` |
+| Сума товарів для таблиці | `amount_with_discount` (після знижки, без доставки), fallback `amount`; оригінал вибраного поля — `RawTotal`. З 1.0.64 для прив’язки Rozetka потрібен UUID чека, сума не є критерієм |
 | Загальна сума покупця | `cost_with_discount` / `cost` включають доставку. Використовуються лише як сумісний fallback, коли обох полів суми товарів немає; за відомої додатної `delivery.cost` такий fallback має `AmountComparisonIssue` й не дозволяє зіставлення за сумою |
 | Знижка товарів | різниця наданих `amount` та `amount_with_discount`; не обчислюється, якщо одне з полів відсутнє |
 | Доставка | `delivery.delivery_service_name`, `delivery.cost`, `delivery.city.city_name/title`, `place_street/house/number` |

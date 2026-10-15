@@ -161,10 +161,14 @@ internal static class PaymentMatchingTests
             cod with { PaymentMethod = "Оплата на рахунок" }, cod with { PaymentMethod = "NovaPay тест" },
             cod with { Shipments = [], DeliveryMethod = "" }, cod with { Shipments = [new("rozetka_delivery", "")], DeliveryMethod = "Rozetka Delivery" },
             cod with { Shipments = [new("nova_poshta", "")], DeliveryMethod = "Rozetka Delivery" },
-            cod with { Shipments = [new("nova_poshta", ""), new("unknown", "")] },
-            cod with { Key = cod.Key with { Marketplace = MarketplaceKind.Rozetka } }
+            cod with { Shipments = [new("nova_poshta", ""), new("unknown", "")] }
         })
             Check(Match(receipts, [unknown, online], Details(receipts, [unknown, online])).Values.All(m => m.Order is null), "Unknown order payment was dropped from the graph.");
+        var rozetka = cod with { Key = cod.Key with { Marketplace = MarketplaceKind.Rozetka } };
+        var promOnly = Match(receipts, [rozetka, online], Details(receipts, [rozetka, online]));
+        Check(promOnly.Values.All(m => m.Order?.Key.Marketplace != MarketplaceKind.Rozetka),
+            "Rozetka payment entered the Prom-only heuristic graph.");
+        Equal(online.Key, promOnly[receipts[1].Id].Order!.Key);
         foreach (var label in new[] { "", "Картка", "Безготівкова оплата", "Платіж", "NovaPay або RozetkaPay", "SuperNovaPay" })
             Check(Match([Receipt(1, label), receipts[1]], [cod, online], Details(receipts, [cod, online])).Values.All(m => m.Order is null), "Unknown receipt payment was dropped.");
     }

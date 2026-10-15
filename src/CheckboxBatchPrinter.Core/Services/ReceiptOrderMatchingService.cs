@@ -61,7 +61,8 @@ public sealed class ReceiptOrderMatchingService
                 retainedOrders.Add(established.Key);
                 continue;
             }
-            if (match.State != ReceiptLinkState.Suggested || match.Order is null || reserved.Contains(match.Order.Key)) continue;
+            if (match.State != ReceiptLinkState.Suggested || match.Order is null ||
+                match.Order.Key.Marketplace != MarketplaceKind.Prom || reserved.Contains(match.Order.Key)) continue;
             if ((currentOrders.GetValueOrDefault(match.Order.Key) ?? match.Order).IsCanceled) continue;
             if (result.TryGetValue(id, out var evidence))
             {
@@ -164,7 +165,8 @@ public sealed class ReceiptOrderMatchingService
         var candidates = allowedExact;
         if (receipt.Type == ReceiptTypes.Sell && receipt.DisplayDate is { } receiptDate)
         {
-            candidates = candidates.Concat(available.Where(order => !order.IsCanceled && !rejected.Contains(order.Key) &&
+            candidates = candidates.Concat(available.Where(order => order.Key.Marketplace == MarketplaceKind.Prom &&
+                    !order.IsCanceled && !rejected.Contains(order.Key) &&
                     order.Total == receipt.TotalSum && (string.IsNullOrWhiteSpace(order.Currency) ||
                         string.Equals(order.Currency, "UAH", StringComparison.OrdinalIgnoreCase)) &&
                     order.CreatedAt is { } created && BasketReceiptMatching.SameDayBeforeReceipt(created, receiptDate)))
@@ -183,7 +185,7 @@ public sealed class ReceiptOrderMatchingService
                 ? "Прив’язку знято вручну; автоматичне відновлення вимкнено." +
                     (coverageComplete ? "" : " Перевірка діапазону неповна.")
                 : coverageComplete ? receipt.Type == ReceiptTypes.Sell
-                    ? "Не знайдено замовлення за сумою в той самий день (Київ)."
+                    ? "Не знайдено замовлення Prom за сумою в той самий день (Київ). Для Rozetka потрібен ID чека."
                     : "Не знайдено у перевіреному діапазоні" : "Перевірка неповна / API недоступне", []);
     }
 

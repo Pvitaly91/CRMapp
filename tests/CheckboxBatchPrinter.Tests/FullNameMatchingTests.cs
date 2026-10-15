@@ -9,7 +9,7 @@ internal static class FullNameMatchingTests
     private static readonly DateTimeOffset Day = new(2026, 10, 1, 16, 0, 0, TimeSpan.FromHours(3));
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
-        ("full names: arbitrary categories and plural kits resolve both marketplaces in every input order", Run(ArbitraryNames)),
+        ("full names: arbitrary categories and plural kits resolve Prom only in every input order", Run(ArbitraryNames)),
         ("full names: cleaning removes symbols without deleting words digits or translating", Run(Normalization)),
         ("full names: entire multibasket names and aggregated quantities are required", Run(CompleteBasket)),
         ("full names: absent names incomplete lists and unknown same-name quantities preserve competitors", Run(IncompleteEvidence)),
@@ -48,6 +48,13 @@ internal static class FullNameMatchingTests
             foreach (var rs in new[] { receipts, receipts.Reverse().ToArray() })
             {
                 var result = Match(rs, os, details);
+                if (marketplace == MarketplaceKind.Rozetka)
+                {
+                    Check(result.Values.All(m => m.Order is null && m.State != ReceiptLinkState.Suggested &&
+                        m.Candidates.Count == 0 && m.Basis == AutomaticLinkBasis.None),
+                        "Rozetka product names must not create an amount allocation.");
+                    continue;
+                }
                 for (var i = 0; i < 2; i++)
                 {
                     Equal(orders[i].Key, result[receipts[i].Id].Order?.Key);

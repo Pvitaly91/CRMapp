@@ -34,7 +34,8 @@ internal static class BasketReceiptMatching
                 .Select(m => m.Order!.Key)).Concat(existingLinkedOrders ?? new HashSet<OrderKey>()).ToHashSet();
         var freeReceipts = receipts.Where(r => r.Type == ReceiptTypes.Sell && r.Status == "DONE" &&
             matches[r.Id].State is not (ReceiptLinkState.Manual or ReceiptLinkState.Exact or ReceiptLinkState.Suggested)).ToArray();
-        var freeOrders = orders.Where(o => !o.IsCanceled && !reservedOrders.Contains(o.Key)).ToArray();
+        var freeOrders = orders.Where(o => o.Key.Marketplace == MarketplaceKind.Prom &&
+            !o.IsCanceled && !reservedOrders.Contains(o.Key)).ToArray();
         var edges = new List<Edge>();
         foreach (var receipt in freeReceipts)
         foreach (var order in freeOrders)
@@ -234,7 +235,7 @@ internal static class BasketReceiptMatching
     }
 
     internal static bool PotentialPair(ReceiptRecord receipt, MarketplaceOrder order, AmountMatchScope scope) =>
-        !order.IsCanceled &&
+        order.Key.Marketplace == MarketplaceKind.Prom && !order.IsCanceled &&
         (string.IsNullOrWhiteSpace(order.Currency) || order.Currency.Equals("UAH", StringComparison.OrdinalIgnoreCase)) &&
         (!receipt.TotalKnown || order.Total is null || order.Total == receipt.TotalSum) &&
         (order.CreatedAt is not { } created ||

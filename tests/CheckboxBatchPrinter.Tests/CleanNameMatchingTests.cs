@@ -9,7 +9,7 @@ internal static class CleanNameMatchingTests
     private static readonly DateTimeOffset Day = new(2026, 10, 1, 16, 0, 0, TimeSpan.FromHours(3));
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
-        ("clean names: 50 units of XT60H-F match apostrophe versus question mark in both marketplaces", Run(FiftyUnits)),
+        ("clean names: 50 units of XT60H-F match apostrophe versus question mark for Prom only", Run(FiftyUnits)),
         ("clean names: symbols are removed but letters digits word order and numeric boundaries survive", Run(SymbolsAndBoundaries)),
         ("clean names: ohm variants match a full basket without changing source text or bypassing competitors and v14 cache invalidation", Run(OhmBasketAndCache)),
         ("clean names: every cleaned name keeps its own aggregated quantity", Run(CompleteBasket)),
@@ -48,6 +48,13 @@ internal static class CleanNameMatchingTests
             var details = new Dictionary<string, ReceiptDetails> { [receipt.Id] =
                 Detail(receipt, new OrderItem("Роз?єм XT60H-F, силовий", "different-code", 50, 13, 650)) };
             var result = Match([receipt], [order], details)[receipt.Id];
+            if (marketplace == MarketplaceKind.Rozetka)
+            {
+                Check(result.Order is null && result.State != ReceiptLinkState.Suggested,
+                    "Rozetka must not link through cleaned product names.");
+                Equal(0, result.Candidates.Count); Equal(AutomaticLinkBasis.None, result.Basis);
+                continue;
+            }
             Equal(order.Key, result.Order?.Key); Equal(ReceiptLinkState.Suggested, result.State);
             Equal(ProductComparison.Match, result.Products); Equal(AutomaticLinkBasis.AmountAndProducts, result.Basis);
         }
@@ -103,6 +110,13 @@ internal static class CleanNameMatchingTests
         {
             var current = order with { Key = order.Key with { Marketplace = marketplace } };
             var result = Match([receipt], [current], details)[receipt.Id];
+            if (marketplace == MarketplaceKind.Rozetka)
+            {
+                Check(result.Order is null && result.State != ReceiptLinkState.Suggested,
+                    "Normalizing unit symbols must not enable Rozetka basket linking.");
+                Equal(0, result.Candidates.Count); Equal(AutomaticLinkBasis.None, result.Basis);
+                continue;
+            }
             Equal(current.Key, result.Order?.Key); Equal(ProductComparison.Match, result.Products);
             Equal(AutomaticLinkBasis.AmountAndProducts, result.Basis);
             var changedModel = current with { Items = [current.Items[0] with { Name = current.Items[0].Name.Replace("PAM8403", "PAM8406") }, .. current.Items.Skip(1)] };

@@ -157,6 +157,16 @@ internal static partial class MarketplaceViewModelTests
         return order with { Key = key, FiscalReferences = order.FiscalReferences.Select(reference => reference with { Order = key }).ToArray() };
     }
 
+    private static void SeedLegacyAmountLink(AutomaticMatchCache cache, ReceiptRecord receipt, MarketplaceOrder order)
+    {
+        var legacy = new ReceiptOrderMatch(ReceiptLinkState.Suggested, order, "Legacy amount-based link", [order])
+            { Basis = AutomaticLinkBasis.UniqueAmount };
+        var packed = (CachedReceiptMatch)typeof(CachedReceiptOrderMatchingService)
+            .GetMethod("Pack", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+            .Invoke(null, [legacy, receipt])!;
+        cache.Links[receipt.Id] = new(packed, DateTimeOffset.UtcNow.AddMinutes(-1));
+    }
+
     private static async Task CredentialAliasSavedSuggestionAsync()
     {
         const string oldId = "20000000000000000000000000000001", currentId = "20000000000000000000000000000002";
@@ -170,29 +180,24 @@ internal static partial class MarketplaceViewModelTests
         var competitor = canonical with { Key = canonical.Key with { OrderId = "101" }, Number = "101" };
         fixture.ReceiptSource.Rows = [Receipt(ReceiptOne, 1, 10000)];
         var saved = new AutomaticMatchCache { AccountContext = account };
-        Equal(ReceiptLinkState.Suggested, new CachedReceiptOrderMatchingService().MatchAll(saved,
-            fixture.ReceiptSource.Rows, account, [original], [], true).Matches[ReceiptOne].State);
+        SeedLegacyAmountLink(saved, fixture.ReceiptSource.Rows.Single(), original);
         await automatic.SaveAsync(account, saved, 30);
         await fixture.Cache.SaveAsync(new([original, canonical, competitor], []));
         fixture.Rozetka.Orders = [canonical, competitor]; fixture.Rozetka.Complete = false;
         var (main, workspace) = fixture.Create(automaticCache: automatic);
         await main.RefreshAsync(); main.SelectedTabIndex = 1; await main.PrepareOrdersAsync();
-        Equal(ReceiptLinkState.Suggested, main.Receipts.Single().OrderMatch!.State);
-        Equal(canonical.Key, main.Receipts.Single().OrderMatch!.Order!.Key);
+        True(main.Receipts.Single().OrderMatch?.Order is null);
         await ExecuteAsync(main.RefreshAllCommand);
-        Equal(ReceiptLinkState.Suggested, main.Receipts.Single().OrderMatch!.State);
-        Equal(canonical.Key, main.Receipts.Single().OrderMatch!.Order!.Key);
+        True(main.Receipts.Single().OrderMatch?.Order is null);
         True(!fixture.Cache.Snapshot.States.Single(state => state.ConnectionId == currentId).Complete);
         Equal(2, workspace.AllOrderRows.Count);
         Equal(0, fixture.Details.Calls);
         var stored = await automatic.LoadAsync(account, 30);
-        Equal(canonical.Key, stored.Links[ReceiptOne].Match.Order);
-        Equal(saved.Links[ReceiptOne].LinkedAtUtc, stored.Links[ReceiptOne].LinkedAtUtc);
+        True(!stored.Links.ContainsKey(ReceiptOne));
 
         var (restarted, restored) = fixture.Create(automaticCache: automatic);
         await restarted.RefreshAsync(); restarted.SelectedTabIndex = 1; await restarted.PrepareOrdersAsync();
-        Equal(ReceiptLinkState.Suggested, restarted.Receipts.Single().OrderMatch!.State);
-        Equal(canonical.Key, restarted.Receipts.Single().OrderMatch!.Order!.Key);
+        True(restarted.Receipts.Single().OrderMatch?.Order is null);
         Equal(2, restored.AllOrderRows.Count); Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
         main.CancelPendingOperations(); restarted.CancelPendingOperations();
     }
@@ -201,7 +206,7 @@ internal static partial class MarketplaceViewModelTests
     {
         const string account = "synthetic-alias-account", oldId = "old", targetId = "target";
         OrderKey Normalize(OrderKey key) => key.ConnectionId == oldId ? key with { ConnectionId = targetId } : key;
-        var original = BasketOrder() with { Key = new(MarketplaceKind.Rozetka, oldId, "100") };
+        var original = BasketOrder() with { Key = new(MarketplaceKind.Prom, oldId, "100") };
         var canonical = ProjectMigrationOrder(original, targetId);
         var receipt = Receipt(ReceiptOne, 1, 10000);
         foreach (var mode in new[] { "source-changed", "canonical-changed", "fiscal-added", "canceled", "unrelated-account" })
@@ -251,8 +256,7 @@ internal static partial class MarketplaceViewModelTests
         fixture.Source.Orders = [unrelatedFiscal];
         fixture.Rozetka.Orders = [canonical, competitor]; fixture.Rozetka.Complete = false;
         var saved = new AutomaticMatchCache { AccountContext = account };
-        Equal(ReceiptLinkState.Suggested, new CachedReceiptOrderMatchingService().MatchAll(saved,
-            fixture.ReceiptSource.Rows, account, [original], [], true).Matches[ReceiptOne].State);
+        SeedLegacyAmountLink(saved, fixture.ReceiptSource.Rows.Single(), original);
         await automatic.SaveAsync(account, saved, 30);
         await fixture.Cache.SaveAsync(new([original, canonical, competitor], []));
         var verifier = new ScopedFiscalVerifier();
@@ -270,10 +274,9 @@ internal static partial class MarketplaceViewModelTests
             await main.RefreshAllAsync();
             Equal(1, verifier.Calls.Count);
             Equal(unrelatedFiscal.Key, verifier.Calls.Single().Single().Key);
-            Equal(ReceiptLinkState.Suggested, main.Receipts.Single().OrderMatch!.State);
-            Equal(canonical.Key, main.Receipts.Single().OrderMatch!.Order!.Key);
+            True(main.Receipts.Single().OrderMatch?.Order is null);
             Equal(3, workspace.AllOrderRows.Count);
-            Equal(canonical.Key, (await automatic.LoadAsync(account, 30)).Links[ReceiptOne].Match.Order);
+            True(!(await automatic.LoadAsync(account, 30)).Links.ContainsKey(ReceiptOne));
             True(!fixture.Cache.Snapshot.States.Single(state => state.ConnectionId == currentId).Complete);
             Equal(0, fixture.Details.Calls); Equal(0, fixture.Links.Saves); Equal(0, fixture.Printer.Calls);
         }

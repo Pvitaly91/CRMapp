@@ -8,7 +8,7 @@ namespace CheckboxBatchPrinter.Core.Services;
 /// <summary>Keep assigned pairs and search only documents without a link. Manual/fiscal decisions have priority.</summary>
 public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider = null)
 {
-    public const string AlgorithmVersion = "same-kyiv-day-active-unlinked-unit-symbols-v15";
+    public const string AlgorithmVersion = "same-kyiv-day-prom-only-amount-v16";
     private const string PreviousAlgorithmVersion = "same-kyiv-day-clean-names-payment-v8";
     public const int MaximumDetails = 5000;
     public const int MaximumSnapshots = 8;
@@ -146,7 +146,7 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
     {
         if (string.IsNullOrWhiteSpace(accountContext) || !BindAccount(cache, accountContext)) return;
         Prune(cache, _clock.GetUtcNow());
-        var aliases = cache.Links.Where(pair => pair.Value.Match.State == ReceiptLinkState.Suggested &&
+        var aliases = cache.Links.Where(pair => IsAllowedSuggestion(pair.Value.Match) &&
             pair.Value.Match.Order is { } key && normalizeKey(key) != key).ToArray();
         if (aliases.Length == 0) return;
         var originals = sourceOrders.GroupBy(order => order.Key)
@@ -156,9 +156,9 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
         foreach (var (id, link) in aliases)
         {
             var saved = link.Match;
-            if (saved.State != ReceiptLinkState.Suggested || saved.Order is null) continue;
+            if (!IsAllowedSuggestion(saved) || saved.Order is null) continue;
             var key = normalizeKey(saved.Order);
-            if (key == saved.Order || !originals.TryGetValue(saved.Order, out var original) || original.IsCanceled ||
+            if (key.Marketplace != MarketplaceKind.Prom || key == saved.Order || !originals.TryGetValue(saved.Order, out var original) || original.IsCanceled ||
                 !canonical.TryGetValue(key, out var current) || current.IsCanceled ||
                 saved.OrderFingerprint != OrderFingerprint(original)) continue;
             var projected = original with
@@ -198,7 +198,7 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
         {
             var saved = link.Match;
             currentDecisions.TryGetValue(id, out var decision);
-            if (saved.Order is null || decision?.ConfirmedOrder is not null || decision?.SuppressAutomatic == true ||
+            if (!IsAllowedSuggestion(saved) || saved.Order is null || decision?.ConfirmedOrder is not null || decision?.SuppressAutomatic == true ||
                 decision?.RejectedOrders.Contains(saved.Order) == true || manualOrders.Contains(saved.Order) ||
                 byReceipt.TryGetValue(id, out var receipt) && saved.ReceiptFingerprint != ReceiptFingerprint(receipt))
             { cache.Links.Remove(id); continue; }
@@ -226,12 +226,13 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
         var authoritativeOrders = matches.Values.Where(m => m.State is ReceiptLinkState.Manual or ReceiptLinkState.Exact)
             .Where(m => m.Order is not null).Select(m => m.Order!.Key).ToHashSet();
         foreach (var (id, link) in cache.Links.ToArray())
-            if (authoritativeOrders.Contains(link.Match.Order!) ||
+            if (!IsAllowedSuggestion(link.Match) || authoritativeOrders.Contains(link.Match.Order!) ||
                 matches.TryGetValue(id, out var match) && match.State != ReceiptLinkState.Suggested) cache.Links.Remove(id);
         foreach (var receipt in receipts.DistinctBy(r => Normalize(r.Id)))
         {
             if (loading?.Contains(Normalize(receipt.Id)) == true ||
-                !matches.TryGetValue(receipt.Id, out var match) || match.State != ReceiptLinkState.Suggested || match.Order is null) continue;
+                !matches.TryGetValue(receipt.Id, out var match) || match.State != ReceiptLinkState.Suggested ||
+                match.Order?.Key.Marketplace != MarketplaceKind.Prom) continue;
             var id = Normalize(receipt.Id);
             var saved = Pack(match, receipt);
             var linkedAt = cache.Links.TryGetValue(id, out var previous) && previous.Match.Order == saved.Order
@@ -250,21 +251,28 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
             foreach (var snapshot in cache.Snapshots.Where(s => s.AlgorithmVersion == PreviousAlgorithmVersion &&
                          s.CachedAtUtc >= cutoff && s.CachedAtUtc <= now).OrderByDescending(s => s.CachedAtUtc))
                 foreach (var (id, match) in snapshot.Matches)
-                    if (match.State == ReceiptLinkState.Suggested && match.Order is not null &&
+                    if (IsAllowedSuggestion(match) &&
                         match.ReceiptFingerprint.Length > 0 && match.OrderFingerprint.Length > 0)
                         cache.Links.TryAdd(Normalize(id), new(match, snapshot.CachedAtUtc));
             cache.LinkSchema = 1;
         }
-        cache.Links = cache.Links.Where(p => p.Value.LinkedAtUtc >= cutoff && p.Value.LinkedAtUtc <= now)
+        cache.Links = cache.Links.Where(p => IsAllowedSuggestion(p.Value.Match) &&
+                p.Value.LinkedAtUtc >= cutoff && p.Value.LinkedAtUtc <= now)
             .OrderByDescending(p => p.Value.LinkedAtUtc).ThenBy(p => p.Key, StringComparer.Ordinal).Take(MaximumDetails)
             .ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
         cache.Details = cache.Details.Where(p => p.Value.CachedAtUtc >= cutoff && p.Value.CachedAtUtc <= now)
             .OrderByDescending(p => p.Value.CachedAtUtc).ThenBy(p => p.Key, StringComparer.Ordinal).Take(MaximumDetails)
             .ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
         cache.Snapshots = cache.Snapshots.Where(s => s.AlgorithmVersion == AlgorithmVersion && s.CachedAtUtc >= cutoff && s.CachedAtUtc <= now &&
-                s.Matches.Count <= MaximumMatchesPerSnapshot)
+                s.Matches.Count <= MaximumMatchesPerSnapshot &&
+                s.Matches.Values.All(m => m.State != ReceiptLinkState.Suggested || IsAllowedSuggestion(m)))
             .OrderByDescending(s => s.CachedAtUtc).Take(MaximumSnapshots).ToList();
     }
+
+    // A saved probable pair must obey the same marketplace policy as a new one.
+    // Old Rozetka pairs are removed individually, preserving Prom links and details.
+    private static bool IsAllowedSuggestion(CachedReceiptMatch match) =>
+        match.State == ReceiptLinkState.Suggested && match.Order?.Marketplace == MarketplaceKind.Prom;
 
     private static bool BindAccount(AutomaticMatchCache cache, string account)
     {

@@ -820,7 +820,8 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
             .Select(r => r.OrderMatch!.Order!.Key));
         linkedOrders.UnionWith(ActiveDecisions.Where(d => d.AccountContext == _account && d.ConfirmedOrder is not null)
             .Select(d => d.ConfirmedOrder!));
-        var orders = activeOrders.Where(o => !o.IsCanceled && !linkedOrders.Contains(o.Key) && o.Items.Count > 0).ToArray();
+        var orders = activeOrders.Where(o => o.Key.Marketplace == MarketplaceKind.Prom &&
+            !o.IsCanceled && !linkedOrders.Contains(o.Key) && o.Items.Count > 0).ToArray();
         return _rows.Where(row => row.RawType == ReceiptTypes.Sell && row.Model.Status == "DONE" && row.Model.DisplayDate is { } date &&
             (row.OrderMatch?.Order is null || row.OrderMatch.Products == ProductComparison.Loading) &&
             IsInRange(row, receiptFrom, receiptTo) &&
@@ -978,6 +979,8 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
             (unmatchedKeys > 0 ? $"Замовлень із непідтвердженими фіскальними ключами: {unmatchedKeys}. Перевірте контекст каси/продавця, період і права касира; це не означає, що чека немає. " : "") +
             (unavailable > 0 ? $"Фіскальні дані потребують перевірки: {unavailable}. " : "") +
             (repeatedIds > 0 ? "Є однакові API-ID замовлень у різних підключеннях. Перевірте, чи той самий магазин не додано двічі; такі записи не об’єднуються автоматично. " : "") +
+            (orders.Any(o => o.Key.Marketplace == MarketplaceKind.Rozetka)
+                ? "Rozetka: автоматична прив’язка лише за ID чека. Сума й товари не використовуються. " : "") +
             (orders.Any(o => o.Key.Marketplace == MarketplaceKind.Prom && o.FiscalReferences.Count == 0)
                 ? "Prom: частина замовлень без фіскальних ключів. Взаємно унікальна сума в той самий день дає ймовірний, не фіскальний автозв’язок. " : "") + appliedScopeDescription;
         NotifyDetails(); MatchesChanged?.Invoke(this, EventArgs.Empty); RaiseCommands();
@@ -1104,7 +1107,8 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
                     string.Join(", ", (_receiptDetails.GetValueOrDefault(r.Id)?.Items ?? []).Select(i => $"{i.Name} × {i.Quantity}")))) +
             "\nДля ручного вибору: оберіть замовлення та чек → «Прив’язати вибрані».";
         var total = o.Total is { } amount ? $"{amount:N2} {o.Currency}" : o.RawTotal.Length > 0 ? o.RawTotal : "не надана";
-        var difference = o.Total is { } sum && o.Currency == "UAH" ? $"; різниця: {sum - row.Total:N2} грн" : "; порівняння валют не підтверджене";
+        var difference = o.Key.Marketplace == MarketplaceKind.Rozetka ? "; зв’язок визначається лише за ID чека" :
+            o.Total is { } sum && o.Currency == "UAH" ? $"; різниця: {sum - row.Total:N2} грн" : "; порівняння валют не підтверджене";
         return $"{o.Key.Marketplace} · {o.StoreName} · № {o.Number} · {o.CreatedAt?.ToString("dd.MM.yyyy HH:mm zzz") ?? o.RawCreatedAt}\n" +
             $"Покупець: {o.Buyer?.Name} · {o.Buyer?.Phone}\nОтримувач: {o.Recipient?.Name ?? "не надано API"} · {o.Recipient?.Phone}\n" +
             $"Замовлення: {total}; чек: {row.Total:N2} грн{difference}\n" +

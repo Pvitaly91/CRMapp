@@ -35,7 +35,7 @@ internal static class AmountMatchingTests
     private static OrderItem[] I(string name = "Товар X", decimal? quantity = 1) => [new(name, "", quantity, null)];
     private static MarketplaceOrder O(int n = 1, string name = "Товар X") => new()
     {
-        Key = new(n % 2 == 0 ? MarketplaceKind.Rozetka : MarketplaceKind.Prom, $"store-{n}", n.ToString()),
+        Key = new(MarketplaceKind.Prom, $"store-{n}", n.ToString()),
         Number = n.ToString(), CreatedAt = Time.AddHours(-1), Total = 290m, Currency = "UAH",
         Buyer = new($"Синтетичний покупець {n}"), Items = I(name), ItemsComplete = true
     };

@@ -79,7 +79,7 @@ internal static partial class FiscalLinkTests
         var matches = matcher.MatchAll([receipt], account, [verified], [], true, details);
         Equal(ReceiptLinkState.Exact, matches[receipt.Id].State);
         Equal(order.Key, matches[receipt.Id].Order!.Key);
-        Equal("За фіскальним номером", matches[receipt.Id].Explanation);
+        Equal("За UUID чека (підтверджено через фіскальний номер)", matches[receipt.Id].Explanation);
     }
 
     private static async Task BareRozetkaPrroProvenanceAsync()

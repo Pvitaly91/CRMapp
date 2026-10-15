@@ -72,7 +72,7 @@ internal static partial class MarketplaceViewModelTests
                 Equal(order.Key, receiptRow.OrderMatch.Order!.Key);
                 Equal("100", receiptRow.OrderNumber);
                 Equal("Rozetka", receiptRow.Marketplace);
-                True(receiptRow.LinkExplanation.Contains("За фіскальним номером"));
+                True(receiptRow.LinkExplanation.Contains("За UUID чека (підтверджено через фіскальний номер)"));
                 Equal(1, workspace.AllOrderRows.Count);
                 var proof = workspace.AllOrderRows.Single().Model.FiscalReferences.Single();
                 Equal(ReceiptOne, proof.VerifiedReceiptId);
