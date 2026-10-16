@@ -18,7 +18,7 @@ internal static partial class MarketplaceViewModelTests
     // user's accounts, live services, desktop, clipboard, and print queues.
     private static async Task HorizontalDashboardScrollingAsync()
     {
-        _xamlCheckpoint = "horizontal dashboard deferred dragging with 1000 synthetic rows";
+        _xamlCheckpoint = "horizontal dashboard live scrolling with 1000 synthetic rows";
         var fixture = new Fixture();
         var (main, _) = fixture.Create();
         main.CoordinatorManaged = true;
@@ -60,7 +60,7 @@ internal static partial class MarketplaceViewModelTests
         {
             foreach (var scenario in scenarios)
             {
-                _xamlCheckpoint = "horizontal deferred dragging " + scenario.Name;
+                _xamlCheckpoint = "horizontal live scrolling " + scenario.Name;
                 var grid = (DataGrid)sourceWindow.FindName(scenario.Name);
                 True(grid.Parent is Panel, "Expected the compiled dashboard's normal panel parent.");
                 ((Panel)grid.Parent).Children.Remove(grid);
@@ -117,10 +117,13 @@ internal static partial class MarketplaceViewModelTests
                         var maxCells = rows.Select(row => VisualChildren<DataGridCell>(row).Count()).DefaultIfEmpty().Max();
                         var realizedColumns = string.Join(',', rows.Take(1).SelectMany(row => VisualChildren<DataGridCell>(row))
                             .Select(cell => $"{cell.Column.DisplayIndex}:{cell.ActualWidth:F0}"));
+                        var visualCount = VisualChildren<DependencyObject>(grid).Count();
+                        var scrollViewerCount = VisualChildren<ScrollViewer>(grid).Count();
                         Console.WriteLine($"SCROLL {scenario.Name} {position}: rows={rows.Length}/1000 " +
                             $"cells={cells.Length} max-cells-per-row={maxCells}/{columns.Length} " +
                             $"viewport-columns={visibleColumns} offset={scroll.HorizontalOffset:F0} " +
                             $"column-virtualization={grid.EnableColumnVirtualization} row-height={rows.FirstOrDefault()?.ActualHeight:F0} " +
+                            $"visual-descendants={visualCount} scroll-viewers={scrollViewerCount} " +
                             $"realized-column-widths=[{realizedColumns}] elapsed-ms={watch.ElapsedMilliseconds}");
                         True(rows.Length is >= 1 and <= 80,
                             $"{scenario.Name} {position}: row virtualization must bound the 1000-row data set; realized {rows.Length}.");
@@ -188,13 +191,13 @@ internal static partial class MarketplaceViewModelTests
                         $"row-height-range={minHeight:F0}-{maxHeight:F0}");
                     scroll.ScrollToLeftEnd(); await Settle();
                     await AssertIdentity(sorted[0]);
-                    // Use the same public routed commands emitted by WPF's
-                    // horizontal thumb: move the thumb repeatedly, then commit
-                    // its final value on release. No OS input or timing limit.
+                    // Use the public routed command emitted by WPF's horizontal
+                    // thumb. Every fractional move must immediately move actual
+                    // content; waiting until mouse release would hide the lag.
+                    // No OS input or timing limit is needed for this behavior.
                     scroll.ScrollToLeftEnd(); await Settle();
-                    True(scroll.IsDeferredScrollingEnabled,
-                        scenario.Name + ": the actual DataGrid scroll host must defer thumb-drag content updates.");
-                    var contentOffset = scroll.ContentHorizontalOffset;
+                    True(!scroll.IsDeferredScrollingEnabled,
+                        scenario.Name + ": the actual DataGrid scroll host must update content throughout thumb dragging.");
                     var endColumn = grid.Columns.Where(column => column.Visibility == Visibility.Visible)
                         .MaxBy(column => column.DisplayIndex)!;
                     var endContent = endColumn.GetCellContent(sorted[0]);
@@ -204,37 +207,40 @@ internal static partial class MarketplaceViewModelTests
                     var finalOffset = scroll.ScrollableWidth;
                     var horizontalBar = scroll.Template.FindName("PART_HorizontalScrollBar", scroll) as ScrollBar
                         ?? VisualChildren<ScrollBar>(scroll).Single(bar => bar.Orientation == Orientation.Horizontal);
-                    for (var step = 1; step <= 4; step++)
+                    void AssertLivePosition(double target)
                     {
-                        var target = finalOffset * step / 4;
-                        True(ScrollBar.DeferScrollToHorizontalOffsetCommand.CanExecute(target, horizontalBar),
-                            scenario.Name + ": the real horizontal drag command must be enabled.");
-                        ScrollBar.DeferScrollToHorizontalOffsetCommand.Execute(target, horizontalBar);
-                        // WPF's CLR HorizontalOffset getter returns the cached
-                        // content offset during a deferred drag. The scrollbar
-                        // binds to the dependency property, which holds the
-                        // pending thumb value (ScrollViewer.cs in dotnet/wpf).
-                        var immediateOffset = (double)scroll.GetValue(ScrollViewer.HorizontalOffsetProperty);
-                        await Settle();
-                        var pendingOffset = (double)scroll.GetValue(ScrollViewer.HorizontalOffsetProperty);
-                        True(Math.Abs(pendingOffset - target) < 0.5 && Math.Abs(horizontalBar.Value - target) < 0.5,
-                            $"{scenario.Name}: thumb position must follow the pending drag value. " +
-                            $"Target={target}, immediate={immediateOffset}, settled={pendingOffset}, bar={horizontalBar.Value}, " +
-                            $"content={scroll.ContentHorizontalOffset}, deferred={scroll.IsDeferredScrollingEnabled}.");
-                        True(Math.Abs(scroll.ContentHorizontalOffset - contentOffset) < 0.5,
-                            scenario.Name + ": content must stay stationary during each thumb movement.");
-                        True(Math.Abs(endContent.TranslatePoint(new Point(), grid).X - endX) < 0.5,
-                            scenario.Name + ": existing text cells must not move/rebuild during deferred dragging.");
+                        // DataGrid may round subpixel offsets to device pixels.
+                        True(Math.Abs(scroll.ContentHorizontalOffset - target) <= 1 &&
+                            Math.Abs(horizontalBar.Value - target) <= 1,
+                            $"{scenario.Name}: each thumb movement must update the visible content immediately. " +
+                            $"Target={target}, actual={scroll.ContentHorizontalOffset}, bar={horizontalBar.Value}.");
+                        var currentEnd = endColumn.GetCellContent(sorted[0]);
+                        True(currentEnd is not null &&
+                            Math.Abs(currentEnd.TranslatePoint(new Point(), grid).X - (endX - scroll.ContentHorizontalOffset)) <= 1,
+                            scenario.Name + ": actual text cells must track every live content offset.");
                     }
-                    ScrollBar.ScrollToHorizontalOffsetCommand.Execute(finalOffset, horizontalBar);
-                    await Settle();
-                    True(Math.Abs(scroll.ContentHorizontalOffset - finalOffset) < 0.5,
-                        scenario.Name + ": releasing the thumb must commit the final content offset.");
+                    for (var step = 1; step <= 8; step++)
+                    {
+                        var target = finalOffset * step / 8;
+                        True(ScrollBar.ScrollToHorizontalOffsetCommand.CanExecute(target, horizontalBar),
+                            scenario.Name + ": the real horizontal drag command must be enabled.");
+                        ScrollBar.ScrollToHorizontalOffsetCommand.Execute(target, horizontalBar);
+                        await Settle();
+                        AssertLivePosition(target);
+                    }
                     var releasedEnd = endColumn.GetCellContent(sorted[0]);
                     True(releasedEnd is not null && releasedEnd.TranslatePoint(new Point(), grid).X < grid.ActualWidth &&
                         releasedEnd.TranslatePoint(new Point(releasedEnd.ActualWidth, 0), grid).X > 0,
-                        scenario.Name + ": releasing at the right edge must reveal the correct end-column cell.");
-                    Console.WriteLine($"SCROLL-DEFERRED {scenario.Name}: thumb-moves=4 content-moves=1 elapsed-ms={drag.ElapsedMilliseconds}");
+                        scenario.Name + ": moving to the right edge must reveal the correct end-column cell.");
+                    Console.WriteLine($"SCROLL-LIVE {scenario.Name}: thumb-moves=8 content-moves=8 elapsed-ms={drag.ElapsedMilliseconds}");
+                    ScrollBar.LineLeftCommand.Execute(null, horizontalBar);
+                    await Settle();
+                    True(scroll.ContentHorizontalOffset < finalOffset,
+                        scenario.Name + ": the horizontal arrow must scroll immediately.");
+                    AssertLivePosition(scroll.ContentHorizontalOffset);
+                    scroll.ScrollToHorizontalOffset(finalOffset / 2);
+                    await Settle();
+                    AssertLivePosition(finalOffset / 2);
                     scroll.ScrollToLeftEnd(); await Settle();
                     await AssertIdentity(sorted[0]);
                     True(sorted.SequenceEqual(view.Cast<object>()), scenario.Name + ": scrolling must preserve sorting.");

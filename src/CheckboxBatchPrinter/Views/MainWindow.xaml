@@ -79,6 +79,25 @@
             <Setter Property="ContextMenu" Value="{StaticResource DashboardTextCopyMenu}" />
             <Setter Property="HorizontalScrollBarVisibility" Value="Hidden" />
             <Setter Property="VerticalScrollBarVisibility" Value="Hidden" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="controls:DashboardTextBox">
+                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" SnapsToDevicePixels="True">
+                            <ScrollViewer x:Name="PART_ContentHost" Focusable="False">
+                                <ScrollViewer.Template>
+                                    <ControlTemplate TargetType="ScrollViewer">
+                                        <ScrollContentPresenter x:Name="PART_ScrollContentPresenter"
+                                            Margin="{TemplateBinding Padding}" CanContentScroll="{TemplateBinding CanContentScroll}"
+                                            Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}"
+                                            ContentStringFormat="{TemplateBinding ContentStringFormat}" />
+                                    </ControlTemplate>
+                                </ScrollViewer.Template>
+                            </ScrollViewer>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
         <Style x:Key="DashboardAmountTextStyle" TargetType="controls:DashboardTextBox" BasedOn="{StaticResource DashboardTextStyle}">
             <Setter Property="FontWeight" Value="Bold" />
@@ -221,12 +240,12 @@
                 </DataTrigger>
             </Style.Triggers>
         </Style>
-        <!-- Coalesce thumb movement; keep selectable text cells cached between horizontal positions. -->
+        <!-- Keep selectable text cells cached while updating the viewport continuously. -->
         <Style x:Key="DashboardGridPerformanceStyle" TargetType="DataGrid">
             <Setter Property="EnableColumnVirtualization" Value="False" />
             <Setter Property="EnableRowVirtualization" Value="True" />
             <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
-            <Setter Property="ScrollViewer.IsDeferredScrollingEnabled" Value="True" />
+            <Setter Property="ScrollViewer.IsDeferredScrollingEnabled" Value="False" />
             <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
             <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
         </Style>
