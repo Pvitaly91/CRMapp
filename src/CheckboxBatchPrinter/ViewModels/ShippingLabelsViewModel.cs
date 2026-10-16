@@ -233,11 +233,11 @@ public sealed partial class ShippingLabelsViewModel : ObservableObject, IDisposa
                 var omitted = batch.SkippedShipments.Where(s => s.Shipment.Order == row.Key).ToArray();
                 row.LabelStatus = omitted.Length == 0 ? "Готова до перегляду" :
                     (printableOrders.Contains(row.Key) ? "Частина наклейок готова; " : "") +
-                    "Пропущено без ключа: " + string.Join("; ", omitted.Select(s => $"ТТН {s.Shipment.TrackingNumber}: {s.Reason}"));
+                    "Пропущено без підключення: " + string.Join("; ", omitted.Select(s => $"ТТН {s.Shipment.TrackingNumber}: {s.Reason}"));
             }
             if (batch.Pages.Count == 0)
             {
-                Status = $"Немає доступних наклейок для друку. Пропущено без ключа: {batch.SkippedShipments.Count} відправлень.";
+                Status = $"Немає доступних наклейок для друку. Пропущено без підключення: {batch.SkippedShipments.Count} відправлень.";
                 return;
             }
             var history = await _history.LoadAsync(_cancel.Token);
@@ -265,7 +265,7 @@ public sealed partial class ShippingLabelsViewModel : ObservableObject, IDisposa
                 if (printableOrders.Contains(row.Key) && !omittedOrders.Contains(row.Key)) row.IsSelectedForLabels = false;
             }
             Status = "Пакет передано Windows. " + (batch.SkippedShipments.Count > 0
-                ? $"Пропущено без ключа: {batch.SkippedShipments.Count} відправлень. " : "") +
+                ? $"Пропущено без підключення: {batch.SkippedShipments.Count} відправлень. " : "") +
                 "Це не підтвердження фізичного виходу наклейок.";
         }
         catch (OperationCanceledException) { Status = "Скасовано. Нового друку не запущено."; }

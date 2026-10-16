@@ -36,7 +36,7 @@ public sealed class LabelPrintCoordinator(ILabelHistoryStore history, ILabelBatc
         var pages = batch.Pages.SelectMany(p => p.CoveredShipments.Append(p.Shipment).Distinct()
             .Select(s => new LabelAttemptPage(s.Carrier, p.ConnectionId, s.TrackingNumber,
                 p.DocumentId, p.PageNumber, p.Fingerprint)
-            { Order = p.Source == "RozetkaSeller.Delivery" ? s.Order : null })).Distinct().ToArray();
+            { Order = p.Source is "RozetkaSeller.Delivery" or PromCabinetDeliveryLabelSource.SourceName ? s.Order : null })).Distinct().ToArray();
         var attempt = new LabelPrintAttempt(Guid.NewGuid().ToString("N"), "", batch.Settings.PrinterName,
             DateTimeOffset.UtcNow, LabelSubmissionState.NotSubmitted, pages);
         attempt = attempt with { JobName = "CRMapp labels " + attempt.AttemptId };

@@ -63,10 +63,10 @@ public sealed partial class ShippingLabelsViewModel
             {
                 var omitted = batch.SkippedShipments.Where(s => s.Shipment.Order == row.Key).ToArray();
                 row.LabelStatus = omitted.Length == 0 ? "Готова до перегляду" :
-                    "Пропущено без ключа: " + string.Join("; ", omitted.Select(s => $"ТТН {s.Shipment.TrackingNumber}: {s.Reason}"));
+                    "Потрібне підключення: " + string.Join("; ", omitted.Select(s => $"ТТН {s.Shipment.TrackingNumber}: {s.Reason}"));
             }
             if (batch.SkippedShipments.Count > 0)
-                throw new InvalidOperationException("Спільний друк не розпочато: для частини наклейок немає ключа доставки. " +
+                throw new InvalidOperationException("Спільний друк не розпочато: для частини наклейок потрібно налаштувати підключення доставки або вхід у кабінет. " +
                     string.Join("; ", batch.SkippedShipments.Select(s => $"Замовлення №{s.Shipment.OrderNumber} · ТТН {s.Shipment.TrackingNumber}: {s.Reason}")));
             if (batch.Pages.Count == 0 || batch.SelectedOrderCount != _orders.Count || _orders.Any(o =>
                 !batch.Pages.Any(p => p.Shipment.Order == o.Key || p.CoveredShipments.Any(s => s.Order == o.Key))))

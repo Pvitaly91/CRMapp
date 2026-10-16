@@ -3,6 +3,7 @@ using System.Windows.Input;
 using CheckboxBatchPrinter.Core.Models;
 using CheckboxBatchPrinter.Core.Services;
 using CheckboxBatchPrinter.Infrastructure;
+using CheckboxBatchPrinter.Services;
 
 namespace CheckboxBatchPrinter.ViewModels;
 
@@ -11,11 +12,14 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
     private readonly IMarketplaceSettingsStore _settings;
     private readonly IMarketplaceSecretStore _secrets;
     private readonly MarketplaceSyncService _sync;
+    private readonly IPromCabinetLoginService? _promCabinet;
     private MarketplaceConnection? _selected;
     private string _token = "", _status = "Локальні секрети захищено для поточного користувача Windows.";
     private bool _busy;
     private bool _canEdit;
     private bool _saving;
+    private bool _connectingCabinet;
+    private string _promCabinetStatus = "";
     private bool _updatingCredentialFields;
     private int _historyDays, _cacheDays = 30;
     private readonly Dictionary<string, MarketplaceCredentials> _pending = [];
@@ -27,12 +31,15 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
     private List<MarketplaceConnectionAlias> _connectionAliases = [];
     public Task CredentialStatusRefresh { get; private set; } = Task.CompletedTask;
 
-    public MarketplaceSettingsViewModel(IMarketplaceSettingsStore settings, IMarketplaceSecretStore secrets, MarketplaceSyncService sync)
+    public MarketplaceSettingsViewModel(IMarketplaceSettingsStore settings, IMarketplaceSecretStore secrets, MarketplaceSyncService sync,
+        IPromCabinetLoginService? promCabinet = null)
     {
-        _settings = settings; _secrets = secrets; _sync = sync;
+        _settings = settings; _secrets = secrets; _sync = sync; _promCabinet = promCabinet;
         AddPromCommand = new RelayCommand(_ => Add(MarketplaceKind.Prom), _ => !IsBusy && CanEdit);
         AddRozetkaCommand = new RelayCommand(_ => Add(MarketplaceKind.Rozetka), _ => !IsBusy && CanEdit);
         TestCommand = new AsyncRelayCommand(_ => TestAsync(), _ => Selected is not null && !IsBusy && CanEdit);
+        ConnectPromCabinetCommand = new AsyncRelayCommand(_ => ConnectPromCabinetAsync(),
+            _ => IsProm && CanEdit && _promCabinet is not null);
         Connections.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(PromConnectionButtonText));
@@ -43,6 +50,8 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
     public ICommand AddPromCommand { get; }
     public ICommand AddRozetkaCommand { get; }
     public ICommand TestCommand { get; }
+    public ICommand ConnectPromCabinetCommand { get; }
+    public string PromCabinetStatus { get => _promCabinetStatus; private set => SetProperty(ref _promCabinetStatus, value); }
     public string PromConnectionButtonText => ConnectionButtonText(MarketplaceKind.Prom);
     public string RozetkaConnectionButtonText => ConnectionButtonText(MarketplaceKind.Rozetka);
     private string ConnectionButtonText(MarketplaceKind kind) =>
@@ -54,12 +63,14 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
         get => _selected;
         set
         {
-            if (_saving || ReferenceEquals(_selected, value)) return;
+            if (_saving || _connectingCabinet || ReferenceEquals(_selected, value)) return;
             StageCredentials();
             if (!SetProperty(ref _selected, value)) return;
             RestoreCredentialFields();
             OnPropertyChanged(nameof(IsProm)); OnPropertyChanged(nameof(IsRozetka));
             ((AsyncRelayCommand)TestCommand).RaiseCanExecuteChanged();
+            ((AsyncRelayCommand)ConnectPromCabinetCommand).RaiseCanExecuteChanged();
+            RefreshPromCabinetStatus();
             CredentialStatusRefresh = RefreshCredentialStatusAsync(value);
             NotifyCredentialStatus();
         }
@@ -145,6 +156,7 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
     private void RaiseCommands()
     {
         ((AsyncRelayCommand)TestCommand).RaiseCanExecuteChanged();
+        ((AsyncRelayCommand)ConnectPromCabinetCommand).RaiseCanExecuteChanged();
         ((RelayCommand)AddPromCommand).RaiseCanExecuteChanged();
         ((RelayCommand)AddRozetkaCommand).RaiseCanExecuteChanged();
     }
@@ -270,12 +282,40 @@ public sealed class MarketplaceSettingsViewModel : ObservableObject
             CredentialsCleared?.Invoke(this, EventArgs.Empty);
             Status = "Налаштування маркетплейсів збережено.";
             NotifyCredentialStatus();
+            RefreshPromCabinetStatus();
             return resolved.Count > 0;
         }
         finally { _saving = false; IsBusy = false; }
     }
     private static MarketplaceConnection CloneConnection(MarketplaceConnection connection) => new()
     { Id = connection.Id, Marketplace = connection.Marketplace, Name = connection.Name, Enabled = connection.Enabled };
+    private void RefreshPromCabinetStatus()
+    {
+        if (Selected is not { Marketplace: MarketplaceKind.Prom } connection) { PromCabinetStatus = ""; return; }
+        if (!_knownConnectionIds.Contains(connection.Id))
+        {
+            PromCabinetStatus = "Спочатку збережіть підключення Prom, потім увійдіть у його кабінет для друку накладних.";
+            return;
+        }
+        try { PromCabinetStatus = _promCabinet?.GetStatus(connection.Id) ?? "Вхід у кабінет Prom зараз недоступний."; }
+        catch (Exception) { PromCabinetStatus = "Не вдалося прочитати стан входу в кабінет Prom."; }
+    }
+    private async Task ConnectPromCabinetAsync()
+    {
+        if (!CanEdit || _promCabinet is null || Selected is not { Marketplace: MarketplaceKind.Prom } selected) return;
+        if (!_knownConnectionIds.Contains(selected.Id)) { RefreshPromCabinetStatus(); return; }
+        var connection = CloneConnection(selected);
+        _connectingCabinet = true; IsBusy = true;
+        PromCabinetStatus = "Відкриваю вхід у кабінет Prom…";
+        try { PromCabinetStatus = await _promCabinet.ConnectAsync(connection); }
+        catch (OperationCanceledException) { RefreshPromCabinetStatus(); }
+        catch (Exception ex)
+        {
+            PromCabinetStatus = ex is InvalidOperationException or ShippingLabelException ? ex.Message :
+                "Не вдалося увійти в кабінет Prom. Спробуйте ще раз.";
+        }
+        finally { _connectingCabinet = false; IsBusy = false; }
+    }
     private async Task TestAsync()
     {
         if (!CanEdit || Selected is not { } selected) return;

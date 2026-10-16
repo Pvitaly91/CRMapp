@@ -242,7 +242,7 @@ public sealed class PromOrdersClient : IMarketplaceOrdersClient
             Shipments = tracking.Length == 0 ? [] :
                 [new OrderShipment(Text(delivery, "provider").Length > 0 ? Text(delivery, "provider") : Text(deliveryOption, "name"), tracking, Text(order, "delivery_address"))
                 {
-                    Source = "Prom.delivery_provider_data", DeliveryServiceId = Text(deliveryOption, "id"),
+                    Source = "Prom.delivery_provider_data", DeliveryServiceId = PositiveIdentifier(deliveryOption, "id"),
                     ShippingService = Text(deliveryOption, "shipping_service"), SenderWarehouseId = Text(delivery, "sender_warehouse_id"),
                     RecipientWarehouseId = Text(delivery, "recipient_warehouse_id")
                 }],
@@ -276,4 +276,12 @@ public sealed class PromOrdersClient : IMarketplaceOrdersClient
 
     private static string Text(JsonElement value, string name) => Property(value, name) is var property
         && property.ValueKind == JsonValueKind.String ? property.GetString()?.Trim() ?? "" : "";
+
+    private static string PositiveIdentifier(JsonElement value, string name)
+    {
+        var property = Property(value, name);
+        var text = property.ValueKind is JsonValueKind.String or JsonValueKind.Number ? property.ToString() : "";
+        return long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var id) && id > 0
+            ? id.ToString(CultureInfo.InvariantCulture) : "";
+    }
 }

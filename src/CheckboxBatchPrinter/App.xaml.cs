@@ -18,6 +18,7 @@ public partial class App : Application
     private HttpClient? _httpClient;
     private HttpClient? _marketplaceHttpClient;
     private HttpClient? _shippingHttpClient;
+    private PromCabinetSessionService? _promCabinet;
     private IAppLogger? _logger;
     private SingleInstanceGuard? _singleInstance;
     private TrayController? _tray;
@@ -94,16 +95,18 @@ public partial class App : Application
             var shippingTransport = new ShippingLabelHttp(_shippingHttpClient);
             var npClient = new NovaPoshtaReadOnlyClient(shippingTransport);
             var pdfInspector = new WindowsLabelPdfInspector();
+            _promCabinet = new PromCabinetSessionService(Path.Combine(localData, "PromCabinet"), marketplaceSettings, Dispatcher);
             var npSession = new NovaPoshtaVerifiedSession();
             var labelDialogs = new LabelDialogs(shippingSettings, marketplaceSettings, labelPrinter,
                 new NovaPoshtaDiagnostics(npClient, pdfInspector), npSession, () => marketplace.SelectedOrder?.Model, marketplaceSecrets);
             marketplace.Labels = new ShippingLabelsViewModel(marketplace, shippingSettings, labelHistory,
                 new ConfiguredShippingLabelSource(shippingSettings,
                     new NovaPoshtaDirectLabelSource(shippingSettings, npClient, pdfInspector),
-                    new OfficialShippingLabelSource(shippingTransport, shippingSettings, marketplaceSettings, marketplaceSecrets)),
+                    new OfficialShippingLabelSource(shippingTransport, shippingSettings, marketplaceSettings, marketplaceSecrets,
+                        promCabinet: new PromCabinetDeliveryLabelSource(marketplaceSettings, _promCabinet, pdfInspector))),
                 new WindowsShippingLabelRenderer(), labelPrinter, labelDialogs);
             var dialogs = new UiDialogService(settingsService, authentication, imageService, printService, _logger,
-                () => new MarketplaceSettingsViewModel(marketplaceSettings, marketplaceSecrets, marketplaceSync), marketplace.Labels,
+                () => new MarketplaceSettingsViewModel(marketplaceSettings, marketplaceSecrets, marketplaceSync, _promCabinet), marketplace.Labels,
                 (updated, credentialsVerified, marketplaceCredentialsSaved) =>
                 {
                     var prior = _appSettings;
@@ -283,6 +286,7 @@ public partial class App : Application
         _httpClient?.Dispose();
         _marketplaceHttpClient?.Dispose();
         _shippingHttpClient?.Dispose();
+        _promCabinet?.Dispose();
         base.OnExit(e);
     }
 

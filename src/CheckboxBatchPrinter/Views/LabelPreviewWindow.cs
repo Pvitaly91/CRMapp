@@ -45,7 +45,7 @@ public sealed class LabelPreviewWindow : Window
         }
         if (batch.SkippedShipments.Count > 0)
         {
-            header.Children.Add(new TextBlock { Text = $"Пропущено без ключа: {batch.SkippedShipments.Count} відправлень. Друкуватимуться тільки доступні наклейки.",
+            header.Children.Add(new TextBlock { Text = $"Пропущено без підключення: {batch.SkippedShipments.Count} відправлень. Друкуватимуться тільки доступні наклейки.",
                 Foreground = Brushes.DarkGoldenrod, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6) });
             header.Children.Add(new Expander { Header = "Які наклейки пропущено", IsExpanded = batch.SkippedShipments.Count <= 3,
                 Content = new ScrollViewer { MaxHeight = 110, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,

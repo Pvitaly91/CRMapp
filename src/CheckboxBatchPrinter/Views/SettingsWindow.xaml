@@ -97,6 +97,11 @@
                         <StackPanel Visibility="{Binding IsProm, Converter={StaticResource BoolToVisibility}}">
                             <TextBlock Text="API-токен Prom" Margin="6,3" />
                             <PasswordBox x:Name="PromTokenInput" PasswordChanged="PromTokenInput_PasswordChanged" Margin="3" Padding="6,4" />
+                            <Button x:Name="PromCabinetLoginButton" Content="Увійти в кабінет Prom для накладних"
+                                    Command="{Binding ConnectPromCabinetCommand}" HorizontalAlignment="Left" Margin="3,8,3,3" />
+                            <TextBlock x:Name="PromCabinetStatusText" Text="{Binding PromCabinetStatus}" TextWrapping="Wrap" Margin="6,3" />
+                            <TextBlock Text="Для доставки в Rozetka у замовленнях Prom і Bigl увійдіть у кабінет цього магазину. Вхід зберігається на цьому комп’ютері; доступ до накладної перевіряється під час друку. Окремий ключ Rozetka Delivery не потрібний."
+                                       TextWrapping="Wrap" Foreground="#667085" Margin="6,3,6,8" />
                         </StackPanel>
                         <StackPanel Visibility="{Binding IsRozetka, Converter={StaticResource BoolToVisibility}}">
                             <TextBlock Text="API-токен Rozetka" Margin="6,3" />

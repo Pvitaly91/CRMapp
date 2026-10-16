@@ -78,6 +78,11 @@ public sealed class LabelSettingsWindow : Window
             Text = "Накладні замовлень Rozetka: використовується API-токен відповідного магазину з налаштувань маркетплейсів. Окремий токен Delivery не потрібний.",
             TextWrapping = TextWrapping.Wrap, FontSize = 11, Margin = new Thickness(0,12,0,4)
         });
+        root.Children.Add(new TextBlock
+        {
+            Text = "Доставка в Rozetka для Prom і Bigl: у «Налаштування → Маркетплейси» виберіть свій магазин Prom і натисніть «Увійти в кабінет Prom для накладних». Готові накладні завантажуються через цей вхід без окремого ключа Delivery.",
+            TextWrapping = TextWrapping.Wrap, FontSize = 11, Margin = new Thickness(0,4,0,4)
+        });
         root.Children.Add(_tokenStatus); root.Children.Add(_sellerStatus);
         _token.PasswordChanged += (_, _) => UpdateTokenIndicator();
         UpdateTokenIndicator();
@@ -85,7 +90,7 @@ public sealed class LabelSettingsWindow : Window
         var advanced = new StackPanel { Margin = new Thickness(8) }; _advanced.Content = advanced; root.Children.Add(_advanced);
         _landscape.IsChecked = original.Print.Landscape; advanced.Children.Add(_landscape);
         Add(advanced, "Масштаб, % (100 — без зменшення)", _scale); Add(advanced, "Зміщення X, мм", _x); Add(advanced, "Зміщення Y, мм", _y);
-        Add(advanced, "Токен Rozetka Delivery для окремого акаунта доставки / замовлень Prom (порожній — зберегти попередній)", _token);
+        Add(advanced, "Токен окремого акаунта Rozetka Delivery (для входу через Prom не потрібний; порожній — зберегти попередній)", _token);
         Add(advanced, "Нова пошта через Rozetka Seller (не потрібно для Prom із власним NP-ключем)", _seller);
         _seller.DisplayMemberPath = nameof(MarketplaceConnection.Name); _seller.SelectedValuePath = nameof(MarketplaceConnection.Id);
         _seller.ItemsSource = marketplaces.Connections.Where(c => c.Enabled && c.Marketplace == MarketplaceKind.Rozetka).ToArray(); _seller.SelectedValue = original.NovaPoshtaSellerConnectionId;

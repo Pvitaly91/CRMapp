@@ -27,6 +27,12 @@ internal static partial class MarketplaceViewModelTests
 
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
+        ("Prom cabinet browser bridge ignores foreign origins paths and stale operation messages", PromCabinetProtocolOriginAsync),
+        ("Prom cabinet browser response preserves exact request account and rejects changed URL or status", PromCabinetProtocolResponseAsync),
+        ("Prom cabinet browser rejects malformed oversized messages and returns bounded batch failure categories", PromCabinetProtocolMalformedAsync),
+        ("Prom cabinet download script validates identifiers binds nonce and limits same-origin GET response", PromCabinetProtocolScriptAsync),
+        ("STA Prom cabinet reconnect retains selected connection, token drafts and store-specific session status", () => StaAsync(PromCabinetSettingsReconnectAsync)),
+        ("STA Prom cabinet login serializes settings changes, recovers cancellation and requires saved connection", () => StaAsync(PromCabinetSettingsBusyAndDraftAsync)),
         ("STA receipt combined date uses Kyiv time and chronological sorting with refresh notifications", () => StaAsync(ReceiptCombinedDateTimeAsync)),
         ("STA exact NP account cabinet markers publish independently of parcel tracking and local jobs", () => StaAsync(CabinetPrintPublicationAsync)),
         ("STA prepared label preview discloses cabinet marks only for ready selected shipment pages", () => StaAsync(CabinetPrintPreparedLabelsAsync)),

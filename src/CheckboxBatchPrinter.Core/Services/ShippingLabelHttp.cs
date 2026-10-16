@@ -167,17 +167,19 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
 
 public sealed class OfficialShippingLabelSource(ShippingLabelHttp http, IShippingSettingsStore settings,
     IMarketplaceSettingsStore marketplaceSettings, IMarketplaceSecretStore marketplaceSecrets,
-    IReadOnlyList<ShipmentReference>? selectedShipments = null) : IShippingLabelBatchSource
+    IReadOnlyList<ShipmentReference>? selectedShipments = null, IShippingLabelSource? promCabinet = null) : IShippingLabelBatchSource
 {
     private readonly RozetkaSellerDeliveryLabelSource _sellerDelivery = new(http, marketplaceSettings, marketplaceSecrets, selectedShipments);
     public IShippingLabelSource CreateBatchSource(IReadOnlyList<ShipmentReference>? shipments = null) =>
-        new OfficialShippingLabelSource(http, settings, marketplaceSettings, marketplaceSecrets, shipments);
+        new OfficialShippingLabelSource(http, settings, marketplaceSettings, marketplaceSecrets, shipments, promCabinet);
     public async Task<ShippingLabelDocument> GetAsync(ShipmentReference shipment, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(shipment.TrackingNumber)) throw new ShippingLabelException(LabelFailureKind.MissingDocument, "Накладну не створено.");
         if (RozetkaSellerDeliveryLabelSource.IsSellerDeliveryShipment(shipment))
             return await _sellerDelivery.GetAsync(shipment, cancellationToken);
+        if (promCabinet is not null && PromCabinetDeliveryLabelSource.IsPromDeliveryShipment(shipment))
+            return await promCabinet.GetAsync(shipment, cancellationToken);
         if (shipment.Carrier == ShippingCarrier.Unknown) throw new ShippingLabelException(LabelFailureKind.UnsupportedFormat, "Перевізник не визначений документованими полями доставки.");
         var config = await settings.LoadAsync(cancellationToken);
         return shipment.Carrier == ShippingCarrier.RozetkaDelivery

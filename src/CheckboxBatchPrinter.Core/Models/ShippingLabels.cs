@@ -17,6 +17,8 @@ public sealed record ShipmentReference(OrderKey? Order, string OrderNumber, Ship
 {
     // Independent carrier documents have no marketplace order identity.
     public string CarrierConnectionId { get; init; } = "";
+    // Prom's existing delivery_option.id, frozen with the selected order for cabinet PDF reads.
+    public string DeliveryServiceId { get; init; } = "";
 }
 public sealed record ShippingLabelDocument(ShipmentReference Shipment, string ConnectionId, string DocumentId,
     byte[] Pdf, string Fingerprint, DateTimeOffset RetrievedAtUtc, int ExpectedPages = 0)
@@ -141,6 +143,6 @@ public static class ShippingCarrierNames
     public static IReadOnlyList<ShipmentReference> ForOrder(MarketplaceOrder order) => order.Shipments
         .Where(s => !string.IsNullOrWhiteSpace(s.TrackingNumber))
         .Select(s => new ShipmentReference(order.Key, order.Number, FromDocumentedDeliveryField(s.Carrier),
-            s.TrackingNumber.Trim(), s.ShipmentId, s.Source, s.Places))
+            s.TrackingNumber.Trim(), s.ShipmentId, s.Source, s.Places) { DeliveryServiceId = s.DeliveryServiceId })
         .DistinctBy(s => (s.Carrier, s.TrackingNumber, s.ShipmentId)).ToArray();
 }

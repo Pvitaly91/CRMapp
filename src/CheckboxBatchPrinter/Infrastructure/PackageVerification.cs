@@ -90,10 +90,17 @@ internal static class PackageVerification
             var inspection = await new WindowsLabelPdfInspector().InspectAsync(diagnosticPdf);
             if (inspection.Pages.Count != 1 || !inspection.Pages[0].Text.Contains("20400000000000") || Math.Abs(inspection.Pages[0].WidthMm - 100) > .05)
                 throw new InvalidOperationException("Bundled PDF text inspection failed.");
+            // Also exercise the native WebView2 loader and real browser bridge from this bundle.
+            // The helper intercepts every resource and uses its own fresh synthetic profile.
+            var browserRoot = Path.Combine(root, "cbp-prom-browser-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(browserRoot);
+            await File.WriteAllTextAsync(Path.Combine(browserRoot, "allow-offline-verification"), "Synthetic browser only");
+            var promBrowserVerified = await PromCabinetSessionService.VerifyOfflineAsync(browserRoot);
             await File.WriteAllTextAsync(report, JsonSerializer.Serialize(new {
                 Success = true, AppEnvironment.Channel, AppEnvironment.Version, AppEnvironment.Commit,
                 ShippingPdfPages = labelPages.Count,
                 ShippingPdfTextInspection = true,
+                PromCabinetBrowserVerified = promBrowserVerified,
                 AppEnvironment.WindowTitle, DefaultDataRoot = AppEnvironment.DataRoot, TestDataRoot = data,
                 Restarted = restarted, Architecture = RuntimeInformation.ProcessArchitecture.ToString(),
                 Runtime = RuntimeEnvironment.GetRuntimeDirectory(), Framework = RuntimeInformation.FrameworkDescription

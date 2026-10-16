@@ -54,7 +54,7 @@ internal static partial class MarketplaceViewModelTests
     {
         var fixture = new Fixture(); fixture.Settings.Secrets["prom-test"] = new(Token: "synthetic_saved_prom_secret");
         var marketplace = new MarketplaceSettingsViewModel(fixture.Settings, fixture.Settings,
-            new MarketplaceSyncService([fixture.Source], fixture.Settings, fixture.Cache));
+            new MarketplaceSyncService([fixture.Source], fixture.Settings, fixture.Cache), new SettingsCabinetLogin());
         var vm = new SettingsViewModel(fixture.Settings, new Authentication(), new Images(), fixture.Printer, new Logger(), marketplace);
         await vm.LoadAsync(); await vm.EnsureMarketplaceLoadedAsync();
         var window = new SettingsWindow { DataContext = vm };
@@ -67,10 +67,18 @@ internal static partial class MarketplaceViewModelTests
             window.ShowMarketplaceTab(); LayoutContent(window); await DrainDispatcherAsync();
             var prom = (TextBlock)window.FindName("MarketplaceCredentialIndicator");
             True(prom.Text.Contains("Токен Prom збережено") && prom.Tag?.ToString() == "Saved");
+            var login = (Button)window.FindName("PromCabinetLoginButton");
+            var loginStatus = (TextBlock)window.FindName("PromCabinetStatusText");
+            True(((FrameworkElement)login.Parent).Visibility == Visibility.Visible && login.IsEnabled &&
+                ReferenceEquals(login.Command, marketplace.ConnectPromCabinetCommand));
+            True(loginStatus.Text.Contains("prom-test") && loginStatus.Text.Contains("під час друку"));
             RenderSyntheticContent(window, "prom-credential-status.png");
             vm.Password = "new_private_value"; LayoutContent(window); await DrainDispatcherAsync();
             True(checkbox.Tag?.ToString() == "Draft");
             True(!checkbox.Text.Contains("new_private_value") && !prom.Text.Contains("synthetic_saved_prom_secret"));
+            marketplace.Selected = new() { Id = "synthetic-rz-ui", Marketplace = MarketplaceKind.Rozetka, Enabled = true, Name = "Rozetka" };
+            LayoutContent(window); await DrainDispatcherAsync();
+            True(((FrameworkElement)login.Parent).Visibility == Visibility.Collapsed && !login.IsEnabled);
         }
         finally { window.Close(); }
     }

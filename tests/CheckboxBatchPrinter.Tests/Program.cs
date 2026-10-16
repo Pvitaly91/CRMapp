@@ -34,6 +34,11 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        if (args.SequenceEqual(["--prom-browser-smoke"]))
+        {
+            try { PromCabinetOfflineBrowserTests.RunAsync().GetAwaiter().GetResult(); Console.WriteLine("PASS offline Prom browser integration"); return 0; }
+            catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
+        }
         if (args.Length == 2 && args[0] == "--receipt-driver-smoke")
         {
             try { ReceiptDriverSmoke.Run(args[1]); return 0; }
@@ -80,6 +85,8 @@ internal static class Program
     private static async Task<int> RunAllAsync()
     {
         Tests.AddRange(PromOrdersTests.All);
+        Tests.AddRange(PromCabinetDeliveryLabelTests.All);
+        Tests.AddRange(PromCabinetOfflineBrowserTests.All);
         Tests.AddRange(AppEnvironmentTests.All);
         Tests.AddRange(BackgroundSyncTests.All);
         Tests.AddRange(OrderNotificationTests.All);

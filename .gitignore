@@ -15,3 +15,5 @@ marketplace-settings.json
 printed-receipts.json
 print-attempts*.json
 Marketplaces/
+PromCabinet/
+*.WebView2/
