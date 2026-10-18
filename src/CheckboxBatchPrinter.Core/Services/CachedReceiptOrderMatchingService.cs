@@ -310,7 +310,7 @@ public sealed class CachedReceiptOrderMatchingService(TimeProvider? timeProvider
         }).Select(o => JsonSerializer.Serialize(o)).Order(StringComparer.Ordinal).ToArray();
         return Hash(JsonSerializer.Serialize(new
         {
-            AlgorithmVersion, Account = account, Complete = true,
+            AlgorithmVersion, PaymentRulesVersion = PaymentReceiptMatching.RulesVersion, Account = account, Complete = true,
             Links = existingLinks.OrderBy(p => Normalize(p.Key), StringComparer.Ordinal)
                 .Select(p => new { Receipt = Normalize(p.Key), Order = p.Value.Order!.Key }).ToArray(),
             Receipts = receipts.DistinctBy(r => Normalize(r.Id)).Select(r => JsonSerializer.Serialize(r)).Order(StringComparer.Ordinal).ToArray(),

@@ -7,6 +7,7 @@ namespace CheckboxBatchPrinter.Core.Services;
 /// <summary>Bounded payment evidence for eligible order baskets, never an inference of the receipt's marketplace.</summary>
 internal static class PaymentReceiptMatching
 {
+    internal const int RulesVersion = 2;
     internal sealed record Check(PaymentComparison State, string Reason = "");
     private enum Provider { Unknown, NovaPay, RozetkaPay }
     private static readonly Regex Spaces = new(@"\s+", RegexOptions.CultureInvariant);
@@ -27,7 +28,11 @@ internal static class PaymentReceiptMatching
     {
         if (!AutomaticReceiptLinkPolicy.CanUseAmountFallback(order)) return Provider.Unknown;
         var method = Normalize(order.PaymentMethod);
-        if (order.Key.Marketplace == MarketplaceKind.Prom && method is "ПРОМ-ОПЛАТА" or "ПРОМ ОПЛАТА" or "ПРОМОПЛАТА")
+        // Prom's own installment method settles through RozetkaPay, including Bigl orders.
+        // https://support.prom.ua/hc/uk/articles/19362823022621
+        if (order.Key.Marketplace == MarketplaceKind.Prom && method is "ПРОМ-ОПЛАТА" or "ПРОМ ОПЛАТА" or "ПРОМОПЛАТА" or
+            "ОПЛАТИТИ ЧАСТИНАМИ" or "ОПЛАТИТЬ ЧАСТЯМИ" or
+            "ОПЛАТИТИ ЧАСТИНАМИ ВІД ROZETKA" or "ОПЛАТИТЬ ЧАСТЯМИ ОТ ROZETKA")
             return Provider.RozetkaPay;
         if (method is "ROZETKAPAY" or "ROZETKA PAY" or
             "ПЛАТІЖ ROZETKAPAY" or "ПЛАТЕЖ ROZETKAPAY") return Provider.RozetkaPay;

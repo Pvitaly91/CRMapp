@@ -11,6 +11,9 @@ internal static class PaymentMatchingTests
         ("names: complete surface mount housing accessory and mixed-kit names compare without category dictionary", Run(HousingAndMounting)),
         ("payments: exact different names precede payment while missing baskets remain competitors", Run(PaymentNeedsIdenticalBaskets)),
         ("payments: equal amount and quantity Prom orders resolve NovaPay versus Prom-payment receipts", Run(PromPaymentPair)),
+        ("payments: Prom installments distinguish identical baskets from Nova Poshta COD", Run(PromInstallmentPair)),
+        ("payments: installment aliases are Prom-specific and uncertain methods stay ambiguous", Run(InstallmentScope)),
+        ("payments: legacy ambiguous installment snapshot is recalculated without losing cached details", Run(InstallmentCacheRefresh)),
         ("payments: explicit Ukrainian Russian and case variants split identical complete baskets", Run(Variants)),
         ("payments: generic custom unsupported and missing methods remain competing graph nodes", Run(UnknownMethods)),
         ("payments: mixed partial negative unknown cash and overflow receipt payments stay uncertain", Run(PartialPayments)),
@@ -131,6 +134,85 @@ internal static class PaymentMatchingTests
     private static IReadOnlyDictionary<string, ReceiptOrderMatch> Match(ReceiptRecord[] receipts, MarketplaceOrder[] orders,
         IReadOnlyDictionary<string, ReceiptDetails>? details = null, bool complete = true, IReadOnlyList<ReceiptOrderDecision>? decisions = null) =>
         new ReceiptOrderMatchingService().MatchAll(receipts, "payment-test-account", orders, decisions ?? [], complete, details);
+
+    private static void PromInstallmentPair()
+    {
+        var receipts = new[] { Receipt(1, "Платіж NovaPay"), Receipt(2, "Платіж RozetkaPay") };
+        foreach (var method in new[] { "Оплатить частями", "Оплатити частинами", "Оплатити частинами від Rozetka",
+                     "Оплатить частями от Rozetka", "  ОПЛАТИТЬ\u00a0ЧАСТЯМИ  " })
+        {
+            var orders = new[] { Order(1, "Наложенный платеж"), Order(2, method) };
+            var details = Details(receipts, orders);
+            foreach (var rows in new[] { receipts, receipts.Reverse().ToArray() })
+            foreach (var candidates in new[] { orders, orders.Reverse().ToArray() })
+            {
+                var result = Match(rows, candidates, details);
+                for (var i = 0; i < 2; i++)
+                {
+                    Equal(ReceiptLinkState.Suggested, result[receipts[i].Id].State);
+                    Equal(orders[i].Key, result[receipts[i].Id].Order?.Key);
+                    Equal(AutomaticLinkBasis.AmountAndPayment, result[receipts[i].Id].Basis);
+                    Equal(PaymentComparison.Match, result[receipts[i].Id].Payments);
+                }
+            }
+            var cache = new AutomaticMatchCache(); var service = new CachedReceiptOrderMatchingService();
+            service.MatchAll(cache, receipts, "payment-test-account", orders, [], true, details);
+            var restarted = System.Text.Json.JsonSerializer.Deserialize<AutomaticMatchCache>(
+                System.Text.Json.JsonSerializer.Serialize(cache))!;
+            var restored = service.RestoreKnownSuggestions(restarted, receipts, "payment-test-account", orders, [], details);
+            for (var i = 0; i < 2; i++) Equal(orders[i].Key, restored[receipts[i].Id].Order?.Key);
+        }
+    }
+
+    private static void InstallmentScope()
+    {
+        var receipts = new[] { Receipt(1, "Платіж NovaPay"), Receipt(2, "Платіж RozetkaPay") };
+        var cod = Order(1, "Післяплата"); var installment = Order(2, "Оплатить частями");
+        var unknown = installment with { Key = installment.Key with { Marketplace = MarketplaceKind.Rozetka } };
+        Check(Match(receipts, [cod, unknown], Details(receipts, [cod, unknown])).Values.All(m => m.Order is null),
+            "A Prom installment alias was inferred for another marketplace.");
+        foreach (var method in new[] { "Оплатить частями або NovaPay", "Оплата частинами через сторонній банк", "Оплатить частями тест" })
+        {
+            unknown = installment with { PaymentMethod = method };
+            Check(Match(receipts, [cod, unknown], Details(receipts, [cod, unknown])).Values.All(m => m.Order is null),
+                "An unrecognized custom installment label removed a competitor.");
+        }
+        Check(Match(receipts, [cod, installment]).Values.All(m => m.Order is null),
+            "Installments replaced missing product evidence.");
+        Check(Match(receipts, [cod, installment], Details(receipts, [cod, installment]), complete: false)
+            .Values.All(m => m.Order is null), "Installments ignored incomplete coverage.");
+    }
+
+    private static void InstallmentCacheRefresh()
+    {
+        var receipts = new[] { Receipt(1, "Платіж NovaPay"), Receipt(2, "Платіж RozetkaPay") };
+        var orders = new[] { Order(1, "Наложенный платеж"), Order(2, "Оплатить частями") };
+        var details = Details(receipts, orders);
+        var service = new CachedReceiptOrderMatchingService(); var cache = new AutomaticMatchCache();
+        foreach (var receipt in receipts) service.RememberDetails(cache, "payment-test-account", receipt, details[receipt.Id]);
+        service.MatchAll(cache, receipts, "payment-test-account", orders, [], true, details);
+        cache.Links.Clear();
+        // Fingerprint captured from the unmodified 1.0.74 matcher for these synthetic inputs.
+        // Keep the real old key so this also detects replaying a previously cached ambiguity.
+        cache.Snapshots = cache.Snapshots.Select(snapshot => snapshot with
+        {
+            InputFingerprint = "EEDA933BC8D1647C4EE9AAC8EA4416BC305ED6993490EB3EB5659B85C1E7BFAB",
+            Matches = snapshot.Matches.ToDictionary(pair => pair.Key, pair => pair.Value with
+            {
+                State = ReceiptLinkState.Candidates, Order = null, Basis = AutomaticLinkBasis.None,
+                Ambiguous = true, Candidates = orders.Select(order => order.Key).ToArray()
+            })
+        }).ToList();
+        var restarted = System.Text.Json.JsonSerializer.Deserialize<AutomaticMatchCache>(
+            System.Text.Json.JsonSerializer.Serialize(cache))!;
+        Check(!service.TryRestore(restarted, receipts, "payment-test-account", orders, [], out _, details),
+            "The old unresolved installment graph was replayed.");
+        Check(receipts.All(receipt => service.TryGetDetails(restarted, "payment-test-account", receipt, out _)),
+            "Refreshing payment rules discarded receipt details.");
+        var result = service.MatchAll(restarted, receipts, "payment-test-account", orders, [], true, details);
+        Check(!result.CacheHit, "The installment graph was not recalculated.");
+        for (var i = 0; i < 2; i++) Equal(orders[i].Key, result.Matches[receipts[i].Id].Order?.Key);
+    }
 
     private static void Variants()
     {
