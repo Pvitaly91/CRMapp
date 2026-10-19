@@ -27,7 +27,7 @@ public sealed partial class MarketplaceOrderRowViewModel
         var problems = ProblemOrderRules.Evaluate(Model, hasReceipt, statuses, now);
         ProblemReason = string.Join("\n", problems.Select(p => p.Reason));
         ProblemPriority = problems.Count == 0 ? int.MaxValue : problems.Min(p => p.Priority);
-        ProblemTracking = string.Join("\n", ShipmentLinks.Select(s => $"{s.TrackingNumber}: {s.TrackingStatus}"));
+        ProblemTracking = string.Join("\n", ShipmentLinks.Select(s => s.TrackingStatus));
         ProblemChecked = Model.Shipments.Any(s => !string.IsNullOrWhiteSpace(s.TrackingNumber))
             ? string.Join("\n", ShipmentLinks.Select(s => s.TrackingStatusToolTip)) : "ТТН ще немає";
         ProblemChecked += $"\nЗамовлення перевірено: {TimeZoneInfo.ConvertTime(Model.RetrievedAtUtc, DateRangeBuilder.KyivZone):dd.MM.yyyy HH:mm}";

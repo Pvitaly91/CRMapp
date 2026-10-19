@@ -840,14 +840,32 @@
                                     </ItemsControl>
                                 </StackPanel></DataTemplate></DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <controls:DashboardTextColumn Header="ТТН / статус доставки" Binding="{Binding ProblemTracking}" Width="310">
-                                <controls:DashboardTextColumn.ElementStyle>
-                                    <Style TargetType="controls:DashboardTextBox" BasedOn="{StaticResource DashboardTextStyle}">
-                                        <Setter Property="TextWrapping" Value="Wrap" />
-                                        <Setter Property="ToolTip" Value="{Binding ProblemChecked}" />
-                                    </Style>
-                                </controls:DashboardTextColumn.ElementStyle>
-                            </controls:DashboardTextColumn>
+                            <DataGridTemplateColumn Header="ТТН" Width="165" SortMemberPath="TrackingDisplay" ClipboardContentBinding="{Binding TrackingDisplay}">
+                                <DataGridTemplateColumn.CellTemplate><DataTemplate>
+                                    <ItemsControl ItemsSource="{Binding ShipmentLinks}">
+                                        <ItemsControl.ItemTemplate><DataTemplate>
+                                            <Button Tag="ProblemTrackingCopy" Content="{Binding TrackingNumber}" Cursor="Hand"
+                                                    Padding="4,3" Margin="0,3" MinHeight="22" BorderThickness="0" Background="Transparent"
+                                                    Foreground="#0066CC" HorizontalContentAlignment="Left"
+                                                    ToolTip="Скопіювати цю ТТН одним кліком"
+                                                    AutomationProperties.Name="{Binding TrackingNumber, StringFormat=Копіювати ТТН {0}}"
+                                                    Command="{Binding DataContext.Marketplace.CopyShipmentTrackingCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}" />
+                                        </DataTemplate></ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </DataTemplate></DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="Статус доставки" Width="250" ClipboardContentBinding="{Binding ProblemTracking}">
+                                <DataGridTemplateColumn.CellTemplate><DataTemplate>
+                                    <ItemsControl ItemsSource="{Binding ShipmentLinks}">
+                                        <ItemsControl.ItemTemplate><DataTemplate>
+                                            <controls:DashboardTextBox Tag="ProblemTrackingStatus" Style="{StaticResource DashboardTextStyle}"
+                                                Text="{Binding TrackingStatus, Mode=OneWay}" ToolTip="{Binding TrackingStatusToolTip}"
+                                                TextWrapping="Wrap" MaxLines="2" MinHeight="22" Margin="4,3" />
+                                        </DataTemplate></ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </DataTemplate></DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <controls:DashboardTextColumn Header="Магазин" Binding="{Binding Marketplace}" Width="85" />
                             <controls:DashboardTextColumn Header="Покупець" Binding="{Binding BuyerDisplay}" Width="180" />
                             <controls:DashboardTextColumn Header="Оплата" Binding="{Binding Model.PaymentMethod}" Width="160" />

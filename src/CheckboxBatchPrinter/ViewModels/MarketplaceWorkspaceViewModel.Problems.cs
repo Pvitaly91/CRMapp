@@ -1,12 +1,15 @@
 using System.ComponentModel;
 using System.Windows.Data;
+using System.Windows.Input;
 using CheckboxBatchPrinter.Core.Services;
+using CheckboxBatchPrinter.Infrastructure;
 
 namespace CheckboxBatchPrinter.ViewModels;
 
 public sealed partial class MarketplaceWorkspaceViewModel
 {
     public ICollectionView ProblemOrders { get; private set; } = null!;
+    public ICommand CopyShipmentTrackingCommand { get; private set; } = null!;
     private string _problemSearch = "", _problemFilter = "Усі";
     private string _problemPeriod = "Останні 14 днів";
     private DateTimeOffset _problemNow = DateTimeOffset.UtcNow;
@@ -38,6 +41,10 @@ public sealed partial class MarketplaceWorkspaceViewModel
 
     private void InitializeProblems()
     {
+        CopyShipmentTrackingCommand = new RelayCommand(parameter =>
+        {
+            if (CanCopyShipmentTracking(parameter)) _dialogs.CopyText(((OrderShipmentLink)parameter!).TrackingNumber);
+        }, CanCopyShipmentTracking);
         ProblemOrders = new ListCollectionView(_orderRows) { Filter = value => value is MarketplaceOrderRowViewModel row &&
             InProblemPeriod(row) && row.ProblemReason.Length > 0 && (ProblemFilter == "Усі" ||
                 ProblemFilter == "Зберігання" && row.ProblemPriority < 3 ||
@@ -62,6 +69,10 @@ public sealed partial class MarketplaceWorkspaceViewModel
     private void RefreshProblemView()
     {
         ProblemOrders.Refresh();
+        ((RelayCommand)CopyShipmentTrackingCommand).RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(ProblemSummary));
     }
+
+    private bool CanCopyShipmentTracking(object? parameter) => parameter is OrderShipmentLink link &&
+        link.TrackingNumber.Length > 0 && _orderRows.Contains(link.Row) && link.Row.Model.Shipments.Contains(link.Shipment);
 }
