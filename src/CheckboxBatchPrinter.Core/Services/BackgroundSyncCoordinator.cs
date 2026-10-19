@@ -217,5 +217,9 @@ public sealed class BackgroundSyncCoordinator : IAsyncDisposable
         finally { _shutdown.Dispose(); }
     }
 
-    public void Stop() => _shutdown.Cancel();
+    public void Stop()
+    {
+        lock (_gate)
+            if (!_disposed) _shutdown.Cancel();
+    }
 }

@@ -68,8 +68,7 @@ public sealed class AuthenticationService(
         request.Headers.TryAddWithoutValidation("X-Client-Name", "Checkbox Batch Printer");
         request.Headers.TryAddWithoutValidation("X-Client-Version", "1.0.0");
 
-        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-            .ConfigureAwait(false);
+        using var response = await SendSignInAsync(request, cancellationToken).ConfigureAwait(false);
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         logger.Info("checkbox.signin", httpStatus: (int)response.StatusCode);
         if (!response.IsSuccessStatusCode)
@@ -79,6 +78,18 @@ public sealed class AuthenticationService(
         if (!json.RootElement.TryGetProperty("access_token", out var tokenElement) || string.IsNullOrWhiteSpace(tokenElement.GetString()))
             throw new ApiException("Checkbox не повернув access_token.", response.StatusCode);
         return tokenElement.GetString()!;
+    }
+
+    private async Task<HttpResponseMessage> SendSignInAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await httpClient.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new ApiException("Перевищено час авторизації Checkbox.", HttpStatusCode.RequestTimeout, inner: exception);
+        }
     }
 
     internal static string? ExtractMessage(string body)

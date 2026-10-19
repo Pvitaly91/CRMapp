@@ -28,8 +28,12 @@ public sealed class MarketplaceHttpTransport(HttpClient client,
             cancellationToken.ThrowIfCancellationRequested();
             using var request = requestFactory();
             ValidateRequest(request, marketplace);
+            // Streaming keeps the size limit effective. Own the deadline until the body
+            // is complete because HttpClient's ResponseHeadersRead deadline ends early.
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(client.Timeout == Timeout.InfiniteTimeSpan ? TimeSpan.FromSeconds(45) : client.Timeout);
             HttpResponseMessage response;
-            try { response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false); }
+            try { response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false); }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 if (attempt == attempts - 1) throw new MarketplaceApiException($"{marketplace}: перевищено час очікування API.");
@@ -48,17 +52,22 @@ public sealed class MarketplaceHttpTransport(HttpClient client,
                 {
                     if (response.Content.Headers.ContentLength > 16 * 1024 * 1024)
                         throw new MarketplaceApiException($"{marketplace}: відповідь перевищує допустимий розмір.");
-                    await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-                    using var buffer = new MemoryStream();
-                    var bytes = new byte[8192];
-                    int length;
-                    while ((length = await stream.ReadAsync(bytes, cancellationToken).ConfigureAwait(false)) > 0)
+                    try
                     {
-                        if (buffer.Length + length > 16 * 1024 * 1024)
-                            throw new MarketplaceApiException($"{marketplace}: відповідь перевищує допустимий розмір.");
-                        buffer.Write(bytes, 0, length);
+                        await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+                        using var buffer = new MemoryStream();
+                        var bytes = new byte[8192];
+                        int length;
+                        while ((length = await stream.ReadAsync(bytes, timeout.Token).ConfigureAwait(false)) > 0)
+                        {
+                            if (buffer.Length + length > 16 * 1024 * 1024)
+                                throw new MarketplaceApiException($"{marketplace}: відповідь перевищує допустимий розмір.");
+                            buffer.Write(bytes, 0, length);
+                        }
+                        return Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
                     }
-                    return Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                    { throw new MarketplaceApiException($"{marketplace}: перевищено час очікування повної відповіді API."); }
                 }
                 if (attempt < attempts - 1 && (response.StatusCode is HttpStatusCode.RequestTimeout or (HttpStatusCode)429 || (int)response.StatusCode >= 500))
                 {

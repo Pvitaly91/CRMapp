@@ -349,8 +349,12 @@ public partial class App : Application
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         _logger?.Error("app.unhandled", e.Exception);
-        MessageBox.Show(MainWindow, $"Непередбачена помилка: {e.Exception.Message}", "Checkbox Batch Printer",
-            MessageBoxButton.OK, MessageBoxImage.Error);
         e.Handled = true;
+        if (_exiting || Dispatcher.HasShutdownStarted) return;
+        var message = $"Непередбачена помилка: {e.Exception.Message}";
+        if (MainWindow is { } owner)
+            MessageBox.Show(owner, message, "Checkbox Batch Printer", MessageBoxButton.OK, MessageBoxImage.Error);
+        else
+            MessageBox.Show(message, "Checkbox Batch Printer", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 }

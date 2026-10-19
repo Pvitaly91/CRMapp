@@ -40,8 +40,14 @@ public sealed class CheckboxApiClient(HttpClient httpClient, IAuthenticationServ
             HttpResponseMessage response;
             try
             {
-                response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                // Buffer within SendAsync so HttpClient.Timeout covers the body, not only headers.
+                response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken)
                     .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                logger.Error(operation, exception, receiptId);
+                throw new ApiException("Перевищено час читання відповіді Checkbox.", HttpStatusCode.RequestTimeout, inner: exception);
             }
             catch (HttpRequestException exception) when (attempt < MaxTransientAttempts)
             {
