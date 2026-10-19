@@ -25,14 +25,17 @@ public sealed partial class MainViewModel
     public Task RefreshShipmentTrackingAsync(bool force = false, CancellationToken cancellationToken = default)
     {
         if (_shipmentTracking is null || Marketplace is null) return Task.CompletedTask;
-        var visible = Marketplace.Orders.Cast<MarketplaceOrderRowViewModel>().Select(row => row.Model).ToArray();
+        var visible = (IsProblemOrdersTab ? Marketplace.AllOrderRows.Where(row => !row.Model.IsCanceled &&
+                !ProblemOrderRules.IsCompletedOrder(row.Model)) : Marketplace.Orders.Cast<MarketplaceOrderRowViewModel>())
+            .Select(row => row.Model).ToArray();
         var now = DateTimeOffset.UtcNow;
         var requested = visible.Select(order => order with { Shipments = order.Shipments.Where(shipment =>
         {
             var status = ResolveTracking(order.Key, shipment);
             var identity = (ShippingCarrierNames.FromDocumentedDeliveryField(shipment.Carrier), shipment.TrackingNumber.Trim(), (OrderKey?)order.Key);
             return !string.IsNullOrWhiteSpace(shipment.TrackingNumber) &&
-                (force || (status is null || now - status.CheckedAtUtc > TrackingCacheAge) &&
+                (force || (status is null || now - status.CheckedAtUtc > TrackingCacheAge ||
+                    IsProblemOrdersTab && status.Carrier == ShippingCarrier.NovaPoshta && status.StatusCode.Length == 0) &&
                     (!_trackingAttempts.TryGetValue(identity, out var attempted) || now - attempted > TimeSpan.FromMinutes(1)));
         }).ToArray() }).Where(order => order.Shipments.Count > 0).ToArray();
         PublishShipmentTrackingStatuses();
@@ -118,10 +121,15 @@ public sealed partial class MainViewModel
     {
         var carrier = ShippingCarrierNames.FromDocumentedDeliveryField(shipment.Carrier);
         var number = shipment.TrackingNumber.Trim();
-        return new[] { _liveTracking.GetValueOrDefault((carrier, number, order)),
+        var resolved = new[] { _liveTracking.GetValueOrDefault((carrier, number, order)),
             _liveTracking.GetValueOrDefault((carrier, number, null)), _waybillTracking.GetValueOrDefault((carrier, number, order)) }
             .OfType<ShipmentTrackingStatus>().Where(status => status.ShipmentId.Length == 0 || shipment.ShipmentId.Length == 0 ||
                 status.ShipmentId == shipment.ShipmentId).MaxBy(status => status.CheckedAtUtc);
+        // A list refresh can repeat the same state without storage fields. Preserve the dated
+        // tracking observation (including its real timestamp), but never carry dates across states.
+        var detailed = _liveTracking.GetValueOrDefault((carrier, number, null));
+        return carrier == ShippingCarrier.NovaPoshta && detailed is not null && resolved?.Status == detailed.Status &&
+            resolved.StatusCode.Length == 0 ? detailed : resolved;
     }
 
     private void ImportWaybillTrackingStatuses(ShippingLabelSettings settings)
@@ -174,8 +182,10 @@ public sealed partial class MainViewModel
                     return _trackingFailures.Contains(identity) ? new OrderShipmentTrackingStatus(shipment,
                         "Статус недоступний", ShippingCarrierNames.Display(carrier), _trackingAttempts.GetValueOrDefault(identity)) : null;
                 return new OrderShipmentTrackingStatus(shipment, status.Status, status.Source, status.CheckedAtUtc,
-                    now - status.CheckedAtUtc > TrackingCacheAge || _trackingFailures.Contains((carrier, shipment.TrackingNumber.Trim(), row.Key)));
+                    now - status.CheckedAtUtc > TrackingCacheAge || _trackingFailures.Contains((carrier, shipment.TrackingNumber.Trim(), row.Key)))
+                    { Details = status };
             }).OfType<OrderShipmentTrackingStatus>());
+        Marketplace.RefreshProblems(now);
     }
 
     private void ResetShipmentTracking()

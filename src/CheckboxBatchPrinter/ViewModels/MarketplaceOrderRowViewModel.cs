@@ -4,7 +4,7 @@ using CheckboxBatchPrinter.Infrastructure;
 
 namespace CheckboxBatchPrinter.ViewModels;
 
-public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : ObservableObject
+public sealed partial class MarketplaceOrderRowViewModel(MarketplaceOrder model) : ObservableObject
 {
     public MarketplaceOrder Model { get; private set; } = model;
     public OrderKey Key => Model.Key;
@@ -213,7 +213,10 @@ public sealed class MarketplaceOrderRowViewModel(MarketplaceOrder model) : Obser
 
 // A carrier status projection, deliberately separate from the cached marketplace order.
 public sealed record OrderShipmentTrackingStatus(OrderShipment Shipment, string Status, string Source = "",
-    DateTimeOffset? CheckedAtUtc = null, bool IsStale = false);
+    DateTimeOffset? CheckedAtUtc = null, bool IsStale = false)
+{
+    public ShipmentTrackingStatus? Details { get; init; }
+}
 public sealed record OrderShipmentCabinetPrintStatus(OrderShipment Shipment, bool? Printed, string Source = "Кабінет НП",
     string PrintedAtText = "", DateTimeOffset? CheckedAtUtc = null);
 

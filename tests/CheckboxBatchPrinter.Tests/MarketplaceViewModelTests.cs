@@ -42,6 +42,7 @@ internal static partial class MarketplaceViewModelTests
         ("STA same-document waybill restoration preserves fresh cabinet flags and independent local submission", () => StaAsync(WaybillCabinetPrintRestoreAsync)),
         ("STA manual waybill reprint carries only selected positive cabinet evidence without fabricating history", () => StaAsync(WaybillCabinetPrintPreviewAsync)),
         ("STA waybill automatic retry excludes externally printed labels while local retries remain durable", () => StaAsync(WaybillCabinetPrintRetryAsync)),
+        ("STA problem orders use all cached history track hidden parcels and clear resolved alerts", () => StaAsync(ProblemOrdersArchiveAsync)),
         ("STA queued parcel tracking coalesces and never blocks unified refresh or receipt printing", () => StaAsync(ShipmentTrackingDoesNotBlockPrintingAsync)),
         ("STA failed and canceled parcel refresh retains the previous status with a stale timestamp explanation", () => StaAsync(ShipmentTrackingFailureKeepsLastStatusAsync)),
         ("STA an uncancellable old tracking response never replaces a changed TTN status", () => StaAsync(ShipmentTrackingLateOldTtnAsync)),
@@ -203,6 +204,7 @@ internal static partial class MarketplaceViewModelTests
                 await WaybillPrintingDashboardAsync();
                 await CombinedPrintPreviewUiAsync();
                 await ShipmentTrackingUiAsync();
+                await ProblemOrdersUiAsync();
                 await ShipmentCabinetPrintUiAsync();
                 Console.WriteLine("XAML assertions and binding cleanup completed.");
                 await DrainDispatcherAsync();
@@ -2141,10 +2143,11 @@ internal static partial class MarketplaceViewModelTests
             var ordersGrid = (DataGrid)mainWindow.FindName("OrdersReceiptsGrid");
             var marketplaceOrdersGrid = (DataGrid)mainWindow.FindName("MarketplaceOrdersGrid");
             True(tabs is not null && allGrid is not null && ordersGrid is not null && marketplaceOrdersGrid is not null);
-            Equal(3, tabs!.Items.Count); Equal(0, tabs.SelectedIndex); Equal(0, main.SelectedTabIndex);
+            Equal(4, tabs!.Items.Count); Equal(0, tabs.SelectedIndex); Equal(0, main.SelectedTabIndex);
             Equal("Усі чеки", ((TabItem)tabs.Items[0]).Header?.ToString());
             Equal("Чеки та замовлення", ((TabItem)tabs.Items[1]).Header?.ToString());
             Equal("Усі накладні", ((TabItem)tabs.Items[2]).Header?.ToString());
+            Equal("Проблемні замовлення", ((TabItem)tabs.Items[3]).Header?.ToString());
             True(ReferenceEquals(main.AllReceiptsTab.View, allGrid!.ItemsSource));
             True(ReferenceEquals(main.OrdersReceiptsTab.View, ordersGrid!.ItemsSource));
             True(ReferenceEquals(workspace.Orders, marketplaceOrdersGrid!.ItemsSource));

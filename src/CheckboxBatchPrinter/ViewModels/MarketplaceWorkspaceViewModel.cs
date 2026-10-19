@@ -76,6 +76,7 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
         _autoLinkEnabled = autoLinkEnabled;
         Orders = new ListCollectionView(_orderRows) { Filter = MatchesOrderFilter };
         Orders.SortDescriptions.Add(new(nameof(MarketplaceOrderRowViewModel.CreatedAt), ListSortDirection.Descending));
+        InitializeProblems();
         Orders.CollectionChanged += (_, _) => UpdateDisplayedOrderNumbers();
         SyncCommand = new AsyncRelayCommand(_ => SyncAsync(), _ => !IsBusy && !IsWorkspaceRefreshing && (_account.Length > 0 || _orderDatesValid));
         ExpandCommand = new AsyncRelayCommand(async _ => { _extraHistory = Math.Min(_extraHistory + 30, 3650); await SyncAsync(); }, _ => !IsBusy && !IsWorkspaceRefreshing && (_account.Length > 0 || _orderDatesValid));
@@ -692,6 +693,7 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
     private void RefreshOrdersView()
     {
         Orders.Refresh();
+        RefreshProblems();
         if (_selectedOrder is not null && !Orders.Contains(_selectedOrder)) SelectedOrder = null;
         OnPropertyChanged(nameof(OrderListSummary)); RaiseCommands();
     }

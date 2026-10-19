@@ -113,15 +113,15 @@ public sealed partial class MainViewModel : ObservableObject
             if (string.Equals(parameter as string, "to", StringComparison.Ordinal)) DateTo = null;
         });
         SelectAllCommand = new RelayCommand(_ => { if (IsWaybillsTab) Waybills?.SelectVisibleCommand.Execute(null); else SelectVisible(true); },
-            _ => !IsBusy && (IsWaybillsTab ? Waybills?.SelectVisibleCommand.CanExecute(null) == true : Receipts.Count > 0));
+            _ => !IsBusy && !IsProblemOrdersTab && (IsWaybillsTab ? Waybills?.SelectVisibleCommand.CanExecute(null) == true : Receipts.Count > 0));
         ClearSelectionCommand = new RelayCommand(_ => { if (IsWaybillsTab) Waybills?.ClearSelectionCommand.Execute(null); else ClearSelection(); },
-            _ => !IsBusy && (IsWaybillsTab ? Waybills?.ClearSelectionCommand.CanExecute(null) == true && SelectedCount > 0 : SelectedCount > 0));
+            _ => !IsBusy && !IsProblemOrdersTab && (IsWaybillsTab ? Waybills?.ClearSelectionCommand.CanExecute(null) == true && SelectedCount > 0 : SelectedCount > 0));
         PrintSelectedCommand = new AsyncRelayCommand(_ => IsWaybillsTab && Waybills is not null ? Waybills.RunAsync(null, true) : PrintSelectedAsync(),
-            _ => !IsBusy && (IsWaybillsTab ? Waybills?.PrintSelectedCommand.CanExecute(null) == true : VisibleSelectedCount > 0));
+            _ => !IsBusy && !IsProblemOrdersTab && (IsWaybillsTab ? Waybills?.PrintSelectedCommand.CanExecute(null) == true : VisibleSelectedCount > 0));
         PrintOrdersWithReceiptsCommand = new AsyncRelayCommand(_ => PrintOrdersWithReceiptsAsync(), _ => CanPrintOrdersWithReceipts);
         PrintOrderReceiptsCommand = new AsyncRelayCommand(_ => PrintOrderReceiptsAsync(), _ => CanPrintOrderReceipts);
         RetryFailedCommand = new AsyncRelayCommand(_ => IsWaybillsTab && Waybills is not null ? Waybills.RunAsync(null, true, true) : RetryFailedAsync(),
-            _ => !IsBusy && (IsWaybillsTab ? Waybills?.RetryFailedCommand.CanExecute(null) == true : FailedCount > 0));
+            _ => !IsBusy && !IsProblemOrdersTab && (IsWaybillsTab ? Waybills?.RetryFailedCommand.CanExecute(null) == true : FailedCount > 0));
         PreviewCommand = new AsyncRelayCommand(p => IsWaybillsTab && Waybills is not null ?
             Waybills.RunAsync(p as WaybillRowViewModel ?? Waybills.SelectedRow, false) : PreviewAsync(p),
             p => !IsBusy && (IsWaybillsTab ? Waybills?.PreviewCommand.CanExecute(p) == true : true));
@@ -136,6 +136,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (Marketplace is not null) Marketplace.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(Marketplace.Labels)) ObserveRefreshLabels();
+            if (IsProblemOrdersTab && e.PropertyName == nameof(Marketplace.ProblemSearch)) OnPropertyChanged(nameof(SearchText));
         };
         ObserveRefreshLabels();
         foreach (var tab in new[] { AllReceiptsTab, OrdersReceiptsTab })
@@ -166,9 +167,10 @@ public sealed partial class MainViewModel : ObservableObject
         get => _selectedTabIndex;
         set
         {
-            if (value is not (0 or 1 or 2) || !SetProperty(ref _selectedTabIndex, value)) return;
+            if (value is not (0 or 1 or 2 or 3) || !SetProperty(ref _selectedTabIndex, value)) return;
             OnPropertyChanged(nameof(IsWaybillsTab));
             OnPropertyChanged(nameof(IsReceiptTab));
+            OnPropertyChanged(nameof(IsProblemOrdersTab));
             OnPropertyChanged(nameof(ActiveTab));
             OnPropertyChanged(nameof(ReceiptsView));
             OnPropertyChanged(nameof(SearchText));
@@ -179,6 +181,7 @@ public sealed partial class MainViewModel : ObservableObject
             if (value == 2) _dateLoadCancellation?.Cancel();
             else ApplyDisplayDates();
             if (value == 1) _ = PrepareOrdersAsync();
+            if (value == 3) _ = PrepareProblemOrdersAsync();
         }
     }
     public Task PrepareOrdersAsync()
@@ -191,7 +194,14 @@ public sealed partial class MainViewModel : ObservableObject
     public MarketplaceWorkspaceViewModel? Marketplace { get; }
     public WaybillsViewModel? Waybills { get; }
     public bool IsWaybillsTab => SelectedTabIndex == 2;
-    public bool IsReceiptTab => !IsWaybillsTab;
+    public bool IsProblemOrdersTab => SelectedTabIndex == 3;
+    public bool IsReceiptTab => SelectedTabIndex is 0 or 1;
+    private async Task PrepareProblemOrdersAsync()
+    {
+        await PrepareOrdersAsync();
+        Marketplace?.RefreshProblems();
+        QueueShipmentTrackingRefresh();
+    }
     public Task RefreshActiveAsync() => IsWaybillsTab && Waybills is not null ? Waybills.RefreshAsync() : RefreshAsync();
 
     public async Task UpdateWaybillOrderAssociationsAsync()
@@ -277,8 +287,13 @@ public sealed partial class MainViewModel : ObservableObject
         DateFrom is { } from ? DateOnly.FromDateTime(from) : null, DateTo is { } to ? DateOnly.FromDateTime(to) : null);
     public string SearchText
     {
-        get => IsWaybillsTab && Waybills is not null ? Waybills.SearchText : ActiveTab.SearchText;
-        set { if (IsWaybillsTab && Waybills is not null) Waybills.SearchText = value; else ActiveTab.SearchText = value; }
+        get => IsProblemOrdersTab ? Marketplace?.ProblemSearch ?? "" : IsWaybillsTab && Waybills is not null ? Waybills.SearchText : ActiveTab.SearchText;
+        set
+        {
+            if (IsProblemOrdersTab && Marketplace is not null) Marketplace.ProblemSearch = value;
+            else if (IsWaybillsTab && Waybills is not null) Waybills.SearchText = value;
+            else ActiveTab.SearchText = value;
+        }
     }
     public ReceiptTypeOption? SelectedType
     {

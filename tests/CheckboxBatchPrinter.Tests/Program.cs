@@ -90,6 +90,7 @@ internal static class Program
         Tests.AddRange(AppEnvironmentTests.All);
         Tests.AddRange(BackgroundSyncTests.All);
         Tests.AddRange(HttpReadTimeoutTests.All);
+        Tests.AddRange(ProblemOrderTests.All);
         Tests.AddRange(OrderNotificationTests.All);
         Tests.AddRange(RozetkaOrdersTests.All);
         Tests.AddRange(MarketplaceMatchingTests.All);

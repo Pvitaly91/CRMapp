@@ -7,6 +7,9 @@ public sealed record ShipmentTrackingStatus(ShippingCarrier Carrier, string Trac
 {
     // Seller-only status is scoped to the account/order that supplied the verified document.
     public OrderKey? Order { get; init; }
+    public string StatusCode { get; init; } = "";
+    public DateTimeOffset? ArrivedAt { get; init; }
+    public DateOnly? PaidStorageStartsOn { get; init; }
 }
 
 public sealed record ShipmentTrackingFetchResult(IReadOnlyList<ShipmentTrackingStatus> Statuses,

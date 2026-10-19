@@ -7,7 +7,7 @@ public sealed partial class MarketplaceWorkspaceViewModel
     private bool CanChooseReceiptForOrder(MarketplaceOrderRowViewModel? order) =>
         order is not null && _account.Length > 0 && _canApply && HasEnabledConnections &&
         !IsBusy && !IsWorkspaceRefreshing && CanChooseReceipt?.Invoke() != false &&
-        _orderRows.Contains(order) && Orders.Contains(order) && order.HasNoReceiptLink;
+        _orderRows.Contains(order) && (Orders.Contains(order) || ProblemOrders.Contains(order)) && order.HasNoReceiptLink;
 
     private HashSet<string> ClaimedReceiptIds() => ActiveDecisions
         .Where(decision => decision.AccountContext == _account)

@@ -12,6 +12,7 @@ internal static class ShipmentTrackingTests
 {
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
+        ("shipment tracking retains verified NP storage dates without personal data and ignores malformed optional dates", StorageDates),
         ("shipment tracking reads public NP statuses in bounded distinct batches without any saved API key or personal data", PublicBulk),
         ("shipment tracking rejects unexpected, duplicate, missing and invalid response identities before publishing any chunk", InvalidResponses),
         ("shipment tracking preserves completed chunks when another chunk fails and sanitizes API errors", PartialFailure),
@@ -19,6 +20,35 @@ internal static class ShipmentTrackingTests
         ("shipment tracking cancellation reaches active reads and never requests the next batch", Cancellation),
         ("shipment tracking public requests share NP cooldown without retries and resume after its full deadline", PublicCooldown)
     ];
+
+    private static async Task StorageDates()
+    {
+        object ResponseRow(string arrival, string firstDay, string paid) => new
+        {
+            Number = Number(1), Status = "Прибув у відділення", StatusCode = "7",
+            ActualDeliveryDate = arrival, DateFirstDayStorage = firstDay, DatePayedKeeping = paid,
+            RecipientFullName = "PRIVATE_BUYER", RecipientPhone = "PRIVATE_PHONE"
+        };
+        var rows = new[]
+        {
+            ResponseRow("2026-10-14 17:58:10", "2026-10-20", "2026-10-20 17:58:10"),
+            ResponseRow("14-10-2026 10:53:05", "", "2026-10-20 10:53:05"),
+            ResponseRow("tomorrow", "0001-01-01", "invalid"),
+            ResponseRow("2026-03-29 03:30:00", "not a date", "")
+        };
+        var index = 0;
+        using var client = new HttpClient(new Handler((_, _) => Task.FromResult(Response(rows[index++]))));
+        for (var n = 0; n < rows.Length; n++)
+        {
+            var result = await Service(client).FetchAsync([Order(1)]);
+            Check(result.Errors.Count == 0 && result.Statuses.Count == 1, "Optional date parsing discarded the valid status.");
+            var status = result.Statuses[0];
+            Check(status.StatusCode == "7", "Carrier code not retained.");
+            Check(n < 2 ? status.PaidStorageStartsOn == new DateOnly(2026, 10, 20) && status.ArrivedAt?.Offset == TimeSpan.FromHours(3)
+                : status.PaidStorageStartsOn is null && status.ArrivedAt is null, "Dates were guessed or interpreted outside Kyiv.");
+            Check(!JsonSerializer.Serialize(status).Contains("PRIVATE_"), "Storage lookup retained customer details.");
+        }
+    }
 
     private sealed class Clock : TimeProvider
     {

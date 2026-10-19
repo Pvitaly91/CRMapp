@@ -24,6 +24,14 @@ public partial class MainWindow : Window
         BindPrintCandidates(OrdersPrintCandidatesButton, "Marketplace.Labels");
         Title = Infrastructure.AppEnvironment.WindowTitle;
         Loaded += OnLoaded;
+        var problemClock = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
+        problemClock.Tick += (_, _) =>
+        {
+            if (DataContext is MainViewModel { IsProblemOrdersTab: true } viewModel)
+                viewModel.Marketplace?.RefreshProblems();
+        };
+        Loaded += (_, _) => problemClock.Start();
+        Closed += (_, _) => problemClock.Stop();
     }
 
     private void BindHeaderToggle(CheckBox toggle, string ownerPath)

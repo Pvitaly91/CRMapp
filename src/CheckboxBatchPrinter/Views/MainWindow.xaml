@@ -790,6 +790,69 @@
                     </DataGrid>
                 </DockPanel>
             </TabItem>
+            <TabItem Header="Проблемні замовлення">
+                <DockPanel Margin="8">
+                    <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,5">
+                        <TextBlock Text="Показувати:" VerticalAlignment="Center" Margin="4" />
+                        <ComboBox Width="235" ItemsSource="{Binding Marketplace.ProblemFilters}" SelectedItem="{Binding Marketplace.ProblemFilter}" />
+                        <Button Content="Оновити все" Command="{Binding RefreshAllCommand}" />
+                        <Button Content="Завантажити ще 30 днів" Command="{Binding Marketplace.ExpandCommand}"
+                                ToolTip="Розширити завантажену історію замовлень на 30 днів перед вибраною датою. Старі замовлення з’являться тут після завантаження." />
+                    </WrapPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="{Binding Marketplace.ProblemSummary}" TextWrapping="Wrap" Margin="4,2,4,5" />
+                    <TextBlock DockPanel.Dock="Bottom" Text="{Binding Marketplace.Status}" TextWrapping="Wrap" Margin="4" Foreground="#667085" />
+                    <TextBlock DockPanel.Dock="Bottom" TextWrapping="Wrap" Margin="4,6" Foreground="#667085"
+                               Text="Без чека / ТТН — невідправлені активні замовлення старші за 24 год. Строк зберігання береться з відповіді перевізника; якщо дати немає, вона не вгадується. Наведіть на статус доставки, щоб побачити час перевірки." />
+                    <DataGrid x:Name="ProblemOrdersGrid" ItemsSource="{Binding Marketplace.ProblemOrders}"
+                              Style="{StaticResource DashboardGridPerformanceStyle}" RowStyle="{StaticResource OrderRowStyle}"
+                              AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="True"
+                              SelectionMode="Extended" SelectionUnit="CellOrRowHeader" HeadersVisibility="Column"
+                              ClipboardCopyMode="ExcludeHeader" ContextMenu="{StaticResource DashboardCopyMenu}"
+                              Loaded="Dashboard_Loaded" CurrentCellChanged="Dashboard_CurrentCellChanged" PreviewMouseRightButtonDown="Dashboard_RightClick"
+                              GridLinesVisibility="Horizontal" BorderBrush="#D9DEE7">
+                        <DataGrid.CellStyle><StaticResource ResourceKey="PreserveInactiveRowColor" /></DataGrid.CellStyle>
+                        <DataGrid.Columns>
+                            <controls:DashboardTextColumn Header="Причина" Binding="{Binding ProblemReason}" Width="330">
+                                <controls:DashboardTextColumn.ElementStyle>
+                                    <Style TargetType="controls:DashboardTextBox" BasedOn="{StaticResource DashboardTextStyle}">
+                                        <Setter Property="TextWrapping" Value="Wrap" />
+                                        <Setter Property="Foreground" Value="#9A3412" />
+                                        <Setter Property="FontWeight" Value="SemiBold" />
+                                    </Style>
+                                </controls:DashboardTextColumn.ElementStyle>
+                            </controls:DashboardTextColumn>
+                            <controls:DashboardTextColumn Header="№ замовлення" Binding="{Binding Number}" Width="115" />
+                            <controls:DashboardTextColumn Header="Дата замовлення" Binding="{Binding CreatedAt, StringFormat=dd.MM.yyyy HH:mm}" Width="135" />
+                            <controls:DashboardTextColumn Header="Сума" Binding="{Binding TotalDisplay}" Width="125" />
+                            <DataGridTemplateColumn Header="Чек" Width="130" ClipboardContentBinding="{Binding LinkedReceiptsDisplay}">
+                                <DataGridTemplateColumn.CellTemplate><DataTemplate><StackPanel>
+                                    <Button Content="Прив’язати" Style="{StaticResource LinkReceiptButtonStyle}"
+                                            Command="{Binding DataContext.Marketplace.ChooseReceiptForOrderCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="{Binding}" Visibility="{Binding HasNoReceiptLink, Converter={StaticResource BoolToVisibility}}" />
+                                    <ItemsControl ItemsSource="{Binding LinkedReceipts}">
+                                        <ItemsControl.ItemTemplate><DataTemplate>
+                                            <Button Content="{Binding Serial}" ContentStringFormat="Чек №{0}"
+                                                    Command="{Binding DataContext.PreviewCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" />
+                                        </DataTemplate></ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <controls:DashboardTextColumn Header="ТТН / статус доставки" Binding="{Binding ProblemTracking}" Width="310">
+                                <controls:DashboardTextColumn.ElementStyle>
+                                    <Style TargetType="controls:DashboardTextBox" BasedOn="{StaticResource DashboardTextStyle}">
+                                        <Setter Property="TextWrapping" Value="Wrap" />
+                                        <Setter Property="ToolTip" Value="{Binding ProblemChecked}" />
+                                    </Style>
+                                </controls:DashboardTextColumn.ElementStyle>
+                            </controls:DashboardTextColumn>
+                            <controls:DashboardTextColumn Header="Магазин" Binding="{Binding Marketplace}" Width="85" />
+                            <controls:DashboardTextColumn Header="Покупець" Binding="{Binding BuyerDisplay}" Width="180" />
+                            <controls:DashboardTextColumn Header="Оплата" Binding="{Binding Model.PaymentMethod}" Width="160" />
+                            <controls:DashboardTextColumn Header="Статус замовлення" Binding="{Binding Status}" Width="130" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
         </TabControl>
     </DockPanel>
 </Window>

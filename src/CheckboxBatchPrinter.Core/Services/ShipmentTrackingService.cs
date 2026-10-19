@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Globalization;
 using CheckboxBatchPrinter.Core.Models;
 
 namespace CheckboxBatchPrinter.Core.Services;
@@ -144,8 +145,32 @@ public sealed class ShipmentTrackingService(ShippingLabelHttp http, TimeProvider
             var status = new string(rawStatus.Select(c => char.IsControl(c) ? ' ' : c).ToArray()).Trim();
             if (!expected.Contains(number) || status.Length is < 1 or > 240 || found.ContainsKey(number))
                 throw new InvalidDataException("Неоднозначна відповідь публічного відстеження.");
-            found.Add(number, new(ShippingCarrier.NovaPoshta, number, status, NovaPoshtaTrackingReadOnlyContract.Source, checkedAt));
+            found.Add(number, new(ShippingCarrier.NovaPoshta, number, status, NovaPoshtaTrackingReadOnlyContract.Source, checkedAt)
+            {
+                StatusCode = ReadText(row, "StatusCode"),
+                ArrivedAt = ReadKyivDateTime(row, "ActualDeliveryDate"),
+                PaidStorageStartsOn = ReadDate(row, "DateFirstDayStorage") ?? ReadDate(row, "DatePayedKeeping")
+            });
         }
         return requested.Select(number => found[number]).ToArray();
+    }
+
+    private static string ReadText(JsonElement row, string field) =>
+        row.TryGetProperty(field, out var value) && value.ValueKind == JsonValueKind.String && value.GetString()!.Length <= 64
+            ? value.GetString()!.Trim() : "";
+
+    private static DateOnly? ReadDate(JsonElement row, string field)
+    {
+        var text = ReadText(row, field);
+        if (DateOnly.TryParseExact(text, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) && date.Year >= 2000) return date;
+        return ReadKyivDateTime(row, field) is { } time ? DateRangeBuilder.KyivDate(time) : null;
+    }
+
+    private static DateTimeOffset? ReadKyivDateTime(JsonElement row, string field)
+    {
+        if (!DateTime.TryParseExact(ReadText(row, field), ["yyyy-MM-dd HH:mm:ss", "dd-MM-yyyy HH:mm:ss"],
+            CultureInfo.InvariantCulture, DateTimeStyles.None, out var time) || time.Year < 2000 ||
+            DateRangeBuilder.KyivZone.IsInvalidTime(time) || DateRangeBuilder.KyivZone.IsAmbiguousTime(time)) return null;
+        return new DateTimeOffset(time, DateRangeBuilder.KyivZone.GetUtcOffset(time));
     }
 }
