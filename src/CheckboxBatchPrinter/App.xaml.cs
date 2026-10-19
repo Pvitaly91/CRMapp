@@ -76,7 +76,7 @@ public partial class App : Application
             var marketplaceData = Path.Combine(localData, "Marketplaces");
             var marketplaceSettings = new JsonMarketplaceSettingsStore(Path.Combine(marketplaceData, "marketplace-settings.json"));
             var marketplaceSecrets = new DpapiMarketplaceSecretStore(Path.Combine(marketplaceData, "Secrets"));
-            var marketplaceCache = new DpapiMarketplaceCacheStore(Path.Combine(marketplaceData, "orders.dpapi"));
+            var marketplaceCache = new DpapiMarketplaceCacheStore(Path.Combine(marketplaceData, "orders.dpapi"), preserveExpiredOrders: true);
             var orderLinks = new DpapiReceiptOrderLinkStore(Path.Combine(marketplaceData, "receipt-order-links.dpapi"));
             var automaticLinks = new DpapiAutomaticMatchCacheStore(Path.Combine(marketplaceData, "automatic-matches.dpapi"));
             _marketplaceHttpClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(45) };
@@ -131,7 +131,20 @@ public partial class App : Application
                     new WaybillLabelPreparation(shippingSettings, shippingTransport, npClient, pdfInspector, new WindowsShippingLabelRenderer()),
                     shippingSettings, labelHistory, labelPrinter, labelDialogs), shippingSettings,
                 new CombinedShipmentTrackingService(new ShipmentTrackingService(shippingTransport),
-                    new RozetkaSellerTrackingService(shippingTransport, marketplaceSettings, marketplaceSecrets)));
+                    new RozetkaSellerTrackingService(shippingTransport, marketplaceSettings, marketplaceSecrets)),
+                new DpapiShipmentTrackingCacheStore(Path.Combine(shippingData, "tracking.dpapi")),
+                async token =>
+                {
+                    var account = PrintAccountContext.Create(await settingsService.LoadAsync(token));
+                    var config = await marketplaceSettings.LoadAsync(token);
+                    var scope = new List<object>();
+                    foreach (var connection in config.Connections.Where(c => c.Enabled).OrderBy(c => c.Id, StringComparer.Ordinal))
+                        scope.Add(new { connection.Id, connection.Marketplace,
+                            Credentials = await marketplaceSecrets.LoadAsync(connection.Id, token) });
+                    var bytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new { Account = account, Connections = scope });
+                    try { return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)); }
+                    finally { Array.Clear(bytes); }
+                });
             _viewModel = viewModel;
             viewModel.CoordinatorManaged = true;
             marketplace.CoordinatorManaged = true;
@@ -162,7 +175,7 @@ public partial class App : Application
                 var current = await settingsService.LoadAsync(token);
                 if (viewModel.IsRefreshingAll) throw new BackgroundSourceSkippedException("Триває оновлення всіх даних");
                 var today = DateOnly.FromDateTime(DateRangeBuilder.TodayKyiv);
-                var from = today.AddDays(1 - current.BackgroundWorkingDays);
+                var from = today.AddDays(1 - (viewModel.IsProblemOrdersTab ? 14 : current.BackgroundWorkingDays));
                 var expectedAccount = authentication.HasStoredCredentials ? PrintAccountContext.Create(current) : "";
                 marketplace.SetBackgroundRange(from, today);
                 var started = DateTimeOffset.UtcNow;
@@ -197,12 +210,14 @@ public partial class App : Application
                     if (viewModel.IsRefreshingAll) throw new BackgroundSourceSkippedException("Триває оновлення всіх даних");
                     var today = DateOnly.FromDateTime(DateRangeBuilder.TodayKyiv);
                     viewModel.AdvanceTodayIfFollowing(today.ToDateTime(TimeOnly.MinValue));
-                    await viewModel.BackgroundRefreshAsync(today.AddDays(1 - current.BackgroundWorkingDays), today, token);
+                    await viewModel.BackgroundRefreshAsync(today.AddDays(1 - (viewModel.IsProblemOrdersTab ? 14 : current.BackgroundWorkingDays)), today, token);
                 },
                 token => RefreshBackgroundOrdersAsync(null, token), token => settingsService.LoadAsync(token),
                 parallelOrders: (receiptsSettled, token) => RefreshBackgroundOrdersAsync(receiptsSettled, token),
                 waybills: async token =>
                 {
+                    if (viewModel.IsProblemOrdersTab)
+                        throw new BackgroundSourceSkippedException("Статуси ТТН перевіряються у проблемних замовленнях");
                     if (viewModel.IsBusy || viewModel.IsPrinting || marketplace.Labels?.IsBusy == true ||
                         viewModel.Waybills is not { } waybills || waybills.IsPrintingBusy || waybills.IsBusy)
                         throw new BackgroundSourceSkippedException("Друк або оновлення вже виконується");
@@ -238,14 +253,14 @@ public partial class App : Application
                     try
                     {
                         await viewModel.UpdateWaybillOrderAssociationsAsync();
-                        viewModel.QueueShipmentTrackingRefresh(force: true);
+                        viewModel.QueueShipmentTrackingRefresh();
                     }
                     catch (OperationCanceledException) when (token.IsCancellationRequested) { }
                     catch (Exception exception)
                     {
                         _logger.Error("waybills.background.associations", exception);
                     }
-                });
+                }, minimumAutomaticInterval: () => viewModel.IsProblemOrdersTab ? MainViewModel.ProblemRefreshInterval : TimeSpan.Zero);
             _coordinator.StateChanged += (_, _) =>
             {
                 var states = _coordinator.States;

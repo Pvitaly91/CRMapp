@@ -71,7 +71,8 @@ public sealed class DpapiMarketplaceSecretStore(string directory) : IMarketplace
         Path.Combine(_directory, $"marketplace-{MarketplaceStoreFiles.ConnectionFileId(connectionId)}.dpapi");
 }
 
-public sealed class DpapiMarketplaceCacheStore(string path, TimeProvider? timeProvider = null) : IMarketplaceCacheStore
+public sealed class DpapiMarketplaceCacheStore(string path, TimeProvider? timeProvider = null,
+    bool preserveExpiredOrders = false) : IMarketplaceCacheStore
 {
     private readonly string _path = Path.GetFullPath(path);
     private readonly TimeProvider _clock = timeProvider ?? TimeProvider.System;
@@ -86,10 +87,16 @@ public sealed class DpapiMarketplaceCacheStore(string path, TimeProvider? timePr
         var cutoff = _clock.GetUtcNow().AddDays(-retentionDays);
         var expiredConnections = snapshot.Orders.Where(order => order.RetrievedAtUtc < cutoff)
             .Select(order => order.Key.ConnectionId).ToHashSet(StringComparer.Ordinal);
-        var orders = snapshot.Orders.Where(order => order.RetrievedAtUtc >= cutoff)
+        // The production archive keeps dated history available after restart. Retention
+        // still bounds checkpoint freshness; it must never make old rows look refreshed.
+        var orders = snapshot.Orders.Where(order => preserveExpiredOrders || order.RetrievedAtUtc >= cutoff)
             .Select(PromMoney.RestoreCachedTotal).ToArray();
         var states = snapshot.States.Where(state => state.AttemptedAtUtc >= cutoff)
-            .Select(state => expiredConnections.Contains(state.ConnectionId)
+            .Select(state => (preserveExpiredOrders
+                ? snapshot.Orders.Any(order => order.Key.ConnectionId == state.ConnectionId &&
+                    order.RetrievedAtUtc < cutoff && (order.CreatedAt is not { } created ||
+                        created >= state.Range.From && created < state.Range.ToExclusive))
+                : expiredConnections.Contains(state.ConnectionId))
                 ? state with { Complete = false, Message = "Частина кешу прострочена; потрібне оновлення." }
                 : state).ToArray();
         var retained = new MarketplaceSnapshot(orders, states);
@@ -101,11 +108,20 @@ public sealed class DpapiMarketplaceCacheStore(string path, TimeProvider? timePr
     public async Task SaveAsync(MarketplaceSnapshot snapshot, CancellationToken cancellationToken = default)
     {
         Validate(snapshot);
-        var deduplicated = new MarketplaceSnapshot(snapshot.Orders.GroupBy(order => order.Key)
+        using var lease = await MarketplaceStoreFiles.LockAsync(_path, cancellationToken).ConfigureAwait(false);
+        var archivedOrders = Array.Empty<MarketplaceOrder>();
+        if (preserveExpiredOrders)
+        {
+            var previous = await MarketplaceStoreFiles.ReadProtectedAsync<MarketplaceSnapshot>(_path, cancellationToken)
+                .ConfigureAwait(false);
+            if (previous is not null) { Validate(previous); archivedOrders = previous.Orders.ToArray(); }
+        }
+        // A range-limited save cannot erase older history. Compound keys keep sellers
+        // isolated; a delayed older response cannot replace a more recent snapshot.
+        var deduplicated = new MarketplaceSnapshot(snapshot.Orders.Concat(archivedOrders).GroupBy(order => order.Key)
             .Select(group => group.MaxBy(order => order.RetrievedAtUtc)!).ToArray(),
             snapshot.States.GroupBy(state => state.ConnectionId)
                 .Select(group => group.MaxBy(state => state.AttemptedAtUtc)!).ToArray());
-        using var lease = await MarketplaceStoreFiles.LockAsync(_path, cancellationToken).ConfigureAwait(false);
         await MarketplaceStoreFiles.WriteProtectedAsync(_path, deduplicated, cancellationToken).ConfigureAwait(false);
     }
 

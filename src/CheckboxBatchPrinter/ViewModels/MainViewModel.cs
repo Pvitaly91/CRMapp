@@ -53,7 +53,8 @@ public sealed partial class MainViewModel : ObservableObject
         IAppLogger logger,
         MarketplaceWorkspaceViewModel? marketplace = null, IReceiptSnapshotStore? receiptSnapshots = null,
         WaybillsViewModel? waybills = null, IShippingSettingsStore? waybillShippingSettings = null,
-        IShipmentTrackingService? shipmentTracking = null)
+        IShipmentTrackingService? shipmentTracking = null, IShipmentTrackingCacheStore? shipmentTrackingCache = null,
+        Func<CancellationToken, Task<string>>? shipmentTrackingCacheContext = null, TimeProvider? shipmentTrackingClock = null)
     {
         _receiptService = receiptService;
         _imageService = imageService;
@@ -67,6 +68,9 @@ public sealed partial class MainViewModel : ObservableObject
         Waybills = waybills;
         _waybillShippingSettings = waybillShippingSettings;
         _shipmentTracking = shipmentTracking;
+        _trackingCacheStore = shipmentTrackingCache;
+        _trackingCacheContextProvider = shipmentTrackingCacheContext;
+        _trackingClock = shipmentTrackingClock ?? TimeProvider.System;
         _receiptSnapshots = receiptSnapshots;
         if (Waybills is not null) Waybills.PropertyChanged += (_, e) =>
         {
@@ -94,6 +98,10 @@ public sealed partial class MainViewModel : ObservableObject
             OrdersReceiptsTab.View.Refresh();
             _ = UpdateWaybillOrderAssociationsAsync();
             QueueShipmentTrackingRefresh();
+        };
+        if (Marketplace is not null) Marketplace.ProblemScopeChanged += (_, _) =>
+        {
+            if (IsProblemOrdersTab) QueueShipmentTrackingRefresh();
         };
         if (Marketplace is not null) ((System.Collections.Specialized.INotifyCollectionChanged)Marketplace.Orders).CollectionChanged += (_, _) =>
         {
@@ -493,14 +501,16 @@ public sealed partial class MainViewModel : ObservableObject
 
     public Task RefreshAsync() => RefreshReceiptsAsync(prepareOrders: true);
 
-    private async Task RefreshReceiptsAsync(bool prepareOrders)
+    private async Task RefreshReceiptsAsync(bool prepareOrders, DateOnly? fromOverride = null, DateOnly? toOverride = null)
     {
-        if (DateFrom is null || DateTo is null)
+        var requestedFrom = fromOverride ?? (DateFrom is { } first ? DateOnly.FromDateTime(first) : (DateOnly?)null);
+        var requestedTo = toOverride ?? (DateTo is { } last ? DateOnly.FromDateTime(last) : (DateOnly?)null);
+        if (requestedFrom is null || requestedTo is null)
         {
             _dialogs.ShowError("Оберіть обидві дати.");
             return;
         }
-        if (DateTo.Value.Date < DateFrom.Value.Date)
+        if (requestedTo < requestedFrom)
         {
             _dialogs.ShowError("Дата «до» не може бути раніше дати «від».");
             return;
@@ -513,8 +523,8 @@ public sealed partial class MainViewModel : ObservableObject
         IsBusy = true;
         StatusText = "Завантаження чеків…";
         ProgressText = string.Empty;
-        var from = DateOnly.FromDateTime(DateFrom.Value);
-        var to = DateOnly.FromDateTime(DateTo.Value);
+        var from = requestedFrom.Value;
+        var to = requestedTo.Value;
         var refreshed = false;
         try
         {

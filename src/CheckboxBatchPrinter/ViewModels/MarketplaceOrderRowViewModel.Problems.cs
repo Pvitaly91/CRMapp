@@ -13,7 +13,7 @@ public sealed partial class MarketplaceOrderRowViewModel
     public int ProblemPriority { get => _problemPriority; private set => SetProperty(ref _problemPriority, value); }
     public bool ProblemTrackingPending => !Model.IsCanceled && !ProblemOrderRules.IsCompletedOrder(Model) &&
         ShipmentLinks.Any(link => TrackingStatusFor(link.Shipment) is not { } status || status.IsStale ||
-            status.Status == "Статус недоступний" || status.CheckedAtUtc is null || DateTimeOffset.UtcNow - status.CheckedAtUtc > TimeSpan.FromMinutes(5));
+            status.Status == "Статус недоступний" || status.CheckedAtUtc is null || DateTimeOffset.UtcNow - status.CheckedAtUtc >= TimeSpan.FromMinutes(30));
 
     internal void UpdateProblems(DateTimeOffset now, bool savedReceiptEvidence)
     {
@@ -30,5 +30,6 @@ public sealed partial class MarketplaceOrderRowViewModel
         ProblemTracking = string.Join("\n", ShipmentLinks.Select(s => $"{s.TrackingNumber}: {s.TrackingStatus}"));
         ProblemChecked = Model.Shipments.Any(s => !string.IsNullOrWhiteSpace(s.TrackingNumber))
             ? string.Join("\n", ShipmentLinks.Select(s => s.TrackingStatusToolTip)) : "ТТН ще немає";
+        ProblemChecked += $"\nЗамовлення перевірено: {TimeZoneInfo.ConvertTime(Model.RetrievedAtUtc, DateRangeBuilder.KyivZone):dd.MM.yyyy HH:mm}";
     }
 }

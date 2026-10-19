@@ -62,25 +62,25 @@ public sealed partial class MainViewModel
     {
         if (_refreshAllTask is { IsCompleted: false }) return _refreshAllTask;
         if (!CanRefreshAll) return Task.CompletedTask;
-        if (DateFrom is null || DateTo is null)
+        if (!IsProblemOrdersTab && (DateFrom is null || DateTo is null))
         {
             _dialogs.ShowError("Оберіть обидві дати.");
             return Task.CompletedTask;
         }
-        if (DateTo.Value.Date < DateFrom.Value.Date)
+        if (!IsProblemOrdersTab && DateTo!.Value.Date < DateFrom!.Value.Date)
         {
             _dialogs.ShowError("Дата «до» не може бути раніше дати «від».");
             return Task.CompletedTask;
         }
-        var from = DateOnly.FromDateTime(DateFrom.Value);
-        var to = DateOnly.FromDateTime(DateTo.Value);
+        var to = IsProblemOrdersTab ? DateOnly.FromDateTime(CheckboxBatchPrinter.Core.Services.DateRangeBuilder.TodayKyiv) : DateOnly.FromDateTime(DateTo!.Value);
+        var from = IsProblemOrdersTab ? to.AddDays(-13) : DateOnly.FromDateTime(DateFrom!.Value);
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _refreshAllTask = completion.Task;
-        _ = RunRefreshAllAsync(from, to, completion);
+        _ = RunRefreshAllAsync(from, to, completion, IsProblemOrdersTab);
         return completion.Task;
     }
 
-    private async Task RunRefreshAllAsync(DateOnly from, DateOnly to, TaskCompletionSource completion)
+    private async Task RunRefreshAllAsync(DateOnly from, DateOnly to, TaskCompletionSource completion, bool problemScope = false)
     {
         using var cancellation = new CancellationTokenSource();
         var publication = Marketplace?.BeginRefreshPublication();
@@ -104,7 +104,7 @@ public sealed partial class MainViewModel
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
                 catch (Exception exception) { _logger.Error("refresh.all.checkbox.settings", exception); }
             }
-            var receipts = _authentication.HasStoredCredentials ? RefreshReceiptsAsync(prepareOrders: false) : Task.CompletedTask;
+            var receipts = _authentication.HasStoredCredentials ? RefreshReceiptsAsync(prepareOrders: false, from, to) : Task.CompletedTask;
             if (!_authentication.HasStoredCredentials) StatusText = "Checkbox не налаштовано; оновлюю інші служби.";
             async Task RefreshMarketplaceAsync()
             {
@@ -115,7 +115,7 @@ public sealed partial class MainViewModel
             }
             async Task RefreshWaybillsAsync()
             {
-                if (Waybills is null) return;
+                if (Waybills is null || problemScope) return; // Problems use exact-TTN tracking, not a cabinet history scan.
                 try { await Waybills.RefreshAllAsync(token); }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
                 catch (Exception exception) { _logger.Error("refresh.all.waybills", exception); }

@@ -19,6 +19,7 @@ public sealed class BackgroundSyncCoordinator : IAsyncDisposable
     private readonly Func<CancellationToken, Task>? _waybills;
     private readonly Action? _beginCycle;
     private readonly Func<CancellationToken, Task>? _afterCycle;
+    private readonly Func<TimeSpan>? _minimumAutomaticInterval;
     private readonly TimeProvider _clock;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Dictionary<string, BackgroundSourceState> _states = [];
@@ -26,17 +27,19 @@ public sealed class BackgroundSyncCoordinator : IAsyncDisposable
     private readonly HashSet<string> _recoveryUsed = [];
     private readonly object _gate = new();
     private Task? _loop, _cycle, _pendingRecovery;
+    private DateTimeOffset? _lastCycleStartedUtc;
     private bool _paused, _disposed;
 
     public BackgroundSyncCoordinator(Func<CancellationToken, Task> receipts,
         Func<CancellationToken, Task> orders, Func<CancellationToken, Task<AppSettings>> settings,
         TimeProvider? clock = null, Func<Task, CancellationToken, Task>? parallelOrders = null,
         Func<CancellationToken, Task>? waybills = null, Action? beginCycle = null,
-        Func<CancellationToken, Task>? afterCycle = null)
+        Func<CancellationToken, Task>? afterCycle = null, Func<TimeSpan>? minimumAutomaticInterval = null)
     {
         _receipts = receipts; _orders = orders; _settings = settings;
         _parallelOrders = parallelOrders; _waybills = waybills;
         _beginCycle = beginCycle; _afterCycle = afterCycle;
+        _minimumAutomaticInterval = minimumAutomaticInterval;
         _clock = clock ?? TimeProvider.System;
         _states["Checkbox"] = new("Checkbox", "Очікує");
         _states["Маркетплейси"] = new("Маркетплейси", "Очікує");
@@ -74,6 +77,7 @@ public sealed class BackgroundSyncCoordinator : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_cycle is { IsCompleted: false }) return _cycle;
+            _lastCycleStartedUtc = _clock.GetUtcNow();
             return _cycle = CycleAsync(_shutdown.Token, explicitRetry, false);
         }
     }
@@ -85,11 +89,14 @@ public sealed class BackgroundSyncCoordinator : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_paused) return Task.CompletedTask;
+            if (!AutomaticIntervalElapsed())
+                return _cycle is { IsCompleted: false } running ? running : Task.CompletedTask;
             var eligible = _states.Values.Any(s => s.CooldownReason == BackgroundCooldownReason.Transient &&
                 !_recoveryUsed.Contains(s.Name));
             if (_cycle is { IsCompleted: false } active)
                 return eligible ? _pendingRecovery ??= RecoverAfterAsync(active) : active;
             if (!eligible) return Task.CompletedTask;
+            _lastCycleStartedUtc = _clock.GetUtcNow();
             return _cycle = CycleAsync(_shutdown.Token, false, true);
         }
     }
@@ -117,16 +124,34 @@ public sealed class BackgroundSyncCoordinator : IAsyncDisposable
     {
         try
         {
-            await RefreshNowAsync(false); // Startup refresh, without waiting for the first interval.
+            await RefreshAutomaticallyAsync(); // Startup refresh, without waiting for the first interval.
             while (!_shutdown.IsCancellationRequested)
             {
                 var settings = await _settings(_shutdown.Token);
                 await Task.Delay(TimeSpan.FromMinutes(settings.BackgroundIntervalMinutes), _clock, _shutdown.Token);
                 if (!settings.AutoRefreshEnabled || Paused) continue;
-                await RefreshNowAsync(false);
+                await RefreshAutomaticallyAsync();
             }
         }
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
+    }
+
+    private Task RefreshAutomaticallyAsync()
+    {
+        lock (_gate)
+        {
+            if (_shutdown.IsCancellationRequested || _disposed) return Task.CompletedTask;
+            if (_cycle is { IsCompleted: false }) return _cycle;
+            if (!AutomaticIntervalElapsed()) return Task.CompletedTask;
+            return RefreshNowAsync(false);
+        }
+    }
+
+    private bool AutomaticIntervalElapsed()
+    {
+        var minimum = _minimumAutomaticInterval?.Invoke() ?? TimeSpan.Zero;
+        return _lastCycleStartedUtc is not { } started || minimum <= TimeSpan.Zero ||
+            _clock.GetUtcNow() - started >= minimum;
     }
 
     private async Task CycleAsync(CancellationToken token, bool explicitRetry, bool recovery)

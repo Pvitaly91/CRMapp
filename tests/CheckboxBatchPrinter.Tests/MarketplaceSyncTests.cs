@@ -8,7 +8,7 @@ using CheckboxBatchPrinter.Core.Services;
 
 namespace CheckboxBatchPrinter.Tests;
 
-internal static class MarketplaceSyncTests
+internal static partial class MarketplaceSyncTests
 {
     private const string PromId = "8795934615af4d1b85c8e447158716a6";
     private const string RozetkaId = "84f8e5f93c2241af9c990f2c3dd6c331";
@@ -36,6 +36,10 @@ internal static class MarketplaceSyncTests
         ("sync: changed or unreadable seller credentials never share a request", DuplicateSellerCredentialBoundariesAsync),
         ("sync: partial duplicate-account responses update all aliases without advancing their checkpoints", DuplicateSellerPartialFailureAsync),
         ("sync: consolidated fiscal evidence survives refresh and expiration of removed connection rows without hiding conflicts", ConsolidatedFiscalEvidenceSurvivesExpiryAsync),
+        ("archive: old orders survive retention expiry and restart without fresh checkpoints", ArchiveRetentionAndRestartAsync),
+        ("archive: current-range completeness excludes dated history but detects stale or undated relevant orders", ArchiveRangeCoverageAsync),
+        ("archive: range-limited saves merge newest compound-key rows and keep other seller history", ArchiveSaveMergeAsync),
+        ("archive: current-range refresh preserves old history without fetching historical details", ArchiveCurrentRangeRefreshAsync),
         ("sync: Kyiv day boundaries honor DST and configurable lookback", DateRangeAsync),
         ("transport: only documented read/auth requests reach HTTP handler", ReadOnlyWhitelistAsync),
         ("transport: Rozetka Retry-After delta/date control injected delay", RetryAfterAsync),

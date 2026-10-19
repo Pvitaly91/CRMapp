@@ -12,6 +12,9 @@ internal static class BackgroundSyncTests
     public static IEnumerable<(string, Func<Task>)> All => new (string, Func<Task>)[]
     {
         ("background startup, timer and manual requests coalesce under controlled time", CoordinatorAsync),
+        ("problem-tab automatic floor limits all provider callbacks to thirty minutes and manual refresh resets its deadline", AutomaticIntervalFloorAsync),
+        ("leaving the problem tab restores the configured automatic interval without restarting the worker", AutomaticIntervalScopeAsync),
+        ("problem-tab recovery events respect the thirty-minute automatic floor", AutomaticRecoveryIntervalAsync),
         ("429 Retry-After and authorization pause do not cause retry storms", BackoffAsync),
         ("transient network recovery bypasses 30-minute local backoff once", NetworkRecoveryAsync),
         ("recovery events during another source coalesce into one follow-up", InFlightRecoveryAsync),
@@ -78,6 +81,97 @@ internal static class BackgroundSyncTests
         await auth.RefreshNowAsync(); await auth.RefreshNowAsync();
         if (auth.States.Single(s => s.Name == "Checkbox").NextAttemptUtc != DateTimeOffset.MaxValue)
             throw new Exception("Authorization failure was not paused.");
+    }
+
+    private static async Task AutomaticIntervalFloorAsync()
+    {
+        var clock = new ManualClock();
+        var receipts = 0; var orders = 0; var waybills = 0; var after = 0;
+        await using var coordinator = new BackgroundSyncCoordinator(
+            _ => { receipts++; return Task.CompletedTask; },
+            _ => { orders++; return Task.CompletedTask; },
+            _ => Task.FromResult(new AppSettings { BackgroundIntervalMinutes = 2 }), clock,
+            waybills: _ => { waybills++; return Task.CompletedTask; },
+            afterCycle: _ => { after++; return Task.CompletedTask; },
+            minimumAutomaticInterval: () => TimeSpan.FromMinutes(30));
+        coordinator.Start();
+        await AwaitTimerAsync(clock, 1);
+        void CheckCalls(int expected)
+        {
+            if (receipts != expected || orders != expected || waybills != expected || after != expected)
+                throw new Exception($"Automatic floor leaked source callbacks: receipts={receipts}, orders={orders}, waybills={waybills}, after={after}; expected {expected}.");
+        }
+        CheckCalls(1); // Cache-first startup still gets one fresh read.
+        for (var tick = 1; tick <= 14; tick++)
+        {
+            clock.Advance(TimeSpan.FromMinutes(2));
+            await AwaitTimerAsync(clock, tick + 1);
+            CheckCalls(1);
+        }
+        clock.Advance(TimeSpan.FromMinutes(2)); // Exactly thirty minutes after startup.
+        await AwaitTimerAsync(clock, 16);
+        CheckCalls(2);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await coordinator.RefreshNowAsync(explicitRetry: true);
+        CheckCalls(3);
+        clock.Advance(TimeSpan.FromMinutes(28)); // Twenty-eight minutes after the manual refresh.
+        await AwaitTimerAsync(clock, 17);
+        CheckCalls(3);
+        clock.Advance(TimeSpan.FromMinutes(2));
+        await AwaitTimerAsync(clock, 18);
+        CheckCalls(4);
+    }
+
+    private static async Task AutomaticIntervalScopeAsync()
+    {
+        var clock = new ManualClock(); var calls = 0; var problemsActive = true;
+        await using var coordinator = new BackgroundSyncCoordinator(
+            _ => { calls++; return Task.CompletedTask; }, _ => Task.CompletedTask,
+            _ => Task.FromResult(new AppSettings { BackgroundIntervalMinutes = 2 }), clock,
+            minimumAutomaticInterval: () => problemsActive ? TimeSpan.FromMinutes(30) : TimeSpan.Zero);
+        coordinator.Start();
+        await AwaitTimerAsync(clock, 1);
+        clock.Advance(TimeSpan.FromMinutes(2));
+        await AwaitTimerAsync(clock, 2);
+        if (calls != 1) throw new Exception("Problem-tab floor did not suppress a configured short tick.");
+        problemsActive = false;
+        clock.Advance(TimeSpan.FromMinutes(2));
+        await AwaitTimerAsync(clock, 3);
+        if (calls != 2) throw new Exception("Normal configured cadence was not restored after leaving the problem tab.");
+        problemsActive = true;
+        clock.Advance(TimeSpan.FromMinutes(2));
+        await AwaitTimerAsync(clock, 4);
+        if (calls != 2) throw new Exception("Returning to the problem tab forgot the most recent cycle start.");
+    }
+
+    private static async Task AwaitTimerAsync(ManualClock clock, int count)
+    {
+        for (var attempt = 0; attempt < 1000 && clock.TimerCreations < count; attempt++)
+            await Task.Delay(1);
+        if (clock.TimerCreations < count) throw new Exception("Background worker did not schedule its next controlled tick.");
+    }
+
+    private static async Task AutomaticRecoveryIntervalAsync()
+    {
+        var clock = new ManualClock(); var receipts = 0; var orders = 0;
+        await using var coordinator = new BackgroundSyncCoordinator(_ =>
+        {
+            if (++receipts == 1) throw new HttpRequestException("synthetic network failure");
+            return Task.CompletedTask;
+        }, _ => { orders++; return Task.CompletedTask; }, _ => Task.FromResult(new AppSettings()), clock,
+            minimumAutomaticInterval: () => TimeSpan.FromMinutes(30));
+        await coordinator.RefreshNowAsync();
+        clock.Advance(TimeSpan.FromMinutes(10));
+        await Task.WhenAll(coordinator.RecoveryRefreshAsync(), coordinator.RecoveryRefreshAsync());
+        clock.Advance(TimeSpan.FromMinutes(19));
+        await coordinator.RecoveryRefreshAsync();
+        if (receipts != 1 || orders != 1)
+            throw new Exception("Network or power recovery bypassed the problem-tab automatic interval.");
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await coordinator.RecoveryRefreshAsync();
+        await coordinator.RecoveryRefreshAsync();
+        if (receipts != 2 || orders != 2 || coordinator.States.Single(s => s.Name == "Checkbox").CooldownReason != BackgroundCooldownReason.None)
+            throw new Exception("Recovery did not make exactly one eligible request at the automatic deadline.");
     }
 
     private static async Task NetworkRecoveryAsync()
@@ -406,6 +500,7 @@ internal static class BackgroundSyncTests
         private DateTimeOffset _now = new(2026, 9, 28, 0, 0, 0, TimeSpan.Zero);
         private readonly List<Timer> _timers = [];
         public bool HasTimer => _timers.Any(x => !x.Disposed);
+        public int TimerCreations => _timers.Count;
         public override DateTimeOffset GetUtcNow() => _now;
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {

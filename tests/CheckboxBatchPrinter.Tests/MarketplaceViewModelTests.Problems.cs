@@ -79,6 +79,16 @@ internal static partial class MarketplaceViewModelTests
             True(!((FrameworkElement)window.FindName("ReceiptPrintFooter")).IsVisible);
             Equal(4, ((TabControl)window.FindName("ReceiptTabs")).Items.Count);
             True(grid.Columns.Any(c => c.Header?.ToString() == "Причина"));
+            var period = (ComboBox)window.FindName("ProblemPeriodFilter");
+            Equal("Останні 14 днів", period.SelectedItem?.ToString());
+            period.SelectedItem = "За весь час";
+            await DrainDispatcherAsync();
+            Equal("За весь час", workspace.ProblemPeriod);
+            period.SelectedItem = "Останні 14 днів";
+            await DrainDispatcherAsync();
+            window.UpdateLayout();
+            Equal("Останні 14 днів", period.SelectedItem?.ToString());
+            Equal(1, grid.Items.Count);
             // A deterministic render for review; no real profile or printer is involved.
             var bitmap = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
             bitmap.Render(window);

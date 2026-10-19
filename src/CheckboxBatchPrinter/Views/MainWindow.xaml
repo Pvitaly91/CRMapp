@@ -793,6 +793,8 @@
             <TabItem Header="Проблемні замовлення">
                 <DockPanel Margin="8">
                     <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,5">
+                        <TextBlock Text="Період:" VerticalAlignment="Center" Margin="4" />
+                        <ComboBox x:Name="ProblemPeriodFilter" Width="150" ItemsSource="{Binding Marketplace.ProblemPeriods}" SelectedItem="{Binding Marketplace.ProblemPeriod}" />
                         <TextBlock Text="Показувати:" VerticalAlignment="Center" Margin="4" />
                         <ComboBox Width="235" ItemsSource="{Binding Marketplace.ProblemFilters}" SelectedItem="{Binding Marketplace.ProblemFilter}" />
                         <Button Content="Оновити все" Command="{Binding RefreshAllCommand}" />
@@ -818,6 +820,7 @@
                                         <Setter Property="TextWrapping" Value="Wrap" />
                                         <Setter Property="Foreground" Value="#9A3412" />
                                         <Setter Property="FontWeight" Value="SemiBold" />
+                                        <Setter Property="ToolTip" Value="{Binding ProblemChecked}" />
                                     </Style>
                                 </controls:DashboardTextColumn.ElementStyle>
                             </controls:DashboardTextColumn>

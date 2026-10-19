@@ -32,14 +32,17 @@ internal static partial class MarketplaceViewModelTests
     }
 
     private static (MainViewModel Main, MarketplaceWorkspaceViewModel Workspace) CreateTrackingDashboard(Fixture fixture,
-        IShipmentTrackingService? tracking = null, WaybillsViewModel? waybills = null, IShippingSettingsStore? shippingSettings = null)
+        IShipmentTrackingService? tracking = null, WaybillsViewModel? waybills = null, IShippingSettingsStore? shippingSettings = null,
+        IShipmentTrackingCacheStore? trackingCache = null, string cacheContext = "synthetic-scope", TimeProvider? clock = null,
+        Func<CancellationToken, Task<string>>? contextProvider = null)
     {
         var sync = new MarketplaceSyncService([fixture.Source, fixture.Rozetka], fixture.Settings, fixture.Cache);
         var workspace = new MarketplaceWorkspaceViewModel(fixture.Settings, sync, fixture.Links, fixture.Details,
             fixture.Dialogs, autoLinkEnabled: false);
         var main = new MainViewModel(fixture.ReceiptSource, fixture.Images, fixture.Settings, fixture.Authentication,
             fixture.History, fixture.Printer, fixture.Dialogs, new Logger(), workspace, waybills: waybills,
-            waybillShippingSettings: shippingSettings, shipmentTracking: tracking)
+            waybillShippingSettings: shippingSettings, shipmentTracking: tracking, shipmentTrackingCache: trackingCache,
+            shipmentTrackingCacheContext: contextProvider ?? (_ => Task.FromResult(cacheContext)), shipmentTrackingClock: clock)
             { DateFrom = new(2026, 9, 23), DateTo = new(2026, 9, 23) };
         return (main, workspace);
     }
