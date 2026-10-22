@@ -127,7 +127,7 @@ internal static class EscPosReceiptEncoder
         var widthDip = width * 96d / NativeDpi;
         var header = new TextBlock
         {
-            Text = text, Width = widthDip, FontFamily = new FontFamily("Segoe UI"), FontSize = 10,
+            Text = text, Width = widthDip, FontFamily = new FontFamily("Segoe UI"), FontSize = ReceiptPrintHeader.FontSizeDip,
             FontWeight = FontWeights.Normal, Foreground = Brushes.Black, Background = Brushes.White,
             TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap,
             SnapsToDevicePixels = true, UseLayoutRounding = true

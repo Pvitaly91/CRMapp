@@ -248,7 +248,7 @@ internal static class OrderHeaderPrintTests
             var page = WindowsPrintService.BuildPage(source, settings, out var width, out var height, number);
             var image = page.Children.OfType<Image>().Single();
             var header = page.Children.OfType<TextBlock>().Single();
-            Check(header.Text == "Замовлення №" + number && header.FontSize <= 10, "Order number/font lost.");
+            Check(header.Text == "Замовлення №" + number && header.FontSize == 12, "Order number/enlarged font lost.");
             Check(header.ActualHeight > 0 && FixedPage.GetTop(header) + header.ActualHeight < FixedPage.GetTop(image), "Header overlaps receipt.");
             Check(header.ActualWidth <= width && FixedPage.GetTop(image) + image.Height <= height, "Header/body outside paper.");
             Check(ReferenceEquals(source, image.Source), "Receipt source replaced.");
@@ -311,7 +311,7 @@ internal static class OrderHeaderPrintTests
             var image = page.Children.OfType<Image>().Single();
             var header = page.Children.OfType<TextBlock>().Single();
             Check(header.Text == "Замовлення №430000001 · ТТН " + tracking, "TTN changed or truncated.");
-            Check(header.FontSize == 10 && header.TextWrapping == TextWrapping.Wrap, "Small wrapping header changed.");
+            Check(header.FontSize == 12 && header.TextWrapping == TextWrapping.Wrap, "Enlarged wrapping header changed.");
             Check(header.ActualWidth <= width && FixedPage.GetTop(header) + header.ActualHeight < FixedPage.GetTop(image),
                 "TTN header cropped or overlaps receipt.");
             Check(FixedPage.GetTop(image) + image.Height <= height && ReferenceEquals(source, image.Source), "Receipt source or edges changed.");

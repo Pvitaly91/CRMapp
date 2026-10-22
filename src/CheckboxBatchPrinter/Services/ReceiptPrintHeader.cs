@@ -4,6 +4,8 @@ namespace CheckboxBatchPrinter.Services;
 
 internal static class ReceiptPrintHeader
 {
+    public const double FontSizeDip = 12;
+
     public static string TrackingFor(MarketplaceOrder? order) => order is null ? "" : string.Join("; ",
         ShippingCarrierNames.ForOrder(order)
             .Where(s => s.Carrier is ShippingCarrier.NovaPoshta or ShippingCarrier.RozetkaDelivery)

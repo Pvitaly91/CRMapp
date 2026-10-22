@@ -280,7 +280,7 @@ public sealed partial class WindowsPrintService : IPrintService
             Text = text,
             Width = width,
             FontFamily = new FontFamily("Segoe UI"),
-            FontSize = 10,
+            FontSize = ReceiptPrintHeader.FontSizeDip,
             FontWeight = FontWeights.Normal,
             Foreground = Brushes.Black,
             TextAlignment = TextAlignment.Center,

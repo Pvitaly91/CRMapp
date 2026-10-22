@@ -15,7 +15,7 @@ internal static class ReceiptRawSmoke
     internal static void Preview(string inputPath, string outputPath)
     {
         var source = File.ReadAllBytes(inputPath);
-        var data = EscPosReceiptEncoder.Build([new PrintReceiptDocument(source, "preview", "TEST", "TEST-TTN")], Settings);
+        var data = EscPosReceiptEncoder.Build([new PrintReceiptDocument(source, "preview", "430000001", "НП: 20450000000000; Rozetka Delivery: PRM-12345678")], Settings);
         var (pixels, width, height) = Decode(data);
         var image = BitmapSource.Create(width, height, 203, 203, PixelFormats.Gray8, null, pixels, width);
         var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image));
