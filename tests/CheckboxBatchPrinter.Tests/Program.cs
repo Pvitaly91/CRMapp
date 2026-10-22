@@ -34,6 +34,29 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--receipt-raw-preview")
+        {
+            try { ReceiptRawSmoke.Preview(args[1], args[2]); return 0; }
+            catch (Exception exception) { Console.Error.WriteLine(exception); return 1; }
+        }
+        if (args.Length == 2 && args[0] == "--receipt-raw-driver-smoke")
+        {
+            try { ReceiptRawSmoke.Driver(args[1]); return 0; }
+            catch (Exception exception) { Console.Error.WriteLine(exception); return 1; }
+        }
+        if (args.SequenceEqual(["--receipt-raw-smoke"]))
+        {
+            try
+            {
+                foreach (var (name, test) in EscPosReceiptTests.All.Concat(RawPrinterTests.All))
+                {
+                    test().GetAwaiter().GetResult();
+                    Console.WriteLine("PASS " + name);
+                }
+                return 0;
+            }
+            catch (Exception exception) { Console.Error.WriteLine(exception); return 1; }
+        }
         if (args.SequenceEqual(["--receipt-raster-smoke"]))
         {
             try
@@ -104,6 +127,8 @@ internal static class Program
         Tests.AddRange(BackgroundSyncTests.All);
         Tests.AddRange(HttpReadTimeoutTests.All);
         Tests.AddRange(ReceiptJobIsolationTests.All);
+        Tests.AddRange(EscPosReceiptTests.All);
+        Tests.AddRange(RawPrinterTests.All);
         Tests.AddRange(ProblemOrderTests.All);
         Tests.AddRange(ShipmentTrackingCacheTests.All);
         Tests.AddRange(OrderNotificationTests.All);

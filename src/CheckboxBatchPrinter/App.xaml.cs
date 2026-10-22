@@ -72,7 +72,7 @@ public partial class App : Application
             var imageService = new ReceiptImageService(apiClient, settingsService, Path.Combine(localData, "Cache"), _logger);
             var printHistoryStore = new JsonPrintHistoryStore(Path.Combine(localData, "printed-receipts.json"));
             var receiptSnapshots = new DpapiReceiptSnapshotStore(Path.Combine(localData, "receipts.dpapi"));
-            var printService = new WindowsPrintService();
+            var printService = new WindowsPrintService(_logger);
             var marketplaceData = Path.Combine(localData, "Marketplaces");
             var marketplaceSettings = new JsonMarketplaceSettingsStore(Path.Combine(marketplaceData, "marketplace-settings.json"));
             var marketplaceSecrets = new DpapiMarketplaceSecretStore(Path.Combine(marketplaceData, "Secrets"));

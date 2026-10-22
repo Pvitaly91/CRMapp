@@ -8,11 +8,19 @@ using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using CheckboxBatchPrinter.Core.Models;
+using CheckboxBatchPrinter.Core.Services;
 
 namespace CheckboxBatchPrinter.Services;
 
 public sealed partial class WindowsPrintService : IPrintService
 {
+    private readonly IAppLogger? _logger;
+    public WindowsPrintService(IAppLogger? logger = null) => _logger = logger;
+
+    // The queue name is user-editable; only the actual supported driver selects RAW.
+    internal static bool UsesDirectReceiptRaster(string? driverName) =>
+        WindowsRawPrinter.IsSupportedDriver(driverName);
+
     public IReadOnlyList<string> GetInstalledPrinters()
     {
         try
@@ -29,8 +37,15 @@ public sealed partial class WindowsPrintService : IPrintService
 
     public void ValidateReceiptsForPrint(IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings)
     {
+        if (receipts.Count == 0) throw new ArgumentException("Пачка друку порожня.", nameof(receipts));
         using var server = new LocalPrintServer();
         using var queue = FindQueue(server, settings.PrinterName);
+        if (UsesDirectReceiptRaster(queue.QueueDriver.Name))
+        {
+            for (var offset = 0; offset < receipts.Count; offset += ReceiptPrintPolicy.MaxReceiptsPerJob)
+                _ = EscPosReceiptEncoder.Build(receipts.Skip(offset).Take(ReceiptPrintPolicy.MaxReceiptsPerJob).ToArray(), settings);
+            return;
+        }
         // Validate every eventual job before the caller starts submitting any receipt.
         // Do not retain all decoded bitmap documents for the entire selection.
         foreach (var document in PrepareReceiptDocuments(queue, receipts, settings))
@@ -38,37 +53,48 @@ public sealed partial class WindowsPrintService : IPrintService
     }
 
     public Task PrintReceiptAsync(PrintReceiptDocument receipt, AppSettings settings, CancellationToken cancellationToken = default) =>
-        Application.Current.Dispatcher.InvokeAsync(() =>
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            using var server = new LocalPrintServer();
-            using var queue = FindQueue(server, settings.PrinterName);
-            var document = PrepareReceiptDocuments(queue, [receipt], settings).Single();
-            cancellationToken.ThrowIfCancellationRequested();
-            WriteReceiptDocument(queue, document, $"Checkbox чек {receipt.ReceiptId}");
-        }).Task;
+        PrintReceiptsAsSingleJobAsync([receipt], settings, cancellationToken);
 
-    public Task PrintReceiptsAsSingleJobAsync(
+    public async Task PrintReceiptsAsSingleJobAsync(
         IReadOnlyList<PrintReceiptDocument> receipts,
         AppSettings settings,
-        CancellationToken cancellationToken = default) =>
-        Application.Current.Dispatcher.InvokeAsync(() =>
+        CancellationToken cancellationToken = default)
+    {
+        if (receipts.Count == 0) return;
+        var printerName = settings.PrinterName;
+        var jobName = $"Checkbox — пачка з {receipts.Count} чеків";
+        var raw = await Application.Current.Dispatcher.InvokeAsync(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (receipts.Count == 0) return;
             using var server = new LocalPrintServer();
-            using var queue = FindQueue(server, settings.PrinterName);
+            using var queue = FindQueue(server, printerName);
+            if (UsesDirectReceiptRaster(queue.QueueDriver.Name))
+                return EscPosReceiptEncoder.Build(receipts, settings);
             var document = PrepareBatchDocument(queue, receipts, settings);
             cancellationToken.ThrowIfCancellationRequested();
-            WriteReceiptDocument(queue, document, $"Checkbox — пачка з {receipts.Count} чеків");
-        }).Task;
+            WriteReceiptDocument(queue, document, jobName);
+            return (byte[]?)null;
+        });
+        if (raw is not null)
+            await SubmitDirectReceiptAsync(printerName, raw, jobName, receipts.Count, cancellationToken);
+    }
 
-    public Task PrintTestAsync(AppSettings settings, CancellationToken cancellationToken = default) =>
-        Application.Current.Dispatcher.InvokeAsync(() =>
+    private async Task SubmitDirectReceiptAsync(string printerName, byte[] raw, string jobName, int count, CancellationToken cancellationToken)
+    {
+        // Native spool calls may block. Only bitmap preparation requires the STA/UI thread.
+        var job = await Task.Run(() => WindowsRawPrinter.Write(printerName, raw, jobName, cancellationToken), cancellationToken);
+        try { _logger?.Info("receipt.raw.accepted", printStatus: $"job={job};count={count};bytes={raw.Length};driver=RPP210;dpi=203;head_width=384"); }
+        catch (Exception) { /* A logging failure must never turn an accepted job into a retry. */ }
+    }
+
+    public async Task PrintTestAsync(AppSettings settings, CancellationToken cancellationToken = default)
+    {
+        var printerName = settings.PrinterName;
+        var raw = await Application.Current.Dispatcher.InvokeAsync(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
             using var server = new LocalPrintServer();
-            using var queue = FindQueue(server, settings.PrinterName);
+            using var queue = FindQueue(server, printerName);
             var width = MillimetersToDip(settings.PrintableWidthMm);
             var edgeLabels = new Grid { Width = width };
             edgeLabels.ColumnDefinitions.Add(new ColumnDefinition());
@@ -103,6 +129,18 @@ public sealed partial class WindowsPrintService : IPrintService
             page.Measure(new Size(width, height));
             page.Arrange(new Rect(0, 0, width, height));
             page.UpdateLayout();
+            if (UsesDirectReceiptRaster(queue.QueueDriver.Name))
+            {
+                // Render this synthetic test at native dots once, then use the exact same
+                // encoder and spool path as actual receipts, without issuing a fiscal receipt.
+                var dots = (int)Math.Round(settings.PrintableWidthMm * 8);
+                var rows = (int)Math.Ceiling(height * dots / width);
+                var preview = new RenderTargetBitmap(dots, rows, dots * 96d / width, dots * 96d / width, PixelFormats.Pbgra32);
+                preview.Render(page); preview.Freeze();
+                var png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(preview));
+                using var stream = new MemoryStream(); png.Save(stream);
+                return EscPosReceiptEncoder.Build([new PrintReceiptDocument(stream.ToArray(), "synthetic-test")], settings);
+            }
             var (maximumHeight, pageTicket) = PrepareReceiptDriver(queue, settings);
             if (height > maximumHeight)
                 throw new InvalidOperationException("Тестовий чек довший за допустиму сторінку принтера. Перевірте формат паперу.");
@@ -111,7 +149,11 @@ public sealed partial class WindowsPrintService : IPrintService
             var content = new PageContent(); ((IAddChild)content).AddChild(page); document.Pages.Add(content);
             cancellationToken.ThrowIfCancellationRequested();
             WriteReceiptDocument(queue, RasterizeReceiptDocument(document), "Checkbox Batch Printer — тест");
-        }).Task;
+            return (byte[]?)null;
+        });
+        if (raw is not null)
+            await SubmitDirectReceiptAsync(printerName, raw, "Checkbox Batch Printer — тест", 1, cancellationToken);
+    }
 
     private static PrintQueue FindQueue(LocalPrintServer server, string printerName)
     {
