@@ -62,9 +62,8 @@ internal static class ReceiptDriverSmoke
                 }
             }
         }
-        var expectedJobs = (receipts.Length + ReceiptPrintPolicy.MaxReceiptsPerJob - 1) / ReceiptPrintPolicy.MaxReceiptsPerJob;
-        if (count != expectedJobs) throw new Exception("Prepared receipt job count differs from three-receipt grouping.");
-        Console.WriteLine($"PASS readonly receipt driver: {count} ordered jobs for {receipts.Length} receipts in groups of up to three; all pages are full rasters with one copy; no print job created.");
+        if (count != receipts.Length) throw new Exception("Receipt preparation must create one job per receipt.");
+        Console.WriteLine($"PASS readonly receipt driver: {count} ordered individual jobs for {receipts.Length} receipts; all pages are full rasters with one copy; no print job created.");
         Console.WriteLine("Content heights mm: " + string.Join(", ", heights.Select(height => height.ToString("0.###", CultureInfo.InvariantCulture))));
     }
 }

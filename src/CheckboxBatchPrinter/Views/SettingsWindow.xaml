@@ -57,7 +57,7 @@
                     <TextBlock Grid.Row="3" Text="Ширина області друку, мм" VerticalAlignment="Center" />
                     <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding PrintableWidthMm}" />
                     <TextBlock Grid.Row="4" Grid.ColumnSpan="2" Margin="3,12" TextWrapping="Wrap" Foreground="#667085"
-                               Text="Чеки передаються групами по 3 у вибраному порядку. Остання група може містити 1–2 чеки. Для RPP210 використовується прямий чорно-білий друк у роздільності принтера; заголовки замовлень і ТТН збережено." />
+                               Text="Кожен чек передається окремим завданням у вибраному порядку. Для RPP210 використовується прямий чорно-білий друк у роздільності принтера; заголовки замовлень і ТТН збережено." />
                     <Button Grid.Row="5" Grid.Column="1" Content="Надрукувати тест" HorizontalAlignment="Left" Click="TestPrint_Click" />
                 </Grid>
             </TabItem>

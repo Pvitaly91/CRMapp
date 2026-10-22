@@ -14,9 +14,9 @@ internal static class EscPosReceiptTests
         ("STA RPP210 native PNG preserves every black/white dot including command bytes", () => Sta(NativePixels)),
         ("STA RPP210 855-pixel PNG is resampled once with complete footer", () => Sta(WideSource)),
         ("STA RPP210 raster composites alpha white and clears unused byte bits", () => Sta(TransparencyAndPadding)),
-        ("STA RPP210 jobs frame all binary rows and retain groups of one two three", () => Sta(GroupFraming)),
+        ("STA RPP210 seven and eight receipts retain independent job boundaries headers and binary rows", () => Sta(IndividualFraming)),
         ("STA RPP210 headers are raster data and source receipt is unchanged below them", () => Sta(Header)),
-        ("STA RPP210 rejects corrupt dimensions oversize receipts and excessive groups", () => Sta(InvalidInput))
+        ("STA RPP210 rejects corrupt dimensions oversize receipts and multi-receipt jobs", () => Sta(InvalidInput))
     ];
 
     private static Task Sta(Action action)
@@ -93,34 +93,46 @@ internal static class EscPosReceiptTests
             "Unused final-byte bits could print outside the receipt width.");
     }
 
-    private static void GroupFraming()
+    private static void IndividualFraming()
     {
-        var png = Png(384, 35, (x, y) => Gray((x + y) % 3 == 0 || y == 34));
-        for (var count = 1; count <= 3; count++)
+        foreach (var count in new[] { 7, 8 })
         {
-            var receipts = Enumerable.Range(1, count).Select(index => new PrintReceiptDocument(png, "id-" + index)).ToArray();
-            var raster = EscPosReceiptEncoder.BuildRaster(receipts, Settings());
-            var stream = EscPosReceiptEncoder.Build(receipts, Settings());
-            Check(stream.AsSpan(0, 8).SequenceEqual(new byte[] { 27, 64, 27, 97, 0, 27, 33, 0 }), "Unexpected job initialization.");
-            using var rows = new MemoryStream();
-            var offset = 8; var block = 0;
-            while (offset < stream.Length - 3)
+            var receipts = Enumerable.Range(1, count).Select(index => new PrintReceiptDocument(
+                Png(384, 35 + index, (x, y) => Gray((x + y + index) % 3 == 0 || y == 34 + index)),
+                "id-" + index, $"ORDER-{index:00}", $"TTN-{index:00}")).ToArray();
+            var jobs = receipts.Chunk(ReceiptPrintPolicy.MaxReceiptsPerJob).ToArray();
+            Check(jobs.Length == count && jobs.All(job => job.Length == 1), "RAW preparation combines or loses receipts.");
+            for (var index = 0; index < jobs.Length; index++)
             {
-                Check(stream.AsSpan(offset, 4).SequenceEqual(new byte[] { 29, 118, 48, 0 }), "Unframed text or wrong raster command.");
-                var widthBytes = BinaryPrimitives.ReadUInt16LittleEndian(stream.AsSpan(offset + 4, 2));
-                var height = BinaryPrimitives.ReadUInt16LittleEndian(stream.AsSpan(offset + 6, 2));
-                Check(widthBytes == 48 && height is > 0 and <= 24, "Raster block length does not match head geometry.");
-                offset += 8;
-                Check(offset + widthBytes * height <= stream.Length - 3, "Raster block contains truncated image bytes.");
-                rows.Write(stream.AsSpan(offset, widthBytes * height)); offset += widthBytes * height; block++;
+                var job = jobs[index];
+                Check(job[0].ReceiptId == receipts[index].ReceiptId, "RAW job order changed.");
+                var raster = EscPosReceiptEncoder.BuildRaster(job, Settings());
+                var stream = EscPosReceiptEncoder.Build(job, Settings());
+                Check(stream.AsSpan(0, 8).SequenceEqual(new byte[] { 27, 64, 27, 97, 0, 27, 33, 0 }), "Unexpected job initialization.");
+                using var rows = new MemoryStream();
+                var offset = 8; var block = 0;
+                while (offset < stream.Length - 3)
+                {
+                    Check(stream.AsSpan(offset, 4).SequenceEqual(new byte[] { 29, 118, 48, 0 }), "Unframed text or wrong raster command.");
+                    var widthBytes = BinaryPrimitives.ReadUInt16LittleEndian(stream.AsSpan(offset + 4, 2));
+                    var height = BinaryPrimitives.ReadUInt16LittleEndian(stream.AsSpan(offset + 6, 2));
+                    Check(widthBytes == 48 && height is > 0 and <= 24, "Raster block length does not match head geometry.");
+                    offset += 8;
+                    Check(offset + widthBytes * height <= stream.Length - 3, "Raster block contains truncated image bytes.");
+                    rows.Write(stream.AsSpan(offset, widthBytes * height)); offset += widthBytes * height; block++;
+                }
+                Check(offset == stream.Length - 3 && stream.AsSpan(offset).SequenceEqual(new byte[] { 27, 74, 16 }),
+                    "Job ends with unexpected text, extra initialization or excessive paper feed.");
+                Check(block == (raster.Height + 23) / 24 && rows.ToArray().AsSpan().SequenceEqual(raster.Bits.Span),
+                    "Framing changed bitmap bytes, omitted rows, or added a trailing print command.");
+                var body = EscPosReceiptEncoder.DecodeReceipt(job[0].Png, 384);
+                var bodyOffset = (raster.Height - 5 - body.Height) * raster.Stride;
+                Check(bodyOffset > 5 * raster.Stride && raster.Bits.Span.Slice(5 * raster.Stride, bodyOffset - 5 * raster.Stride).ContainsAnyExcept((byte)0),
+                    "An individual order/TTN header disappeared at a job boundary.");
+                Check(raster.Bits.Span.Slice(bodyOffset, body.Bits.Length).SequenceEqual(body.Bits.Span),
+                    "An individual job resampled or lost its receipt body.");
+                for (var x = 0; x < 384; x++) Check(Black(raster, x, raster.Height - 6), "An individual job lost its receipt footer.");
             }
-            Check(offset == stream.Length - 3 && stream.AsSpan(offset).SequenceEqual(new byte[] { 27, 74, 16 }),
-                "Job ends with unexpected text, extra initialization or excessive paper feed.");
-            Check(block == (raster.Height + 23) / 24 && rows.ToArray().AsSpan().SequenceEqual(raster.Bits.Span),
-                "Framing changed bitmap bytes, omitted rows, or added a trailing print command.");
-            Check(raster.Height == 10 + 35 * count + 14 * (count - 1), "Group lost receipts, compact separators, or margins.");
-            for (var receipt = 0; receipt < count; receipt++)
-                for (var x = 0; x < 384; x++) Check(Black(raster, x, 5 + receipt * 49 + 34), "Group lost a receipt footer.");
         }
     }
 
@@ -148,7 +160,10 @@ internal static class EscPosReceiptTests
         foreach (Action action in new Action[]
         {
             () => EscPosReceiptEncoder.Build([], Settings()),
+            () => EscPosReceiptEncoder.Build([receipt, receipt], Settings()),
+            () => EscPosReceiptEncoder.Build([receipt, receipt, receipt], Settings()),
             () => EscPosReceiptEncoder.Build([receipt, receipt, receipt, receipt], Settings()),
+            () => EscPosReceiptEncoder.BuildRaster([receipt, receipt], Settings()),
             () => EscPosReceiptEncoder.Build([receipt], Settings(49)),
             () => EscPosReceiptEncoder.Build([receipt], Settings(double.NaN)),
             () => EscPosReceiptEncoder.DecodeReceipt(valid[..20], 384),

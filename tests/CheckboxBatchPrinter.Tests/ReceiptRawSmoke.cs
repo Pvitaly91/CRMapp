@@ -37,9 +37,10 @@ internal static class ReceiptRawSmoke
         var png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(image));
         using var stream = new MemoryStream(); png.Save(stream);
         var receipts = Enumerable.Range(1, 8).Select(n => new PrintReceiptDocument(stream.ToArray(), $"test-{n}", $"TEST-{n}")).ToArray();
-        var jobs = receipts.Chunk(3).Select(group => EscPosReceiptEncoder.Build(group, Settings)).ToArray();
+        var jobs = receipts.Chunk(ReceiptPrintPolicy.MaxReceiptsPerJob).Select(group => EscPosReceiptEncoder.Build(group, Settings)).ToArray();
+        if (jobs.Length != receipts.Length) throw new InvalidOperationException("RAW preparation must create one job per receipt.");
         foreach (var job in jobs) _ = Decode(job);
-        Console.WriteLine($"PASS readonly RPP210 driver verified on native handle; 8 receipts prepared in {jobs.Length} RAW jobs (3+3+2); no job created.");
+        Console.WriteLine($"PASS readonly RPP210 driver verified on native handle; 8 receipts prepared in {jobs.Length} separate RAW jobs; no job created.");
     }
 
     private static (byte[] Pixels, int Width, int Height) Decode(byte[] data)

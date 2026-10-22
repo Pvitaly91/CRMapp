@@ -28,7 +28,7 @@ public sealed partial class WindowsPrintService
     {
         if (receipts.Count == 0) throw new ArgumentException("Пачка друку порожня.", nameof(receipts));
         if (receipts.Count > ReceiptPrintPolicy.MaxReceiptsPerJob)
-            throw new ArgumentException("Одне завдання може містити не більше трьох чеків.", nameof(receipts));
+            throw new ArgumentException("Одне завдання може містити лише один чек.", nameof(receipts));
         var (maximumHeight, pageTicket) = PrepareReceiptDriver(queue, settings);
         return RasterizeReceiptDocument(BuildBatchDocument(receipts, settings, maximumHeight, pageTicket));
     }
@@ -80,7 +80,7 @@ public sealed partial class WindowsPrintService
     {
         // One Write submits one Windows job and the application does not retry it here.
         // The driver/printer may still restart that job after an interruption such as
-        // paper-out. Receipt UI routes submit at most three receipts per job to limit replays.
+        // paper-out. Receipt UI routes submit one receipt per job to limit replays.
         queue.CurrentJobSettings.Description = jobName;
         var writer = PrintQueue.CreateXpsDocumentWriter(queue);
         writer.Write(document, (PrintTicket)document.PrintTicket);
@@ -90,8 +90,8 @@ public sealed partial class WindowsPrintService
         AppSettings settings, double maximumPageHeight, Func<double, double, PrintTicket>? pageTicket = null)
     {
         if (receipts.Count == 0) throw new ArgumentException("Пачка друку порожня.", nameof(receipts));
-        // Preflight uses the same contiguous groups as submission. Each group may
-        // contain several bounded pages when the driver's feed length is small.
+        // Preflight uses the same one-receipt jobs as submission, validating
+        // each complete receipt against the driver's feed-length limit.
         for (var offset = 0; offset < receipts.Count; offset += ReceiptPrintPolicy.MaxReceiptsPerJob)
             yield return BuildBatchDocument(receipts.Skip(offset).Take(ReceiptPrintPolicy.MaxReceiptsPerJob).ToArray(),
                 settings, maximumPageHeight, pageTicket);

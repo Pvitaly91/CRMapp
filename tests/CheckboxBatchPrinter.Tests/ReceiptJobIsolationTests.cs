@@ -18,10 +18,10 @@ internal static class ReceiptJobIsolationTests
 {
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
-        ("STA receipt jobs group 3 plus 3 plus 1 in order and serialized XPS has only raster images", () => Sta(GroupedJobs)),
-        ("STA grouped preflight is lazy and rejects corrupt or oversized final receipts", () => Sta(InvalidFinalReceipt)),
+        ("STA seven and eight receipts produce separate ordered jobs with raster-only XPS", () => Sta(IndividualJobs)),
+        ("STA individual preflight is lazy and rejects corrupt or oversized final receipts", () => Sta(InvalidFinalReceipt)),
         ("STA receipt raster preserves noninteger page bounds and bottom footer at driver DPI", () => Sta(FooterAndBounds)),
-        ("STA grouped receipt raster preserves bounded multipage order", () => Sta(BoundedPages)),
+        ("STA receipt raster preserves bounded multipage composition and rejects multi-receipt submission", () => Sta(BoundedPages)),
         ("STA receipt raster rejects missing resolution and excessive surface before allocation", () => Sta(InvalidRaster))
     ];
 
@@ -56,37 +56,40 @@ internal static class ReceiptJobIsolationTests
         return ticket;
     }
 
-    private static void GroupedJobs()
+    private static void IndividualJobs()
     {
-        var receipts = Enumerable.Range(1, 7).Select(index => Receipt(index, 120 + index)).ToArray();
-        var defaults = new PrintTicket { CopyCount = 8, PageOrder = PageOrder.Reverse };
-        var sizes = new List<int>();
-        var ordered = new List<string>();
-        foreach (var document in WindowsPrintService.BuildReceiptDocuments(receipts, Settings(), 3000,
-            (width, height) => Ticket(width, height, defaults)))
+        foreach (var count in new[] { 7, 8 })
         {
-            Check(document.Pages.Count == 1, "A short group unexpectedly contains multiple pages.");
-            var original = document.Pages[0].Child;
-            var headers = original.Children.OfType<TextBlock>().Select(header => header.Text).ToArray();
-            sizes.Add(headers.Length); ordered.AddRange(headers);
-            Check(original.Children.OfType<Border>().Count() == headers.Length - 1, "Group separators changed.");
-            var raster = WindowsPrintService.RasterizeReceiptDocument(document);
-            var page = raster.Pages.Single().Child;
-            Check(page.Children.Count == 1 && page.Children[0] is Image, "Prepared page still contains vector text or separators.");
-            Check(page.Width == original.Width && page.Height == original.Height, "Rasterization changed the page size.");
-            Check(((BitmapSource)((Image)page.Children[0]).Source).DpiX == 203 &&
-                ((PrintTicket)page.PrintTicket).PageResolution?.X == 203, "Effective driver resolution was lost.");
-            foreach (var ticket in new[] { (PrintTicket)raster.PrintTicket, (PrintTicket)page.PrintTicket })
-                Check(ticket.CopyCount == 1 && ticket.PageOrder == PageOrder.Standard &&
-                    ticket.PagesPerSheet == 1 && ticket.PageScalingFactor == 100,
-                    "A grouped receipt job may repeat copies, scale or reverse pages.");
-            CheckSerializedRaster(raster);
+            var receipts = Enumerable.Range(1, count).Select(index => Receipt(index, 120 + index)).ToArray();
+            var defaults = new PrintTicket { CopyCount = 8, PageOrder = PageOrder.Reverse };
+            var sizes = new List<int>();
+            var ordered = new List<string>();
+            foreach (var document in WindowsPrintService.BuildReceiptDocuments(receipts, Settings(), 3000,
+                (width, height) => Ticket(width, height, defaults)))
+            {
+                Check(document.Pages.Count == 1, "A short receipt unexpectedly contains multiple pages.");
+                var original = document.Pages[0].Child;
+                var headers = original.Children.OfType<TextBlock>().Select(header => header.Text).ToArray();
+                sizes.Add(headers.Length); ordered.AddRange(headers);
+                Check(headers.Length == 1 && !original.Children.OfType<Border>().Any(), "A receipt job includes another receipt or a separator.");
+                var raster = WindowsPrintService.RasterizeReceiptDocument(document);
+                var page = raster.Pages.Single().Child;
+                Check(page.Children.Count == 1 && page.Children[0] is Image, "Prepared page still contains vector text or separators.");
+                Check(page.Width == original.Width && page.Height == original.Height, "Rasterization changed the page size.");
+                Check(((BitmapSource)((Image)page.Children[0]).Source).DpiX == 203 &&
+                    ((PrintTicket)page.PrintTicket).PageResolution?.X == 203, "Effective driver resolution was lost.");
+                foreach (var ticket in new[] { (PrintTicket)raster.PrintTicket, (PrintTicket)page.PrintTicket })
+                    Check(ticket.CopyCount == 1 && ticket.PageOrder == PageOrder.Standard &&
+                        ticket.PagesPerSheet == 1 && ticket.PageScalingFactor == 100,
+                        "A receipt job may repeat copies, scale or reverse pages.");
+                CheckSerializedRaster(raster);
+            }
+            Check(sizes.SequenceEqual(Enumerable.Repeat(1, count)), "A print job contains more than one receipt or a receipt is missing.");
+            Check(ordered.SequenceEqual(receipts.Select(item => ReceiptPrintHeader.Text(item.OrderNumber, item.TrackingText))),
+                "Receipt order or TTN text changed between individual jobs.");
+            Check(defaults.CopyCount == 8 && defaults.PageOrder == PageOrder.Reverse,
+                "Receipt preparation changed the printer defaults.");
         }
-        Check(sizes.SequenceEqual(new[] { 3, 3, 1 }), "Receipt jobs are not grouped as 3 + 3 + 1.");
-        Check(ordered.SequenceEqual(receipts.Select(item => ReceiptPrintHeader.Text(item.OrderNumber, item.TrackingText))),
-            "Receipt order or TTN text changed between groups.");
-        Check(defaults.CopyCount == 8 && defaults.PageOrder == PageOrder.Reverse,
-            "Receipt preparation changed the printer defaults.");
     }
 
     private static void CheckSerializedRaster(FixedDocument document)
@@ -147,11 +150,12 @@ internal static class ReceiptJobIsolationTests
             using var prepared = WindowsPrintService.BuildReceiptDocuments(good.Append(bad).ToArray(), Settings(), 1500,
                 (width, height) => { ticketCalls++; return Ticket(width, height); }).GetEnumerator();
             Check(ticketCalls == 0, "Preflight eagerly decoded the entire selection.");
-            Check(prepared.MoveNext() && ticketCalls == 1, "Preflight did not validate the first group.");
+            for (var index = 0; index < good.Length; index++)
+                Check(prepared.MoveNext() && ticketCalls == index + 1, "Preflight did not validate one receipt at a time.");
             var rejected = false;
             try { prepared.MoveNext(); }
             catch (Exception) { rejected = true; }
-            Check(rejected && ticketCalls == 1, "Invalid final receipt passed complete preflight.");
+            Check(rejected && ticketCalls == good.Length, "Invalid final receipt passed complete preflight.");
         }
     }
 
@@ -193,8 +197,17 @@ internal static class ReceiptJobIsolationTests
 
     private static void BoundedPages()
     {
-        var original = WindowsPrintService.BuildReceiptDocuments(Enumerable.Range(1, 3).Select(index => Receipt(index)).ToArray(),
-            Settings(), 550, (width, height) => Ticket(width, height)).Single();
+        var receipts = Enumerable.Range(1, 3).Select(index => Receipt(index)).ToArray();
+        // The generic composer still supports bounded pages, but the submission
+        // entry point must refuse more than one receipt before consulting a driver.
+        foreach (var count in new[] { 2, 3, 4 })
+        {
+            var rejected = false;
+            try { _ = WindowsPrintService.PrepareBatchDocument(null!, Enumerable.Repeat(receipts[0], count).ToArray(), Settings()); }
+            catch (ArgumentException) { rejected = true; }
+            Check(rejected, "Multi-receipt submission reached the printer driver.");
+        }
+        var original = WindowsPrintService.BuildBatchDocument(receipts, Settings(), 550, (width, height) => Ticket(width, height));
         Check(original.Pages.Count == 3, "Driver page-height bound was lost inside a group.");
         Check(original.Pages.SelectMany(page => page.Child.Children.OfType<TextBlock>()).Select(header => header.Text)
             .SequenceEqual(Enumerable.Range(1, 3).Select(index => ReceiptPrintHeader.Text($"ORDER-{index:00}", $"TEST-TTN-{index:00}"))),

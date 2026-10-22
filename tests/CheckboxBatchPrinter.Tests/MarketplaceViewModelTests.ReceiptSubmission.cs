@@ -31,7 +31,7 @@ internal static partial class MarketplaceViewModelTests
         _ => ExecuteAsync(fixture.Main.PrintSelectedCommand)
     };
 
-    private static async Task ReceiptSequenceThreePerJobAsync()
+    private static async Task ReceiptSequenceOnePerJobAsync()
     {
         foreach (var route in new[] { "combined", "orders", "selected" })
         foreach (var count in new[] { 7, 8 })
@@ -40,16 +40,16 @@ internal static partial class MarketplaceViewModelTests
             var expected = SelectSequence(fixture, route);
             fixture.ReceiptPrinter.OnSubmit = call =>
             {
-                var acceptedCount = (call - 1) * 3;
+                var acceptedCount = call - 1;
                 True(fixture.Base.History.Records.Keys.SequenceEqual(expected.Take(acceptedCount)),
-                    route + " must persist each complete group before the next Windows job.");
+                    route + " must persist each accepted receipt before the next Windows job.");
             };
             await PrintSequence(fixture, route);
 
-            Equal(3, fixture.ReceiptPrinter.Calls); Equal(count == 7 ? 2 : 3, fixture.ReceiptPrinter.GroupCalls);
-            True(fixture.ReceiptPrinter.Jobs.Select(job => job.Length).SequenceEqual([3, 3, count - 6]));
+            Equal(count, fixture.ReceiptPrinter.Calls); Equal(0, fixture.ReceiptPrinter.GroupCalls);
+            True(fixture.ReceiptPrinter.Jobs.Count == count && fixture.ReceiptPrinter.Jobs.All(job => job.Length == 1));
             True(fixture.ReceiptPrinter.Documents.Select(document => document.ReceiptId).SequenceEqual(expected));
-            Equal(3, fixture.Base.History.Saves);
+            Equal(count, fixture.Base.History.Saves);
             True(fixture.Base.History.Records.Keys.SequenceEqual(expected));
             True(fixture.Main.Receipts.All(row => row.PrintStatus == PrintItemStatus.Done));
             Equal(route == "combined" ? 1 : 0, fixture.LabelPrinter.Calls);
@@ -57,9 +57,8 @@ internal static partial class MarketplaceViewModelTests
             True(!fixture.Main.IsBusy && !fixture.Main.IsPrinting);
             var submissions = fixture.PrintLogger.Entries.Where(entry => entry.Operation == "receipt.job.submit").ToArray();
             Equal(count, submissions.Length);
-            True(submissions.Take(3).All(entry => entry.Status.Contains("group=1;first=1;last=3;count=3", StringComparison.Ordinal)));
-            True(submissions.Skip(3).Take(3).All(entry => entry.Status.Contains("group=2;first=4;last=6;count=3", StringComparison.Ordinal)));
-            True(submissions.Skip(6).All(entry => entry.Status.Contains($"group=3;first=7;last={count};count={count - 6}", StringComparison.Ordinal)));
+            for (var index = 0; index < count; index++)
+                True(submissions[index].Status.Contains($"group={index + 1};first={index + 1};last={index + 1};count=1", StringComparison.Ordinal));
         }
     }
 
@@ -69,41 +68,41 @@ internal static partial class MarketplaceViewModelTests
         {
             using var fixture = await ReceiptSequenceFixtureAsync();
             var expected = SelectSequence(fixture, route);
-            // Legacy false must still keep a driver recovery bounded to three receipts.
+            // Legacy false must still keep a driver recovery bounded to one receipt.
             fixture.Base.Settings.App.SeparatePrintJobPerReceipt = false;
             fixture.ReceiptPrinter.FailOnCall = 2;
             fixture.ReceiptPrinter.OnSubmit = call =>
             {
-                if (call == 2) True(expected.Take(3).All(fixture.Base.History.Records.ContainsKey),
-                    route + " must save the complete accepted group before submitting its successor.");
+                if (call == 2) True(fixture.Base.History.Records.Keys.SequenceEqual(expected.Take(1)),
+                    route + " must save the accepted receipt before submitting its successor.");
             };
             await PrintSequence(fixture, route);
 
             Equal(2, fixture.ReceiptPrinter.Calls);
-            Equal(2, fixture.ReceiptPrinter.GroupCalls);
-            True(fixture.ReceiptPrinter.Jobs.Select(job => job.Length).SequenceEqual([3, 3]));
-            True(fixture.ReceiptPrinter.Documents.Select(document => document.ReceiptId).SequenceEqual(expected.Take(6)));
+            Equal(0, fixture.ReceiptPrinter.GroupCalls);
+            True(fixture.ReceiptPrinter.Jobs.Select(job => job.Length).SequenceEqual([1, 1]));
+            True(fixture.ReceiptPrinter.Documents.Select(document => document.ReceiptId).SequenceEqual(expected.Take(2)));
             Equal(1, fixture.Base.History.Saves);
-            True(fixture.Base.History.Records.Keys.SequenceEqual(expected.Take(3)));
+            True(fixture.Base.History.Records.Keys.SequenceEqual(expected.Take(1)));
             var rows = expected.Select(id => fixture.Main.Receipts.Single(row => row.Id == id)).ToArray();
-            True(rows.Take(3).All(row => row.PrintStatus == PrintItemStatus.Done));
-            True(rows.Skip(3).Take(3).All(row => row.PrintStatus == PrintItemStatus.Error && row.PrintError.Contains("групи")));
-            Equal(PrintItemStatus.Waiting, rows[6].PrintStatus);
-            Equal(3, fixture.Main.FailedCount);
-            True(fixture.Main.StatusText.Contains("3 із 7", StringComparison.Ordinal));
+            Equal(PrintItemStatus.Done, rows[0].PrintStatus);
+            True(rows[1].PrintStatus == PrintItemStatus.Error && rows[1].PrintError.Length > 0);
+            True(rows.Skip(2).All(row => row.PrintStatus == PrintItemStatus.Waiting));
+            Equal(1, fixture.Main.FailedCount);
+            True(fixture.Main.StatusText.Contains("1 із 7", StringComparison.Ordinal));
             var failedManifest = fixture.PrintLogger.Entries.Where(entry => entry.Operation == "receipt.job.failed").ToArray();
-            True(failedManifest.Select(entry => entry.ReceiptId).SequenceEqual(expected.Skip(3).Take(3)));
-            True(failedManifest.All(entry => entry.Status.Contains("group=2;first=4;last=6;count=3", StringComparison.Ordinal)));
+            True(failedManifest.Select(entry => entry.ReceiptId).SequenceEqual(expected.Skip(1).Take(1)));
+            True(failedManifest.All(entry => entry.Status.Contains("group=2;first=2;last=2;count=1", StringComparison.Ordinal)));
             if (route == "selected")
             {
-                True(rows.Take(3).All(row => !row.IsSelected) && rows.Skip(3).All(row => row.IsSelected));
+                True(!rows[0].IsSelected && rows.Skip(1).All(row => row.IsSelected));
                 True(rows.All(row => !row.IsSelectedForOrders));
-                // A manual retry targets only the uncertain group; declining the warning
+                // A manual retry targets only the uncertain receipt; declining the warning
                 // must leave the accepted prefix and untouched suffix out of the printer.
                 fixture.Base.Dialogs.AcceptPrint = false;
                 await ExecuteAsync(fixture.Main.RetryFailedCommand);
-                Equal(3, fixture.Base.Dialogs.Confirmation!.Count);
-                Equal(3, fixture.Base.Dialogs.Confirmation.PreviouslyPrintedCount);
+                Equal(1, fixture.Base.Dialogs.Confirmation!.Count);
+                Equal(1, fixture.Base.Dialogs.Confirmation.PreviouslyPrintedCount);
             }
             else
             {
@@ -111,7 +110,7 @@ internal static partial class MarketplaceViewModelTests
                 fixture.Base.Dialogs.AcceptPrint = false;
                 fixture.Dialogs.Accept = false;
                 await PrintSequence(fixture, route);
-                Equal(6, route == "combined" ? fixture.Dialogs.Confirmation!.PreviouslyPrintedReceipts
+                Equal(2, route == "combined" ? fixture.Dialogs.Confirmation!.PreviouslyPrintedReceipts
                     : fixture.Base.Dialogs.Confirmation!.PreviouslyPrintedCount);
             }
             Equal(2, fixture.ReceiptPrinter.Calls);
@@ -130,9 +129,9 @@ internal static partial class MarketplaceViewModelTests
             fixture.Base.History.FailSave = true;
             fixture.PrintLogger.FailWrites = true;
             await PrintSequence(fixture, route);
-            Equal(3, fixture.ReceiptPrinter.Calls);
-            Equal(2, fixture.ReceiptPrinter.GroupCalls);
-            True(fixture.ReceiptPrinter.Jobs.Select(job => job.Length).SequenceEqual([3, 3, 1]));
+            Equal(expected.Length, fixture.ReceiptPrinter.Calls);
+            Equal(0, fixture.ReceiptPrinter.GroupCalls);
+            True(fixture.ReceiptPrinter.Jobs.Count == expected.Length && fixture.ReceiptPrinter.Jobs.All(job => job.Length == 1));
             True(fixture.ReceiptPrinter.Documents.Select(document => document.ReceiptId).SequenceEqual(expected));
             Equal(0, fixture.Base.History.Saves);
             True(fixture.Main.Receipts.All(row => row.PrintStatus == PrintItemStatus.Done && row.PrintError.Contains("історію")));
@@ -140,7 +139,7 @@ internal static partial class MarketplaceViewModelTests
             True(fixture.Main.StatusText.Contains("історію") || fixture.Base.Dialogs.Errors.Count > 0);
             // No timer or callback retries any accepted receipt after a persistence failure.
             await DrainDispatcherAsync();
-            Equal(3, fixture.ReceiptPrinter.Calls);
+            Equal(expected.Length, fixture.ReceiptPrinter.Calls);
         }
     }
 

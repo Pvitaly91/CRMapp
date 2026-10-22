@@ -53,7 +53,7 @@ internal static class EscPosReceiptEncoder
     internal static Raster BuildRaster(IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings)
     {
         if (receipts.Count is < 1 or > ReceiptPrintPolicy.MaxReceiptsPerJob)
-            throw new ArgumentException("Одне завдання має містити від одного до трьох чеків.", nameof(receipts));
+            throw new ArgumentException("Одне завдання має містити рівно один чек.", nameof(receipts));
         if (!double.IsFinite(settings.PrintableWidthMm) || settings.PrintableWidthMm <= 0 ||
             settings.PrintableWidthMm > 48 || settings.PrintableWidthMm > settings.EffectivePaperWidthMm)
             throw new InvalidOperationException("Для RPP210 ширина друку має бути не більшою за 48 мм (384 точки).");

@@ -27,9 +27,9 @@ internal static partial class MarketplaceViewModelTests
 
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
-        ("STA all receipt print routes submit seven or eight frozen receipts as ordered groups of three with the final remainder", () => StaAsync(ReceiptSequenceThreePerJobAsync)),
-        ("STA all receipt print routes preserve an accepted group and stop at the first uncertain group without replay", () => StaAsync(ReceiptSequencePartialFailureAsync)),
-        ("STA all receipt print routes finish groups of three despite history and diagnostic failures", () => StaAsync(ReceiptSequencePersistenceFailureAsync)),
+        ("STA all receipt print routes submit seven or eight frozen receipts as one receipt per Windows job", () => StaAsync(ReceiptSequenceOnePerJobAsync)),
+        ("STA all receipt print routes preserve an accepted prefix and stop at the first uncertain job without replay", () => StaAsync(ReceiptSequencePartialFailureAsync)),
+        ("STA all receipt print routes finish separate jobs despite history and diagnostic failures", () => StaAsync(ReceiptSequencePersistenceFailureAsync)),
         ("STA every receipt route validates the complete packet before transferring any receipt or label", () => StaAsync(ReceiptSequenceCompletePreflightAsync)),
         ("Prom cabinet browser bridge ignores foreign origins paths and stale operation messages", PromCabinetProtocolOriginAsync),
         ("Prom cabinet browser response preserves exact request account and rejects changed URL or status", PromCabinetProtocolResponseAsync),
@@ -356,7 +356,7 @@ internal static partial class MarketplaceViewModelTests
             if (single) main.SearchText = "2";
             var submitted = main.ReceiptsView.Cast<ReceiptRowViewModel>().ToArray();
             await ExecuteAsync(main.PrintSelectedCommand);
-            Equal((submitted.Length + 2) / 3, fixture.Printer.Calls);
+            Equal(submitted.Length, fixture.Printer.Calls);
             Equal(submitted.Length, fixture.Printer.BatchIds.Length);
             foreach (var row in main.Receipts)
             {
@@ -486,7 +486,7 @@ internal static partial class MarketplaceViewModelTests
         await ExecuteAsync(main.PrintSelectedCommand);
         AssertConfirmation(fixture, [ReceiptThree, ReceiptTwo, ReceiptOne]);
         True(fixture.Dialogs.Confirmation!.Items.All(i => i.Marketplace == "" && i.OrderNumber == ""));
-        Equal(1, fixture.Printer.Calls); // A recoverable Windows job contains at most three receipts.
+        Equal(3, fixture.Printer.Calls); // Each receipt owns its own recoverable Windows job.
     }
 
     private static async Task ImageFailureAsync()
@@ -557,7 +557,7 @@ internal static partial class MarketplaceViewModelTests
         var expectedIds = new[] { ReceiptTwo, ReceiptOne };
         var print = ExecuteAsync(main.PrintSelectedCommand);
         await fixture.Printer.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        True(fixture.Printer.BatchIds.SequenceEqual(expectedIds));
+        True(fixture.Printer.BatchIds.SequenceEqual(expectedIds.Take(1)));
         True(!main.TodayCommand.CanExecute(null), "Today must not refresh receipt rows during a print.");
         Equal(0, fixture.History.Saves);
         fixture.Source.Gate.SetResult(true);
@@ -569,13 +569,13 @@ internal static partial class MarketplaceViewModelTests
         Equal(ReceiptLinkState.Exact, main.Receipts[0].OrderMatch!.State);
         Equal(PrintItemStatus.Printing, main.Receipts[0].PrintStatus);
         Equal(PrintItemStatus.Done, main.Receipts[2].PrintStatus);
-        True(fixture.Printer.BatchIds.SequenceEqual(expectedIds), "Order enrichment changed the currently submitted group.");
+        True(fixture.Printer.BatchIds.SequenceEqual(expectedIds.Take(1)), "Order enrichment changed the currently submitted receipt.");
         Equal(0, fixture.History.Saves);
         fixture.Printer.Gate.SetResult(true);
         await print;
         Equal(0, main.SelectedCount);
         True(main.Receipts.All(row => row.PrintStatus == PrintItemStatus.Done));
-        Equal(1, fixture.History.Saves);
+        Equal(2, fixture.History.Saves);
         Equal(3, fixture.History.Records.Count);
         Equal(0, fixture.Dialogs.Errors.Count);
 
@@ -926,7 +926,7 @@ internal static partial class MarketplaceViewModelTests
         main.SelectAllCommand.Execute(null);
         var expected = main.ReceiptsView.Cast<ReceiptRowViewModel>().Select(row => row.Id).ToArray();
         await ExecuteAsync(main.PrintSelectedCommand);
-        Equal(1, fixture.Printer.Calls);
+        Equal(3, fixture.Printer.Calls);
         True(fixture.Printer.BatchIds.SequenceEqual(expected));
         Equal(2, fixture.ReceiptSource.Calls);
         Equal(1, fixture.Source.FetchCalls);
@@ -2733,8 +2733,6 @@ internal static partial class MarketplaceViewModelTests
     private sealed class Printer : IPrintService
     {
         public int Calls;
-        public int GroupCalls;
-        public List<PrintReceiptDocument[]> Jobs { get; } = [];
         public bool Fail;
         public string PrinterName = "";
         public string[] BatchIds = [];
@@ -2747,19 +2745,14 @@ internal static partial class MarketplaceViewModelTests
         {
             Documents = []; BatchIds = [];
         }
-        public Task PrintReceiptAsync(PrintReceiptDocument receipt, AppSettings settings, CancellationToken ct = default) =>
-            SubmitAsync([receipt], settings, ct);
-        private async Task SubmitAsync(IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings, CancellationToken ct)
+        public async Task PrintReceiptAsync(PrintReceiptDocument receipt, AppSettings settings, CancellationToken ct = default)
         {
-            Calls++; Jobs.Add(receipts.ToArray()); PrinterName = settings.PrinterName; Documents = [..Documents, ..receipts]; BatchIds = [..BatchIds, ..receipts.Select(receipt => receipt.ReceiptId)]; Entered.TrySetResult();
+            Calls++; PrinterName = settings.PrinterName; Documents = [..Documents, receipt]; BatchIds = [..BatchIds, receipt.ReceiptId]; Entered.TrySetResult();
             if (Gate is not null) await Gate.Task.WaitAsync(ct);
             if (Fail) throw new InvalidOperationException("Synthetic printer error");
         }
-        public Task PrintReceiptsAsSingleJobAsync(IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings, CancellationToken ct = default)
-        {
-            True(receipts.Count is >= 2 and <= 3, "A receipt job must contain at most three consecutive receipts.");
-            GroupCalls++; return SubmitAsync(receipts, settings, ct);
-        }
+        public Task PrintReceiptsAsSingleJobAsync(IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings, CancellationToken ct = default) =>
+            throw new InvalidOperationException("Multiple receipts must never share a Windows job.");
         public Task PrintTestAsync(AppSettings settings, CancellationToken ct = default) => throw new InvalidOperationException("Physical test forbidden in VM scenario.");
     }
     private sealed class Receipts : IReceiptService

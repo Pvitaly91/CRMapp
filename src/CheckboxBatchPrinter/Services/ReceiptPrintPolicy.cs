@@ -2,5 +2,5 @@ namespace CheckboxBatchPrinter.Services;
 
 public static class ReceiptPrintPolicy
 {
-    public const int MaxReceiptsPerJob = 3;
+    public const int MaxReceiptsPerJob = 1;
 }

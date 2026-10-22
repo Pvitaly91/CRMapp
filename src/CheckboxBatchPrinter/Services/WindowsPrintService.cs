@@ -61,8 +61,10 @@ public sealed partial class WindowsPrintService : IPrintService
         CancellationToken cancellationToken = default)
     {
         if (receipts.Count == 0) return;
+        if (receipts.Count > ReceiptPrintPolicy.MaxReceiptsPerJob)
+            throw new ArgumentException("Одне завдання може містити лише один чек.", nameof(receipts));
         var printerName = settings.PrinterName;
-        var jobName = $"Checkbox — пачка з {receipts.Count} чеків";
+        var jobName = $"Checkbox чек {receipts[0].ReceiptId}";
         var raw = await Application.Current.Dispatcher.InvokeAsync(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();

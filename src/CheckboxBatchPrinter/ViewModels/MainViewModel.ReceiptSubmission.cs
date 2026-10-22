@@ -13,7 +13,7 @@ public sealed partial class MainViewModel
     }
 
     // The caller preflights the whole immutable packet before starting either printer.
-    // Bounded sequential jobs limit a spooler recovery to at most three receipts.
+    // Separate sequential jobs limit a spooler recovery to one receipt.
     // A successful write means accepted by Windows, not confirmed physical output.
     private async Task<ReceiptSubmissionResult> SubmitReceiptSequenceAsync(
         IReadOnlyList<PrintReceiptDocument> documents, IReadOnlyList<ReceiptRowViewModel> rows,
@@ -70,10 +70,10 @@ public sealed partial class MainViewModel
                 foreach (var row in groupRows)
                 {
                     row.PrintStatus = PrintItemStatus.Error;
-                    row.PrintError = exception.Message + " Завдання могло потрапити до черги Windows; перевірте всі чеки цієї групи перед повтором.";
+                    row.PrintError = exception.Message + " Завдання могло потрапити до черги Windows; перевірте цей чек перед повтором.";
                     Log("failed", row, exception);
                 }
-                warnings.Add($"Чеки {first}–{last}: {groupRows[0].PrintError} Наступні чеки не передано.");
+                warnings.Add($"Чек {first}: {groupRows[0].PrintError} Наступні чеки не передано.");
                 return new(submitted, rows.Count, exception, warnings);
             }
             foreach (var row in groupRows)
