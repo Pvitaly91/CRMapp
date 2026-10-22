@@ -34,6 +34,19 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        if (args.SequenceEqual(["--receipt-raster-smoke"]))
+        {
+            try
+            {
+                foreach (var (name, test) in ReceiptJobIsolationTests.All)
+                {
+                    test().GetAwaiter().GetResult();
+                    Console.WriteLine("PASS " + name);
+                }
+                return 0;
+            }
+            catch (Exception exception) { Console.Error.WriteLine(exception); return 1; }
+        }
         if (args.SequenceEqual(["--prom-browser-smoke"]))
         {
             try { PromCabinetOfflineBrowserTests.RunAsync().GetAwaiter().GetResult(); Console.WriteLine("PASS offline Prom browser integration"); return 0; }

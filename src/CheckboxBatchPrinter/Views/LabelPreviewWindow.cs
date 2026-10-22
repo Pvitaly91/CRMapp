@@ -28,7 +28,7 @@ public sealed class LabelPreviewWindow : Window
             (combined is null ? "" : $" · чеків: {combined.Receipts.Count}"), FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
         header.Children.Add(new TextBlock { Text = combined is null
             ? "Одна етикетка — одна сторінка. Один Windows job. Фізичний вихід не гарантується статусом черги."
-            : "Наклейки й чеки друкуються в порядку вибраних замовлень. Чеки передаються по одному. Це копії існуючих чеків, без повторної фіскалізації.",
+            : "Наклейки й чеки друкуються в порядку вибраних замовлень. Чеки передаються групами по 3. Це копії існуючих чеків, без повторної фіскалізації.",
             TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 8) });
         if (combined is not null)
         {

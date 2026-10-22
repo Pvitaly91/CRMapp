@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
+using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using CheckboxBatchPrinter.Core.Models;
@@ -102,8 +103,14 @@ public sealed partial class WindowsPrintService : IPrintService
             page.Measure(new Size(width, height));
             page.Arrange(new Rect(0, 0, width, height));
             page.UpdateLayout();
-            var ticket = BuildTicket(queue, width, height);
-            new PrintDialog { PrintQueue = queue, PrintTicket = ticket }.PrintVisual(page, "Checkbox Batch Printer — тест");
+            var (maximumHeight, pageTicket) = PrepareReceiptDriver(queue, settings);
+            if (height > maximumHeight)
+                throw new InvalidOperationException("Тестовий чек довший за допустиму сторінку принтера. Перевірте формат паперу.");
+            page.PrintTicket = pageTicket(width, height);
+            var document = new FixedDocument { PrintTicket = ((PrintTicket)page.PrintTicket).Clone() };
+            var content = new PageContent(); ((IAddChild)content).AddChild(page); document.Pages.Add(content);
+            cancellationToken.ThrowIfCancellationRequested();
+            WriteReceiptDocument(queue, RasterizeReceiptDocument(document), "Checkbox Batch Printer — тест");
         }).Task;
 
     private static PrintQueue FindQueue(LocalPrintServer server, string printerName)

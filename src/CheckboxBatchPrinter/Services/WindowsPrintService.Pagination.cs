@@ -19,15 +19,18 @@ public sealed partial class WindowsPrintService
     {
         if (receipts.Count == 0) throw new ArgumentException("Пачка друку порожня.", nameof(receipts));
         var (maximumHeight, pageTicket) = PrepareReceiptDriver(queue, settings);
-        return BuildReceiptDocuments(receipts, settings, maximumHeight, pageTicket);
+        return BuildReceiptDocuments(receipts, settings, maximumHeight, pageTicket)
+            .Select(RasterizeReceiptDocument);
     }
 
     internal static FixedDocument PrepareBatchDocument(PrintQueue queue,
         IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings)
     {
         if (receipts.Count == 0) throw new ArgumentException("Пачка друку порожня.", nameof(receipts));
+        if (receipts.Count > ReceiptPrintPolicy.MaxReceiptsPerJob)
+            throw new ArgumentException("Одне завдання може містити не більше трьох чеків.", nameof(receipts));
         var (maximumHeight, pageTicket) = PrepareReceiptDriver(queue, settings);
-        return BuildBatchDocument(receipts, settings, maximumHeight, pageTicket);
+        return RasterizeReceiptDocument(BuildBatchDocument(receipts, settings, maximumHeight, pageTicket));
     }
 
     private static (double MaximumHeight, Func<double, double, PrintTicket> PageTicket) PrepareReceiptDriver(
@@ -56,6 +59,16 @@ public sealed partial class WindowsPrintService
             var validated = queue.MergeAndValidatePrintTicket(defaults, requested).ValidatedPrintTicket;
             var frame = queue.GetPrintCapabilities(validated);
             ValidateReceiptPageFit(pageWidth, pageHeight, validated, frame.PageImageableArea);
+            // Rasterize at the effective driver's DPI, including application-added text.
+            // If only capability resolutions are available, explicitly select one and
+            // validate it before allocating the surface or submitting any job.
+            requested.PageResolution = ResolveReceiptResolution(validated, frame);
+            validated = queue.MergeAndValidatePrintTicket(defaults, requested).ValidatedPrintTicket;
+            frame = queue.GetPrintCapabilities(validated);
+            ValidateReceiptPageFit(pageWidth, pageHeight, validated, frame.PageImageableArea);
+            if (validated.PageResolution is not { X: > 0, Y: > 0 } effectiveResolution)
+                throw new InvalidOperationException("Драйвер не підтвердив роздільну здатність друку чеків. Пакет не передано принтеру.");
+            requested.PageResolution = new PageResolution(effectiveResolution.X.Value, effectiveResolution.Y.Value);
             // Keep the compact content height in the page-level ticket. Some roll drivers
             // report their maximum feed length for every validated ticket; imposing that
             // maximum on the XPS FixedPage would introduce metres of blank paper.
@@ -67,7 +80,7 @@ public sealed partial class WindowsPrintService
     {
         // One Write submits one Windows job and the application does not retry it here.
         // The driver/printer may still restart that job after an interruption such as
-        // paper-out. Receipt UI routes submit one receipt per job to limit such replays.
+        // paper-out. Receipt UI routes submit at most three receipts per job to limit replays.
         queue.CurrentJobSettings.Description = jobName;
         var writer = PrintQueue.CreateXpsDocumentWriter(queue);
         writer.Write(document, (PrintTicket)document.PrintTicket);
@@ -77,10 +90,11 @@ public sealed partial class WindowsPrintService
         AppSettings settings, double maximumPageHeight, Func<double, double, PrintTicket>? pageTicket = null)
     {
         if (receipts.Count == 0) throw new ArgumentException("Пачка друку порожня.", nameof(receipts));
-        // A completed receipt has its own job boundary. Lazy preparation also bounds
-        // preflight bitmap memory to the current receipt, even for a large selection.
-        foreach (var receipt in receipts)
-            yield return BuildBatchDocument([receipt], settings, maximumPageHeight, pageTicket);
+        // Preflight uses the same contiguous groups as submission. Each group may
+        // contain several bounded pages when the driver's feed length is small.
+        for (var offset = 0; offset < receipts.Count; offset += ReceiptPrintPolicy.MaxReceiptsPerJob)
+            yield return BuildBatchDocument(receipts.Skip(offset).Take(ReceiptPrintPolicy.MaxReceiptsPerJob).ToArray(),
+                settings, maximumPageHeight, pageTicket);
     }
 
     internal static double ReceiptPageHeightLimit(double declared, double? validated, double? imageable)

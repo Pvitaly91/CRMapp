@@ -46,7 +46,8 @@ internal static partial class MarketplaceViewModelTests
         await fixture.Main.PrintOrderReceiptsAsync();
 
         var expected = new[] { ReceiptThree, later, ReceiptOne, ReceiptTwo };
-        Equal(4, fixture.ReceiptPrinter.Calls);
+        Equal(2, fixture.ReceiptPrinter.Calls);
+        True(fixture.ReceiptPrinter.Jobs.Select(job => job.Length).SequenceEqual([3, 1]));
         True(fixture.ReceiptPrinter.Documents.Select(document => document.ReceiptId).SequenceEqual(expected));
         True(fixture.ReceiptPrinter.Documents.Select(document => document.OrderNumber).SequenceEqual(["ORDER-B", "ORDER-B", "ORDER-A", "ORDER-A"]));
         True(fixture.ReceiptPrinter.Documents.All(document => document.TrackingText.Length == 0), "A receipt-only job may not require a shipment.");
@@ -56,7 +57,7 @@ internal static partial class MarketplaceViewModelTests
         True(confirmation.Items.Select(item => item.ReceiptId).SequenceEqual(expected));
         True(confirmation.Items.Select(item => item.Position).SequenceEqual([1, 2, 3, 4]));
         True(confirmation.Items.All(item => item.Marketplace == "Prom"));
-        Equal(4, fixture.Base.History.Saves); Equal(4, fixture.Base.History.Records.Count);
+        Equal(2, fixture.Base.History.Saves); Equal(4, fixture.Base.History.Records.Count);
         True(fixture.Main.Receipts.All(receipt => receipt.PrintStatus == PrintItemStatus.Done));
         True(marks.SequenceEqual(OrderReceiptMarks(fixture)), "Receipt-only order printing may not consume either receipt grid's marks.");
         True(labelState.SequenceEqual(OrderLabelState(fixture)), "Receipt-only printing must preserve selected orders and every label status.");
@@ -248,7 +249,7 @@ internal static partial class MarketplaceViewModelTests
         }
         finally { fixture.Images.Gate.TrySetResult(true); fixture.ReceiptPrinter.Gate.TrySetResult(true); }
         await printing;
-        Equal(3, fixture.ReceiptPrinter.Calls); Equal(3, fixture.Base.History.Saves);
+        Equal(1, fixture.ReceiptPrinter.Calls); Equal(1, fixture.Base.History.Saves);
         True(!fixture.Main.IsBusy && !fixture.Main.IsPrinting && !fixture.Workspace.IsWorkspaceRefreshing && !fixture.Waybills!.IsWorkspaceRefreshing);
         True(fixture.Main.PrintOrderReceiptsCommand.CanExecute(null)); OrderReceiptsAssertNoLabels(fixture);
 
@@ -275,30 +276,30 @@ internal static partial class MarketplaceViewModelTests
         await fixture.Main.PrintOrderReceiptsAsync();
 
         Equal(1, fixture.ReceiptPrinter.Calls); Equal(0, fixture.Base.History.Saves);
-        Equal(1, fixture.Main.Receipts.Count(row => row.PrintStatus == PrintItemStatus.Error && row.PrintError.Length > 0));
-        Equal(2, fixture.Main.Receipts.Count(row => row.PrintStatus == PrintItemStatus.Waiting));
+        Equal(3, fixture.Main.Receipts.Count(row => row.PrintStatus == PrintItemStatus.Error && row.PrintError.Length > 0));
+        Equal(0, fixture.Main.Receipts.Count(row => row.PrintStatus == PrintItemStatus.Waiting));
         True(marks.SequenceEqual(OrderReceiptMarks(fixture)));
         True(fixture.Workspace.AllOrderRows.All(row => row.IsSelectedForLabels));
         True(fixture.Base.Dialogs.Errors.Count > 0);
         fixture.Base.Dialogs.AcceptPrint = false;
         await fixture.Main.PrintOrderReceiptsAsync();
-        Equal(1, fixture.Base.Dialogs.Confirmation!.PreviouslyPrintedCount); Equal(1, fixture.ReceiptPrinter.Calls);
+        Equal(3, fixture.Base.Dialogs.Confirmation!.PreviouslyPrintedCount); Equal(1, fixture.ReceiptPrinter.Calls);
 
         // The receipt toolbar must disclose the same uncertain transfer, even when only
-        // one independently marked receipt is selected rather than the whole order batch.
+        // the independently marked failed group is selected rather than the order batch.
         foreach (var row in fixture.Main.Receipts)
             row.IsSelectedForOrders = row.PrintStatus == PrintItemStatus.Error;
         fixture.Base.Dialogs.Confirmation = null;
         await ExecuteAsync(fixture.Main.PrintSelectedCommand);
-        Equal(1, fixture.Base.Dialogs.Confirmation!.PreviouslyPrintedCount);
-        Equal(1, fixture.Base.Dialogs.Confirmation.Count); Equal(1, fixture.ReceiptPrinter.Calls);
-        True(fixture.Main.Receipts.Single(row => row.PrintStatus == PrintItemStatus.Error).IsSelectedForOrders);
+        Equal(3, fixture.Base.Dialogs.Confirmation!.PreviouslyPrintedCount);
+        Equal(3, fixture.Base.Dialogs.Confirmation.Count); Equal(1, fixture.ReceiptPrinter.Calls);
+        True(fixture.Main.Receipts.Where(row => row.PrintStatus == PrintItemStatus.Error).All(row => row.IsSelectedForOrders));
 
         fixture.Base.Dialogs.Confirmation = null;
         await ExecuteAsync(fixture.Main.RetryFailedCommand);
-        Equal(1, fixture.Base.Dialogs.Confirmation!.PreviouslyPrintedCount);
-        Equal(1, fixture.Base.Dialogs.Confirmation.Count); Equal(1, fixture.ReceiptPrinter.Calls);
-        Equal(1, fixture.Main.Receipts.Count(row => row.PrintStatus == PrintItemStatus.Error));
+        Equal(3, fixture.Base.Dialogs.Confirmation!.PreviouslyPrintedCount);
+        Equal(3, fixture.Base.Dialogs.Confirmation.Count); Equal(1, fixture.ReceiptPrinter.Calls);
+        Equal(3, fixture.Main.Receipts.Count(row => row.PrintStatus == PrintItemStatus.Error));
         Equal(0, fixture.Base.History.Saves);
         // RetryFailed intentionally marks all failed visible receipts. Restore the independent
         // selections before checking that the combined coordinator leaves them unchanged.
@@ -309,7 +310,7 @@ internal static partial class MarketplaceViewModelTests
         }
         fixture.Dialogs.Accept = false;
         await fixture.Main.PrintOrdersWithReceiptsAsync();
-        Equal(1, fixture.Dialogs.Confirmation!.PreviouslyPrintedReceipts);
+        Equal(3, fixture.Dialogs.Confirmation!.PreviouslyPrintedReceipts);
         Equal(1, fixture.ReceiptPrinter.Calls); Equal(0, fixture.Base.History.Saves);
         True(marks.SequenceEqual(OrderReceiptMarks(fixture))); OrderReceiptsAssertNoLabels(fixture, combinedPreviews: 1);
     }
@@ -322,7 +323,7 @@ internal static partial class MarketplaceViewModelTests
         var marks = OrderReceiptMarks(fixture);
         await fixture.Main.PrintOrderReceiptsAsync();
 
-        Equal(3, fixture.ReceiptPrinter.Calls); Equal(0, fixture.Base.History.Saves);
+        Equal(1, fixture.ReceiptPrinter.Calls); Equal(0, fixture.Base.History.Saves);
         True(fixture.Main.Receipts.All(row => row.PrintStatus == PrintItemStatus.Done && row.PrintError.Length > 0));
         True(fixture.Workspace.AllOrderRows.All(row => row.IsSelectedForLabels));
         True(marks.SequenceEqual(OrderReceiptMarks(fixture)));
@@ -330,7 +331,7 @@ internal static partial class MarketplaceViewModelTests
         fixture.Base.Dialogs.AcceptPrint = false;
         await fixture.Main.PrintOrderReceiptsAsync();
         Equal(3, fixture.Base.Dialogs.Confirmation!.PreviouslyPrintedCount);
-        Equal(3, fixture.ReceiptPrinter.Calls); Equal(0, fixture.Base.History.Saves);
+        Equal(1, fixture.ReceiptPrinter.Calls); Equal(0, fixture.Base.History.Saves);
         OrderReceiptsAssertNoLabels(fixture);
     }
 
