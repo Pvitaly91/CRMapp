@@ -119,6 +119,7 @@ public sealed partial class MainViewModel
 
             var labelsSucceeded = false;
             var receiptsSucceeded = false;
+            var receiptsSubmitted = 0;
             var warnings = new List<string>();
             async Task SubmitLabelsAsync()
             {
@@ -132,36 +133,13 @@ public sealed partial class MainViewModel
             }
             async Task SubmitReceiptsAsync()
             {
-                foreach (var row in receipts) { row.PrintStatus = PrintItemStatus.Printing; row.PrintError = ""; }
-                foreach (var item in items) _combinedReceiptTransferRisks.Add((account, item.ReceiptId.ToUpperInvariant()));
-                try
-                {
-                    LogBatch("receipts.submit");
-                    if (documents.Length == 1) await _printService.PrintReceiptAsync(documents[0], settings, token);
-                    else await _printService.PrintReceiptsAsSingleJobAsync(documents, settings, token);
-                    receiptsSucceeded = true;
-                    foreach (var row in receipts) row.PrintStatus = PrintItemStatus.Done;
-                    LogBatch("receipts.accepted", includeReceipts: true);
-                }
-                catch (Exception exception)
-                {
-                    foreach (var row in receipts) { row.PrintStatus = PrintItemStatus.Error; row.PrintError = exception.Message; }
-                    LogBatch("receipts", exception);
-                    warnings.Add("Чеки: " + exception.Message + " Частина могла надрукуватися; перевірте перед повтором.");
-                }
-                if (!receiptsSucceeded) return;
-                try
-                {
-                    await _printHistoryStore.MarkPrintedAsync(account, items.Select(item => item.ReceiptId).ToArray(), settings.PrinterName);
-                    foreach (var item in items) _combinedReceiptTransferRisks.Remove((account, item.ReceiptId.ToUpperInvariant()));
-                }
-                catch (Exception exception)
-                {
-                    LogBatch("history", exception);
-                    const string warning = "Чеки передано, але не вдалося зберегти історію їх друку.";
-                    warnings.Add(warning);
-                    foreach (var row in receipts) row.PrintError = warning;
-                }
+                LogBatch("receipts.submit");
+                var submitted = await SubmitReceiptSequenceAsync(documents, receipts, settings, account, token);
+                receiptsSubmitted = submitted.Submitted;
+                receiptsSucceeded = submitted.AllSubmitted;
+                warnings.AddRange(submitted.Warnings);
+                if (receiptsSucceeded) LogBatch("receipts.accepted", includeReceipts: true);
+                else LogBatch("receipts", submitted.Failure);
             }
             ProgressText = "Передаю наклейки й чеки принтерам…";
             if (string.Equals(session.Batch.Settings.PrinterName, settings.PrinterName, StringComparison.OrdinalIgnoreCase))
@@ -172,7 +150,7 @@ public sealed partial class MainViewModel
             else await Task.WhenAll(SubmitLabelsAsync(), SubmitReceiptsAsync());
             if (labelsSucceeded && receiptsSucceeded)
                 foreach (var order in orders) order.Row.IsSelectedForLabels = false;
-            var result = $"Наклейки: {(labelsSucceeded ? "передано" : "помилка")}. Чеки: {(receiptsSucceeded ? "передано" : "помилка")}.";
+            var result = $"Наклейки: {(labelsSucceeded ? "передано" : "помилка")}. Чеки передано: {receiptsSubmitted} із {receipts.Length}.";
             StatusText = result;
             if (warnings.Count > 0)
             {
@@ -200,6 +178,7 @@ public sealed partial class MainViewModel
             ProgressText = "";
             IsPrinting = false;
             IsBusy = false;
+            OnPropertyChanged(nameof(FailedCount));
             RaiseCommands();
         }
     }

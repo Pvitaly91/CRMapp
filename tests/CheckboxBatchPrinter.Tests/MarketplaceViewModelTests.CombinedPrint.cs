@@ -32,10 +32,10 @@ internal static partial class MarketplaceViewModelTests
             "Combined order printing must not consume either receipt tab's marks.");
         True(fixture.Workspace.AllOrderRows.All(r => !r.IsSelectedForLabels && r.HasPrintedLabel));
         True(fixture.Main.Receipts.All(r => r.PrintStatus == PrintItemStatus.Done));
-        Equal(1, fixture.Base.History.Saves); Equal(3, fixture.Base.History.Records.Count);
+        Equal(3, fixture.Base.History.Saves); Equal(3, fixture.Base.History.Records.Count);
         Equal(LabelSubmissionState.Submitted, fixture.LabelHistory.Attempts.Single().State);
         Equal(0, fixture.Base.Dialogs.Errors.Count); Equal(0, fixture.Dialogs.StandalonePreviews);
-        var logs = fixture.PrintLogger.Entries;
+        var logs = fixture.PrintLogger.Entries.Where(entry => entry.Operation.StartsWith("combined.print.", StringComparison.Ordinal)).ToArray();
         var selected = logs.Single(entry => entry.Operation == "combined.print.selected");
         var batch = selected.Status.Split(';')[0];
         True(Guid.TryParseExact(batch["batch=".Length..], "N", out _));
@@ -57,10 +57,10 @@ internal static partial class MarketplaceViewModelTests
         logFailure.MarkOrders();
         logFailure.PrintLogger.FailWrites = true;
         await logFailure.Main.PrintOrdersWithReceiptsAsync();
-        Equal(1, logFailure.ReceiptPrinter.Calls); Equal(1, logFailure.LabelPrinter.Calls);
+        Equal(3, logFailure.ReceiptPrinter.Calls); Equal(1, logFailure.LabelPrinter.Calls);
         True(logFailure.Main.Receipts.All(row => row.PrintStatus == PrintItemStatus.Done));
         True(logFailure.Workspace.AllOrderRows.All(row => !row.IsSelectedForLabels));
-        Equal(1, logFailure.Base.History.Saves);
+        Equal(3, logFailure.Base.History.Saves);
         Equal(0, logFailure.Base.Dialogs.Errors.Count);
     }
 
@@ -83,7 +83,7 @@ internal static partial class MarketplaceViewModelTests
         True(fixture.LabelPrinter.Batch!.Pages.Select(p => p.Shipment.OrderNumber).SequenceEqual(new[] { "ORDER-B", "ORDER-A" }));
         Equal(4, fixture.Dialogs.Confirmation!.Receipts.Count);
         True(fixture.Dialogs.Confirmation.Receipts.Items.Select(i => i.Position).SequenceEqual(new[] { 1, 2, 3, 4 }));
-        Equal(1, fixture.ReceiptPrinter.Calls); Equal(1, fixture.LabelPrinter.Calls);
+        Equal(4, fixture.ReceiptPrinter.Calls); Equal(1, fixture.LabelPrinter.Calls);
     }
 
     private static async Task CombinedPrintFrozenViewAsync()
@@ -161,7 +161,7 @@ internal static partial class MarketplaceViewModelTests
         await print;
         True(!fixture.Main.IsBusy && !fixture.Main.IsPrinting && !fixture.Labels.IsBusy && !fixture.Labels.IsPrintOperationActive);
         True(!fixture.Waybills!.IsWorkspaceRefreshing && fixture.Waybills.PrintSelectedCommand.CanExecute(null));
-        Equal(1, fixture.ReceiptPrinter.Calls); Equal(1, fixture.LabelPrinter.Calls);
+        Equal(3, fixture.ReceiptPrinter.Calls); Equal(1, fixture.LabelPrinter.Calls);
         await CombinedPrintSamePrinterAsync();
         await CombinedPrintWaitForWaybillAsync();
     }
@@ -191,7 +191,7 @@ internal static partial class MarketplaceViewModelTests
             fixture.ReceiptPrinter.Gate.TrySetResult(true);
         }
         await print;
-        Equal(1, fixture.LabelPrinter.Calls); Equal(1, fixture.ReceiptPrinter.Calls);
+        Equal(1, fixture.LabelPrinter.Calls); Equal(3, fixture.ReceiptPrinter.Calls);
     }
 
     private static async Task CombinedPrintWaitForWaybillAsync()
@@ -286,9 +286,9 @@ internal static partial class MarketplaceViewModelTests
 
         await fixture.Main.PrintOrdersWithReceiptsAsync();
 
-        Equal(1, fixture.LabelPrinter.Calls); Equal(1, fixture.ReceiptPrinter.Calls);
+        Equal(1, fixture.LabelPrinter.Calls); Equal(3, fixture.ReceiptPrinter.Calls);
         Equal(LabelSubmissionState.SubmissionUnknown, fixture.LabelHistory.Attempts.Single().State);
-        Equal(1, fixture.Base.History.Saves); Equal(3, fixture.Base.History.Records.Count);
+        Equal(3, fixture.Base.History.Saves); Equal(3, fixture.Base.History.Records.Count);
         True(fixture.Main.Receipts.All(r => r.PrintStatus == PrintItemStatus.Done));
         True(fixture.Workspace.AllOrderRows.All(r => r.IsSelectedForLabels && r.HasLabelSubmission && !r.HasPrintedLabel),
             "A label transfer of unknown outcome must retain paired marks and its duplicate-risk history.");
@@ -306,22 +306,27 @@ internal static partial class MarketplaceViewModelTests
 
             await fixture.Main.PrintOrdersWithReceiptsAsync();
 
-            Equal(1, fixture.LabelPrinter.Calls); Equal(1, fixture.ReceiptPrinter.Calls);
+            Equal(1, fixture.LabelPrinter.Calls); Equal(historyFailure ? 3 : 1, fixture.ReceiptPrinter.Calls);
             Equal(LabelSubmissionState.Submitted, fixture.LabelHistory.Attempts.Single().State);
             True(fixture.Workspace.AllOrderRows.All(r => r.HasPrintedLabel));
             Equal(0, fixture.Base.History.Saves);
             True(fixture.Workspace.AllOrderRows.All(r => r.IsSelectedForLabels == !historyFailure),
                 "Accepted jobs may clear the paired marks despite a history-save warning; a failed receipt transfer may not.");
-            True(fixture.Main.Receipts.All(r => r.PrintStatus == (historyFailure ? PrintItemStatus.Done : PrintItemStatus.Error)));
+            if (historyFailure) True(fixture.Main.Receipts.All(r => r.PrintStatus == PrintItemStatus.Done));
+            else
+            {
+                Equal(1, fixture.Main.Receipts.Count(r => r.PrintStatus == PrintItemStatus.Error));
+                Equal(2, fixture.Main.Receipts.Count(r => r.PrintStatus == PrintItemStatus.Waiting));
+            }
             True(!fixture.Main.IsBusy && !fixture.Labels.IsBusy);
             Equal(1, fixture.PrintLogger.Entries.Count(entry => entry.Operation == "combined.print.labels.accepted"));
             Equal(historyFailure ? 1 : 0, fixture.PrintLogger.Entries.Count(entry => entry.Operation == "combined.print.receipts.accepted"));
-            True(fixture.PrintLogger.Entries.Any(entry => entry.Operation == "combined.print." + (historyFailure ? "history" : "receipts") && entry.IsError));
+            True(fixture.PrintLogger.Entries.Any(entry => entry.Operation == (historyFailure ? "receipt.job.history" : "combined.print.receipts") && entry.IsError));
             if (!historyFailure)
             {
                 fixture.Dialogs.Accept = false;
                 await fixture.Main.PrintOrdersWithReceiptsAsync();
-                Equal(3, fixture.Dialogs.Confirmation!.PreviouslyPrintedReceipts);
+                Equal(1, fixture.Dialogs.Confirmation!.PreviouslyPrintedReceipts);
                 Equal(1, fixture.ReceiptPrinter.Calls); Equal(1, fixture.LabelPrinter.Calls);
                 Equal(0, fixture.Base.History.Saves);
                 True(fixture.Workspace.AllOrderRows.All(r => r.IsSelectedForLabels));
@@ -348,7 +353,7 @@ internal static partial class MarketplaceViewModelTests
 
     private static void CombinedAssertOrder(CombinedFixture fixture, string[] expectedOrders, string[] expectedReceipts)
     {
-        Equal(1, fixture.LabelPrinter.Calls); Equal(1, fixture.ReceiptPrinter.Calls);
+        Equal(1, fixture.LabelPrinter.Calls); Equal(expectedReceipts.Length, fixture.ReceiptPrinter.Calls);
         True(fixture.LabelPrinter.Batch!.Pages.Select(p => p.Shipment.OrderNumber).SequenceEqual(expectedOrders));
         True(fixture.ReceiptPrinter.Documents.Select(p => p.OrderNumber).SequenceEqual(expectedOrders));
         True(fixture.ReceiptPrinter.Documents.Select(p => p.ReceiptId).SequenceEqual(expectedReceipts));
@@ -434,7 +439,7 @@ internal static partial class MarketplaceViewModelTests
         private void Record(string operation, string? receiptId, string? printStatus, bool isError)
         {
             if (FailWrites) throw new IOException("Synthetic diagnostic disk failure.");
-            if (operation.StartsWith("combined.print.", StringComparison.Ordinal))
+            if (operation.StartsWith("combined.print.", StringComparison.Ordinal) || operation.StartsWith("receipt.job.", StringComparison.Ordinal))
                 Entries.Add((operation, receiptId, printStatus ?? "", isError));
         }
     }
@@ -461,6 +466,8 @@ internal static partial class MarketplaceViewModelTests
     {
         public bool PrinterAvailable = true, Fail, FailValidation;
         public int Calls;
+        public int FailOnCall;
+        public Action<int>? OnSubmit;
         public string PrinterName = "";
         public PrintReceiptDocument[] Documents = [];
         public TaskCompletionSource<bool>? Gate;
@@ -468,15 +475,16 @@ internal static partial class MarketplaceViewModelTests
         public IReadOnlyList<string> GetInstalledPrinters() => ["mock-printer"];
         public bool PrinterExists(string printerName) => PrinterAvailable && printerName == "mock-printer";
         public void ValidateReceiptsForPrint(IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings)
-        { if (FailValidation) throw new InvalidOperationException("Synthetic malformed PNG/layout."); }
-        public Task PrintReceiptAsync(PrintReceiptDocument receipt, AppSettings settings, CancellationToken cancellationToken = default) =>
-            PrintReceiptsAsSingleJobAsync([receipt], settings, cancellationToken);
-        public async Task PrintReceiptsAsSingleJobAsync(IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings, CancellationToken cancellationToken = default)
+        { Documents = []; if (FailValidation) throw new InvalidOperationException("Synthetic malformed PNG/layout."); }
+        public async Task PrintReceiptAsync(PrintReceiptDocument receipt, AppSettings settings, CancellationToken cancellationToken = default)
         {
-            Calls++; Documents = receipts.ToArray(); PrinterName = settings.PrinterName; Entered.TrySetResult();
+            Calls++; Documents = [..Documents, receipt]; PrinterName = settings.PrinterName; Entered.TrySetResult();
+            OnSubmit?.Invoke(Calls);
             if (Gate is not null) await Gate.Task.WaitAsync(cancellationToken);
-            if (Fail) throw new InvalidOperationException("Synthetic combined receipt backend failure.");
+            if (Fail || Calls == FailOnCall) throw new InvalidOperationException("Synthetic combined receipt backend failure.");
         }
+        public Task PrintReceiptsAsSingleJobAsync(IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Multiple receipts must never share a Windows job.");
         public Task PrintTestAsync(AppSettings settings, CancellationToken cancellationToken = default) => throw new InvalidOperationException("Physical printing is forbidden in synthetic tests.");
     }
 

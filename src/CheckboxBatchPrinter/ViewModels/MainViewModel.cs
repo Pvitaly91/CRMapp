@@ -590,7 +590,6 @@ public sealed partial class MainViewModel : ObservableObject
 
         IsBusy = true;
         IsPrinting = true;
-        var success = 0;
         var errors = 0;
         try
         {
@@ -622,95 +621,34 @@ public sealed partial class MainViewModel : ObservableObject
             var confirmation = new PrintBatchConfirmation(settings.PrinterName, hiddenCount, items, previouslyPrinted);
             if (!_dialogs.ConfirmPrint(confirmation)) return;
             foreach (var row in selected) { row.PrintStatus = PrintItemStatus.Waiting; row.PrintError = string.Empty; }
-            if (selected.Length == 1)
+            var documents = new List<PrintReceiptDocument>();
+            for (var index = 0; index < selected.Length; index++)
             {
-                var current = 0;
-                var result = await BatchProcessor.RunAsync(selected, async (row, cancellationToken) =>
-                {
-                    current++;
-                    ProgressText = $"Друк {current} із {selected.Length}";
-                    row.PrintStatus = PrintItemStatus.Downloading;
-                    var png = await _imageService.GetPngAsync(row.Id, (int)Math.Round(settings.EffectivePaperWidthMm), cancellationToken);
-                    row.PrintStatus = PrintItemStatus.Printing;
-                    _combinedReceiptTransferRisks.Add((accountContext, row.Id.ToUpperInvariant()));
-                    await _printService.PrintReceiptAsync(new PrintReceiptDocument(png, row.Id, items[0].OrderNumber, items[0].TrackingText), settings, cancellationToken);
-                    row.PrintStatus = PrintItemStatus.Done;
-                    tab.SetMarked(row, false);
-                    _logger.Info("receipt.print", row.Id, printStatus: "done");
-                }, (row, exception) =>
-                {
-                    row.PrintStatus = PrintItemStatus.Error;
-                    row.PrintError = exception.Message;
-                    _logger.Error("receipt.print", exception, row.Id, printStatus: "error");
-                    return Task.CompletedTask;
-                });
-                success = result.SuccessCount;
-                errors = result.ErrorCount;
-            }
-            else
-            {
-                var loaded = new List<(PrintReceiptDocument Document, ReceiptRowViewModel Row)>();
-                for (var i = 0; i < selected.Length; i++)
-                {
-                    var row = selected[i];
-                    ProgressText = $"Завантаження {i + 1} із {selected.Length}";
-                    try
-                    {
-                        row.PrintStatus = PrintItemStatus.Downloading;
-                        var png = await _imageService.GetPngAsync(row.Id, (int)Math.Round(settings.EffectivePaperWidthMm));
-                        loaded.Add((new PrintReceiptDocument(png, row.Id, items[i].OrderNumber, items[i].TrackingText), row));
-                    }
-                    catch (Exception exception)
-                    {
-                        row.PrintStatus = PrintItemStatus.Error; row.PrintError = exception.Message; errors++;
-                    }
-                }
-                if (errors > 0)
-                {
-                    foreach (var item in loaded) item.Row.PrintStatus = PrintItemStatus.Waiting;
-                    throw new InvalidOperationException("Не всі PNG завантажено. Підтверджений пакет не передано принтеру; частковий пакет не друкується.");
-                }
-                if (loaded.Count > 0)
-                {
-                    foreach (var item in loaded) item.Row.PrintStatus = PrintItemStatus.Printing;
-                    foreach (var item in loaded) _combinedReceiptTransferRisks.Add((accountContext, item.Row.Id.ToUpperInvariant()));
-                    await _printService.PrintReceiptsAsSingleJobAsync(loaded.Select(x => x.Document).ToArray(), settings);
-                    foreach (var item in loaded)
-                    {
-                        item.Row.PrintStatus = PrintItemStatus.Done;
-                        tab.SetMarked(item.Row, false);
-                    }
-                    success = loaded.Count;
-                }
-            }
-            var printedRows = selected.Where(row => row.PrintStatus == PrintItemStatus.Done).ToArray();
-            string? historyWarning = null;
-            if (printedRows.Length > 0)
-            {
+                var row = selected[index];
+                ProgressText = $"Завантаження {index + 1} із {selected.Length}";
                 try
                 {
-                    await _printHistoryStore.MarkPrintedAsync(
-                        accountContext,
-                        printedRows.Select(row => row.Id).ToArray(),
-                        settings.PrinterName);
-                    foreach (var row in printedRows) _combinedReceiptTransferRisks.Remove((accountContext, row.Id.ToUpperInvariant()));
+                    row.PrintStatus = PrintItemStatus.Downloading;
+                    var png = await _imageService.GetPngAsync(row.Id, (int)Math.Round(settings.EffectivePaperWidthMm));
+                    documents.Add(new(png, row.Id, items[index].OrderNumber, items[index].TrackingText));
+                    row.PrintStatus = PrintItemStatus.Waiting;
                 }
                 catch (Exception exception)
                 {
-                    historyWarning = "Не вдалося зберегти локальну історію друку.";
-                    foreach (var row in printedRows) row.PrintError = historyWarning;
-                    _logger.Error("print.history.save", exception);
+                    row.PrintStatus = PrintItemStatus.Error; row.PrintError = exception.Message; errors++;
                 }
             }
-
-            StatusText = historyWarning is null
-                ? $"Друк завершено. Успішно: {success}. Помилки: {errors}."
-                : $"Друк завершено, але історію не збережено. Успішно: {success}.";
+            if (errors > 0)
+                throw new InvalidOperationException("Не всі PNG завантажено. Підтверджений пакет не передано принтеру; частковий пакет не друкується.");
+            _printService.ValidateReceiptsForPrint(documents, settings);
+            var result = await SubmitReceiptSequenceAsync(documents, selected, settings, accountContext,
+                accepted: row => tab.SetMarked(row, false));
+            StatusText = result.Summary;
+            if (result.Warnings.Count > 0) StatusText += " " + string.Join("\n", result.Warnings);
             ProgressText = string.Empty;
             OnPropertyChanged(nameof(FailedCount));
-            var summary = $"Успішно: {success}\nПомилки: {errors}";
-            if (historyWarning is not null) summary += $"\n\n{historyWarning}";
-            _dialogs.ShowInfo(summary, "Пакетний друк завершено");
+            if (result.Warnings.Count > 0) _dialogs.ShowError(StatusText, "Пакетний друк");
+            else _dialogs.ShowInfo(StatusText, "Пакетний друк завершено");
         }
         catch (Exception exception)
         {

@@ -27,13 +27,20 @@ internal static class ReceiptDriverSmoke
             CustomPaperWidthMm = 57, PrintableWidthMm = 48 };
         using var server = new LocalPrintServer();
         using var queue = new PrintQueue(server, printerName);
-        var document = WindowsPrintService.PrepareBatchDocument(queue, receipts, settings);
-        var pages = document.Pages.Select(content => content.Child).ToArray();
-        var headers = pages.SelectMany(page => page.Children.OfType<TextBlock>()).Select(header => header.Text).ToArray();
-        var expected = Enumerable.Range(1, 20).Select(index => $"Замовлення №TEST-{index:00}");
-        if (!headers.SequenceEqual(expected) || pages.Sum(page => page.Children.OfType<Image>().Count()) != 20)
-            throw new Exception("Prepared driver document lost or repeated a receipt.");
-        Console.WriteLine($"PASS readonly receipt driver: 20 unique receipts in order, {pages.Length} pages, one copy; no print job created.");
-        Console.WriteLine("Content heights mm: " + string.Join(", ", pages.Select(page => (page.Height * 25.4 / 96).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))));
+        var count = 0;
+        var heights = new List<double>();
+        foreach (var document in WindowsPrintService.PrepareReceiptDocuments(queue, receipts, settings))
+        {
+            count++;
+            var page = document.Pages.Single().Child;
+            if (page.Children.OfType<TextBlock>().Single().Text != $"Замовлення №TEST-{count:00}" ||
+                page.Children.OfType<Image>().Count() != 1 ||
+                ((PrintTicket)document.PrintTicket).CopyCount != 1 || ((PrintTicket)page.PrintTicket).CopyCount != 1)
+                throw new Exception("Prepared receipt job lost, repeated or reordered a receipt or changed its copy count.");
+            heights.Add(page.Height * 25.4 / 96);
+        }
+        if (count != receipts.Length) throw new Exception("Prepared receipt job count differs from receipt count.");
+        Console.WriteLine($"PASS readonly receipt driver: {count} separate one-receipt documents in order, one page and one copy each; no print job created.");
+        Console.WriteLine("Content heights mm: " + string.Join(", ", heights.Select(height => height.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))));
     }
 }

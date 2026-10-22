@@ -14,10 +14,25 @@ namespace CheckboxBatchPrinter.Services;
 
 public sealed partial class WindowsPrintService
 {
+    internal static IEnumerable<FixedDocument> PrepareReceiptDocuments(PrintQueue queue,
+        IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings)
+    {
+        if (receipts.Count == 0) throw new ArgumentException("Пачка друку порожня.", nameof(receipts));
+        var (maximumHeight, pageTicket) = PrepareReceiptDriver(queue, settings);
+        return BuildReceiptDocuments(receipts, settings, maximumHeight, pageTicket);
+    }
+
     internal static FixedDocument PrepareBatchDocument(PrintQueue queue,
         IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings)
     {
         if (receipts.Count == 0) throw new ArgumentException("Пачка друку порожня.", nameof(receipts));
+        var (maximumHeight, pageTicket) = PrepareReceiptDriver(queue, settings);
+        return BuildBatchDocument(receipts, settings, maximumHeight, pageTicket);
+    }
+
+    private static (double MaximumHeight, Func<double, double, PrintTicket> PageTicket) PrepareReceiptDriver(
+        PrintQueue queue, AppSettings settings)
+    {
         var defaults = queue.DefaultPrintTicket;
         var capabilities = queue.GetPrintCapabilities(defaults);
         using var capabilityXml = queue.GetPrintCapabilitiesAsXml(defaults);
@@ -35,7 +50,7 @@ public sealed partial class WindowsPrintService
         maximum = ReceiptPageHeightLimit(maximum.Value, maximumTicket.PageMediaSize?.Height,
             validatedMaximum.PageImageableArea?.ExtentHeight);
 
-        return BuildBatchDocument(receipts, settings, maximum.Value, (pageWidth, pageHeight) =>
+        return (maximum.Value, (pageWidth, pageHeight) =>
         {
             var requested = BuildTicket(defaults, pageWidth, pageHeight);
             var validated = queue.MergeAndValidatePrintTicket(defaults, requested).ValidatedPrintTicket;
@@ -50,11 +65,22 @@ public sealed partial class WindowsPrintService
 
     private static void WriteReceiptDocument(PrintQueue queue, FixedDocument document, string jobName)
     {
-        // All pages and their driver checks already exist. One Write produces one Windows
-        // job; no retry or repeated PrintVisual call can replay the start of the batch.
+        // One Write submits one Windows job and the application does not retry it here.
+        // The driver/printer may still restart that job after an interruption such as
+        // paper-out. Receipt UI routes submit one receipt per job to limit such replays.
         queue.CurrentJobSettings.Description = jobName;
         var writer = PrintQueue.CreateXpsDocumentWriter(queue);
         writer.Write(document, (PrintTicket)document.PrintTicket);
+    }
+
+    internal static IEnumerable<FixedDocument> BuildReceiptDocuments(IReadOnlyList<PrintReceiptDocument> receipts,
+        AppSettings settings, double maximumPageHeight, Func<double, double, PrintTicket>? pageTicket = null)
+    {
+        if (receipts.Count == 0) throw new ArgumentException("Пачка друку порожня.", nameof(receipts));
+        // A completed receipt has its own job boundary. Lazy preparation also bounds
+        // preflight bitmap memory to the current receipt, even for a large selection.
+        foreach (var receipt in receipts)
+            yield return BuildBatchDocument([receipt], settings, maximumPageHeight, pageTicket);
     }
 
     internal static double ReceiptPageHeightLimit(double declared, double? validated, double? imageable)

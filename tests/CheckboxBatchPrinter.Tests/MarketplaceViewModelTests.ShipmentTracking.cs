@@ -72,8 +72,10 @@ internal static partial class MarketplaceViewModelTests
 
             main.SelectedTabIndex = 0;
             main.SelectAllCommand.Execute(null);
+            var expected = main.ReceiptsView.Cast<ReceiptRowViewModel>().Select(row => row.Id).ToArray();
             await ExecuteAsync(main.PrintSelectedCommand);
-            Equal(1, fixture.Printer.Calls);
+            Equal(3, fixture.Printer.Calls);
+            True(fixture.Printer.BatchIds.SequenceEqual(expected));
             True(!first.IsCompleted && !main.IsBusy, "Receipt printing waited for parcel tracking.");
 
             gate.TrySetResult(TrackingSuccess(tracking.Requests.Single(), "Доставляється"));

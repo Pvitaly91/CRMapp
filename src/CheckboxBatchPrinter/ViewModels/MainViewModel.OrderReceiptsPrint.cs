@@ -117,29 +117,19 @@ public sealed partial class MainViewModel
             }
             if (!_printService.PrinterExists(settings.PrinterName)) throw new InvalidOperationException("Принтер чеків більше недоступний. Підготуйте пакет заново.");
             token.ThrowIfCancellationRequested();
-            foreach (var row in receipts) { row.PrintStatus = PrintItemStatus.Printing; row.PrintError = ""; }
-            foreach (var row in receipts) _combinedReceiptTransferRisks.Add((account, row.Id.ToUpperInvariant()));
             transferStarted = true;
             ProgressText = "Передаю чеки замовлень принтеру…";
             Log("submit");
-            if (documents.Length == 1) await _printService.PrintReceiptAsync(documents[0], settings, token);
-            else await _printService.PrintReceiptsAsSingleJobAsync(documents, settings, token);
-            submitted = true;
-            foreach (var row in receipts) row.PrintStatus = PrintItemStatus.Done;
-            Log("accepted");
-            try
+            var result = await SubmitReceiptSequenceAsync(documents, receipts, settings, account, token);
+            submitted = result.AllSubmitted;
+            Log(submitted ? "accepted" : "failed", result.Failure);
+            StatusText = result.Summary;
+            if (result.Warnings.Count > 0)
             {
-                await _printHistoryStore.MarkPrintedAsync(account, items.Select(item => item.ReceiptId).ToArray(), settings.PrinterName);
-                foreach (var row in receipts) _combinedReceiptTransferRisks.Remove((account, row.Id.ToUpperInvariant()));
-                StatusText = $"Чеки замовлень передано: {receipts.Length}.";
+                StatusText += " " + string.Join("\n", result.Warnings);
+                _dialogs.ShowError(StatusText, "Друк чеків замовлень");
             }
-            catch (Exception exception)
-            {
-                Log("history", exception);
-                StatusText = "Чеки передано, але не вдалося зберегти історію їх друку.";
-                foreach (var row in receipts) row.PrintError = StatusText;
-            }
-            _dialogs.ShowInfo(StatusText, "Друк чеків замовлень");
+            else _dialogs.ShowInfo(StatusText, "Друк чеків замовлень");
         }
         catch (OperationCanceledException) when (!transferStarted)
         { StatusText = "Підготовку чеків замовлень скасовано. Пакет не передано принтеру."; }
@@ -147,7 +137,8 @@ public sealed partial class MainViewModel
         {
             Log("failed", exception);
             if (transferStarted && !submitted)
-                foreach (var row in receipts) { row.PrintStatus = PrintItemStatus.Error; row.PrintError = exception.Message + " Частина могла надрукуватися; перевірте перед повтором."; }
+                foreach (var row in receipts.Where(row => row.PrintStatus == PrintItemStatus.Printing))
+                { row.PrintStatus = PrintItemStatus.Error; row.PrintError = exception.Message + " Частина могла надрукуватися; перевірте перед повтором."; }
             StatusText = submitted ? "Чеки передано принтеру." : transferStarted
                 ? "Не вдалося підтвердити друк чеків. Частина могла надрукуватися; перевірте перед повтором."
                 : "Не вдалося підготувати чеки замовлень. Пакет не передано принтеру.";

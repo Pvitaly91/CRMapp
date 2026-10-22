@@ -27,6 +27,9 @@ internal static partial class MarketplaceViewModelTests
 
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
+        ("STA all receipt print routes preserve an accepted prefix and stop at the first uncertain job without replay", () => StaAsync(ReceiptSequencePartialFailureAsync)),
+        ("STA all receipt print routes finish separate jobs despite history and diagnostic failures", () => StaAsync(ReceiptSequencePersistenceFailureAsync)),
+        ("STA every receipt route validates the complete packet before transferring any receipt or label", () => StaAsync(ReceiptSequenceCompletePreflightAsync)),
         ("Prom cabinet browser bridge ignores foreign origins paths and stale operation messages", PromCabinetProtocolOriginAsync),
         ("Prom cabinet browser response preserves exact request account and rejects changed URL or status", PromCabinetProtocolResponseAsync),
         ("Prom cabinet browser rejects malformed oversized messages and returns bounded batch failure categories", PromCabinetProtocolMalformedAsync),
@@ -352,7 +355,7 @@ internal static partial class MarketplaceViewModelTests
             if (single) main.SearchText = "2";
             var submitted = main.ReceiptsView.Cast<ReceiptRowViewModel>().ToArray();
             await ExecuteAsync(main.PrintSelectedCommand);
-            Equal(1, fixture.Printer.Calls);
+            Equal(submitted.Length, fixture.Printer.Calls);
             Equal(submitted.Length, fixture.Printer.BatchIds.Length);
             foreach (var row in main.Receipts)
             {
@@ -482,7 +485,7 @@ internal static partial class MarketplaceViewModelTests
         await ExecuteAsync(main.PrintSelectedCommand);
         AssertConfirmation(fixture, [ReceiptThree, ReceiptTwo, ReceiptOne]);
         True(fixture.Dialogs.Confirmation!.Items.All(i => i.Marketplace == "" && i.OrderNumber == ""));
-        Equal(1, fixture.Printer.Calls); // Existing continuous batch backend, not separate jobs.
+        Equal(3, fixture.Printer.Calls); // Each receipt owns its own recoverable Windows job.
     }
 
     private static async Task ImageFailureAsync()
@@ -553,7 +556,7 @@ internal static partial class MarketplaceViewModelTests
         var expectedIds = new[] { ReceiptTwo, ReceiptOne };
         var print = ExecuteAsync(main.PrintSelectedCommand);
         await fixture.Printer.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        True(fixture.Printer.BatchIds.SequenceEqual(expectedIds));
+        True(fixture.Printer.BatchIds.SequenceEqual(expectedIds.Take(1)));
         True(!main.TodayCommand.CanExecute(null), "Today must not refresh receipt rows during a print.");
         Equal(0, fixture.History.Saves);
         fixture.Source.Gate.SetResult(true);
@@ -565,13 +568,13 @@ internal static partial class MarketplaceViewModelTests
         Equal(ReceiptLinkState.Exact, main.Receipts[0].OrderMatch!.State);
         Equal(PrintItemStatus.Printing, main.Receipts[0].PrintStatus);
         Equal(PrintItemStatus.Done, main.Receipts[2].PrintStatus);
-        True(fixture.Printer.BatchIds.SequenceEqual(expectedIds), "Order enrichment changed the confirmed print batch.");
+        True(fixture.Printer.BatchIds.SequenceEqual(expectedIds.Take(1)), "Order enrichment changed the currently submitted receipt.");
         Equal(0, fixture.History.Saves);
         fixture.Printer.Gate.SetResult(true);
         await print;
         Equal(0, main.SelectedCount);
         True(main.Receipts.All(row => row.PrintStatus == PrintItemStatus.Done));
-        Equal(1, fixture.History.Saves);
+        Equal(2, fixture.History.Saves);
         Equal(3, fixture.History.Records.Count);
         Equal(0, fixture.Dialogs.Errors.Count);
 
@@ -920,8 +923,10 @@ internal static partial class MarketplaceViewModelTests
         await ExecuteAsync(main.PreviewCommand);
         Equal(ReceiptTwo, fixture.Dialogs.PreviewId);
         main.SelectAllCommand.Execute(null);
+        var expected = main.ReceiptsView.Cast<ReceiptRowViewModel>().Select(row => row.Id).ToArray();
         await ExecuteAsync(main.PrintSelectedCommand);
-        Equal(1, fixture.Printer.Calls);
+        Equal(3, fixture.Printer.Calls);
+        True(fixture.Printer.BatchIds.SequenceEqual(expected));
         Equal(2, fixture.ReceiptSource.Calls);
         Equal(1, fixture.Source.FetchCalls);
         if (workspace.CancelCommand.CanExecute(null)) workspace.CancelCommand.Execute(null);
@@ -2735,14 +2740,18 @@ internal static partial class MarketplaceViewModelTests
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public IReadOnlyList<string> GetInstalledPrinters() => ["mock-printer"];
         public bool PrinterExists(string name) => name == "mock-printer";
-        public Task PrintReceiptAsync(PrintReceiptDocument receipt, AppSettings settings, CancellationToken ct = default) =>
-            PrintReceiptsAsSingleJobAsync([receipt], settings, ct);
-        public async Task PrintReceiptsAsSingleJobAsync(IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings, CancellationToken ct = default)
+        public void ValidateReceiptsForPrint(IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings)
         {
-            Calls++; PrinterName = settings.PrinterName; Documents = receipts.ToArray(); BatchIds = receipts.Select(r => r.ReceiptId).ToArray(); Entered.TrySetResult();
+            Documents = []; BatchIds = [];
+        }
+        public async Task PrintReceiptAsync(PrintReceiptDocument receipt, AppSettings settings, CancellationToken ct = default)
+        {
+            Calls++; PrinterName = settings.PrinterName; Documents = [..Documents, receipt]; BatchIds = [..BatchIds, receipt.ReceiptId]; Entered.TrySetResult();
             if (Gate is not null) await Gate.Task.WaitAsync(ct);
             if (Fail) throw new InvalidOperationException("Synthetic printer error");
         }
+        public Task PrintReceiptsAsSingleJobAsync(IReadOnlyList<PrintReceiptDocument> receipts, AppSettings settings, CancellationToken ct = default) =>
+            throw new InvalidOperationException("Multiple receipts must never share a Windows job.");
         public Task PrintTestAsync(AppSettings settings, CancellationToken ct = default) => throw new InvalidOperationException("Physical test forbidden in VM scenario.");
     }
     private sealed class Receipts : IReceiptService

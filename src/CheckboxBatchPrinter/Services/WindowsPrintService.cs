@@ -30,7 +30,10 @@ public sealed partial class WindowsPrintService : IPrintService
     {
         using var server = new LocalPrintServer();
         using var queue = FindQueue(server, settings.PrinterName);
-        _ = PrepareBatchDocument(queue, receipts, settings);
+        // Validate every eventual job before the caller starts submitting any receipt.
+        // Do not retain all decoded bitmap documents for the entire selection.
+        foreach (var document in PrepareReceiptDocuments(queue, receipts, settings))
+            _ = document;
     }
 
     public Task PrintReceiptAsync(PrintReceiptDocument receipt, AppSettings settings, CancellationToken cancellationToken = default) =>
@@ -39,7 +42,7 @@ public sealed partial class WindowsPrintService : IPrintService
             cancellationToken.ThrowIfCancellationRequested();
             using var server = new LocalPrintServer();
             using var queue = FindQueue(server, settings.PrinterName);
-            var document = PrepareBatchDocument(queue, [receipt], settings);
+            var document = PrepareReceiptDocuments(queue, [receipt], settings).Single();
             cancellationToken.ThrowIfCancellationRequested();
             WriteReceiptDocument(queue, document, $"Checkbox чек {receipt.ReceiptId}");
         }).Task;
