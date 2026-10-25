@@ -27,6 +27,9 @@ internal static partial class MarketplaceViewModelTests
 
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
+        ("STA combined Prom and Rozetka totals merge hryvnia only for display and preserve explicit currencies", () => StaAsync(ExpandedOrderCurrencyTotalsAsync)),
+        ("STA canceled totals include hidden rows within date search marketplace and link filters", () => StaAsync(CanceledOrderScopeTotalsAsync)),
+        ("STA receipt return subtotals respect independent filters signed amounts and live row updates", () => StaAsync(ReturnReceiptSubtotalsAsync)),
         ("STA receipt totals follow independent date search type and marketplace filters", () => StaAsync(ReceiptFilteredAmountTotalsAsync)),
         ("STA receipt totals follow same-row known and unknown amounts without counting hidden selections", () => StaAsync(ReceiptAmountTotalsUpdatesAsync)),
         ("STA order totals respect filters and keep currencies and unknown amounts separate", () => StaAsync(OrderFilteredAmountTotalsAsync)),

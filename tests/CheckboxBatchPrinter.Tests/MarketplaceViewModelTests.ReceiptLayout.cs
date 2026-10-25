@@ -85,9 +85,16 @@ internal static partial class MarketplaceViewModelTests
                 }
                 AssertAmountSummary(tabIndex == 0 ? "AllReceiptsAmountSummary" : "OrdersReceiptsAmountSummary",
                     main.ActiveTab.AmountSummary, grid);
+                AssertAmountSummary(tabIndex == 0 ? "AllReceiptsReturnAmountSummary" : "OrdersReceiptsReturnAmountSummary",
+                    main.ActiveTab.ReturnAmountSummary, grid);
                 if (tabIndex == 1)
+                {
+                    var orderGrid = (DataGrid)window.FindName("MarketplaceOrdersGrid");
                     AssertAmountSummary("OrdersAmountSummary", workspace.OrderAmountSummary,
-                        (DataGrid)window.FindName("MarketplaceOrdersGrid"));
+                        orderGrid);
+                    AssertAmountSummary("CombinedOrdersAmountSummary", workspace.CombinedOrderAmountSummary, orderGrid);
+                    AssertAmountSummary("CanceledOrdersAmountSummary", workspace.CanceledOrderAmountSummary, orderGrid);
+                }
                 async Task<FrameworkElement> RealizeCell(DataGridColumn column)
                 {
                     True(grid.Items.Contains(receipt), $"{gridName} does not contain the expected receipt.");

@@ -54,6 +54,7 @@ public sealed class ReceiptTabViewModel : ObservableObject, IDisposable
     public bool UsesOrders { get; }
     public ICollectionView View { get; }
     public string AmountSummary => DashboardTotals.Receipts(View.Cast<ReceiptRowViewModel>());
+    public string ReturnAmountSummary => DashboardTotals.ReceiptReturns(View.Cast<ReceiptRowViewModel>());
     public ICommand ToggleHeaderSelectionCommand { get; }
     public ICommand SelectPrintCandidatesCommand { get; }
     public bool IsHeaderSelectionBusy
@@ -163,7 +164,7 @@ public sealed class ReceiptTabViewModel : ObservableObject, IDisposable
     {
         if (string.IsNullOrEmpty(e.PropertyName) || e.PropertyName is nameof(ReceiptRowViewModel.Total)
             or nameof(ReceiptRowViewModel.Model))
-            OnPropertyChanged(nameof(AmountSummary));
+            NotifyAmountSummaries();
         if (string.IsNullOrEmpty(e.PropertyName) || e.PropertyName is nameof(ReceiptRowViewModel.PrintStatus)
             or nameof(ReceiptRowViewModel.OrderMatch) or nameof(ReceiptRowViewModel.Model)
             or nameof(ReceiptRowViewModel.Status))
@@ -171,8 +172,13 @@ public sealed class ReceiptTabViewModel : ObservableObject, IDisposable
     }
     private void ViewChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        OnPropertyChanged(nameof(AmountSummary));
+        NotifyAmountSummaries();
         UpdateHeaderSelection();
+    }
+    private void NotifyAmountSummaries()
+    {
+        OnPropertyChanged(nameof(AmountSummary));
+        OnPropertyChanged(nameof(ReturnAmountSummary));
     }
     private void UpdateHeaderSelection()
     {

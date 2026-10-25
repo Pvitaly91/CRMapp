@@ -80,7 +80,7 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
         Orders.CollectionChanged += (_, _) =>
         {
             UpdateDisplayedOrderNumbers();
-            if (!_updatingOrderRows) OnPropertyChanged(nameof(OrderAmountSummary));
+            if (!_updatingOrderRows) NotifyOrderAmountSummaries();
         };
         SyncCommand = new AsyncRelayCommand(_ => SyncAsync(), _ => !IsBusy && !IsWorkspaceRefreshing && (_account.Length > 0 || _orderDatesValid));
         ExpandCommand = new AsyncRelayCommand(async _ => { _extraHistory = Math.Min(_extraHistory + 30, 3650); await SyncAsync(); }, _ => !IsBusy && !IsWorkspaceRefreshing && (_account.Length > 0 || _orderDatesValid));
@@ -106,6 +106,9 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
     public event EventHandler? MatchesChanged;
     public ICollectionView Orders { get; }
     public string OrderAmountSummary => DashboardTotals.Orders(Orders.Cast<MarketplaceOrderRowViewModel>());
+    public string CombinedOrderAmountSummary => DashboardTotals.CombinedOrders(Orders.Cast<MarketplaceOrderRowViewModel>());
+    public string CanceledOrderAmountSummary => DashboardTotals.CanceledOrders(_orderRows.Where(row =>
+        row.Model.IsCanceled && MatchesOrderFilter(row, includeHiddenCanceled: true)));
     public IReadOnlyList<MarketplaceOrderRowViewModel> AllOrderRows => _orderRows;
     public ShippingLabelsViewModel? Labels { get => _labels; set => SetProperty(ref _labels, value); }
     public IReadOnlyList<string> OrderFilters { get; } = ["Усі", "Prom", "Rozetka", "Без чека", "Є чек", "Ймовірний зв’язок"];
@@ -667,10 +670,12 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
     private IReadOnlyList<MarketplaceOrder> ActiveOrdersFrom(MarketplaceSnapshot snapshot) => _deduplication.Merge(snapshot.Orders).Where(o =>
         _config.Connections.Any(c => c.Enabled && c.Id == o.Key.ConnectionId && c.Marketplace == o.Key.Marketplace)).ToArray();
 
-    private bool MatchesOrderFilter(object value)
+    private bool MatchesOrderFilter(object value) => MatchesOrderFilter(value, includeHiddenCanceled: false);
+
+    private bool MatchesOrderFilter(object value, bool includeHiddenCanceled)
     {
         if (value is not MarketplaceOrderRowViewModel row) return false;
-        if (!ShowCanceledOrders && row.Model.IsCanceled) return false;
+        if (!includeHiddenCanceled && !ShowCanceledOrders && row.Model.IsCanceled) return false;
         if (_displayFrom.HasValue || _displayTo.HasValue)
         {
             if (row.Model.CreatedAt is not { } created) return false;
@@ -701,6 +706,13 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
         RefreshProblems();
         if (_selectedOrder is not null && !Orders.Contains(_selectedOrder)) SelectedOrder = null;
         OnPropertyChanged(nameof(OrderListSummary)); RaiseCommands();
+    }
+
+    private void NotifyOrderAmountSummaries()
+    {
+        OnPropertyChanged(nameof(OrderAmountSummary));
+        OnPropertyChanged(nameof(CombinedOrderAmountSummary));
+        OnPropertyChanged(nameof(CanceledOrderAmountSummary));
     }
 
     private void UpdateDisplayedOrderNumbers()

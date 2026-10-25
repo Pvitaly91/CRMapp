@@ -362,8 +362,12 @@
             <TabItem Header="Усі чеки">
                 <DockPanel x:Name="AllReceiptsDashboard" Margin="6">
                     <Border DockPanel.Dock="Bottom" Background="#EDF6FF" Padding="8,6" Margin="0,4,0,0">
+                        <StackPanel>
                         <TextBlock x:Name="AllReceiptsAmountSummary" Text="{Binding AllReceiptsTab.AmountSummary}" FontWeight="SemiBold" TextWrapping="Wrap"
                                    ToolTip="Сума всіх рядків за поточними датами, пошуком і типом чека. Повернення враховуються з тим знаком, який показано в колонці «Сума»." />
+                        <TextBlock x:Name="AllReceiptsReturnAmountSummary" Text="{Binding AllReceiptsTab.ReturnAmountSummary}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,3,0,0"
+                                   ToolTip="Окрема сума чеків типу «Повернення» серед рядків за поточними фільтрами. Входить до загальної суми вище." />
+                        </StackPanel>
                     </Border>
                     <ScrollViewer x:Name="AllReceiptsPrintToolbarScroll" DockPanel.Dock="Top" HorizontalScrollBarVisibility="Auto"
                                   VerticalScrollBarVisibility="Disabled" Margin="0,0,0,3">
@@ -503,8 +507,14 @@
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <Border Grid.Row="2" Background="#EDF6FF" Padding="8,6" Margin="0,4,0,0">
+                                <StackPanel>
                                 <TextBlock x:Name="OrdersAmountSummary" Text="{Binding Marketplace.OrderAmountSummary}" FontWeight="SemiBold" TextWrapping="Wrap"
                                            ToolTip="Сума замовлень за поточними датами, пошуком та фільтром цієї таблиці. Різні валюти підсумовуються окремо; рядки без розпізнаної суми пораховано окремо." />
+                                <TextBlock x:Name="CombinedOrdersAmountSummary" Text="{Binding Marketplace.CombinedOrderAmountSummary}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,3,0,0"
+                                           ToolTip="Об’єднана сума видимих замовлень Prom і Rozetka за поточними фільтрами. Суми Rozetka без коду валюти враховуються у гривнях. Інші явно вказані валюти показано окремо." />
+                                <TextBlock x:Name="CanceledOrdersAmountSummary" Text="{Binding Marketplace.CanceledOrderAmountSummary}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,3,0,0"
+                                           ToolTip="Сума скасованих замовлень за поточними датами, пошуком і фільтром, навіть якщо їхні рядки приховані. Суми Rozetka без коду валюти враховуються у гривнях." />
+                                </StackPanel>
                             </Border>
                             <ScrollViewer x:Name="OrderToolbarScroll" HorizontalScrollBarVisibility="Auto"
                                           VerticalScrollBarVisibility="Disabled" Margin="0,0,0,3">
@@ -646,8 +656,12 @@
                         <Grid x:Name="CheckboxReceiptsPane" Grid.Column="2">
                             <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
                             <Border Grid.Row="2" Background="#EDF6FF" Padding="8,6" Margin="0,4,0,0">
+                                <StackPanel>
                                 <TextBlock x:Name="OrdersReceiptsAmountSummary" Text="{Binding OrdersReceiptsTab.AmountSummary}" FontWeight="SemiBold" TextWrapping="Wrap"
                                            ToolTip="Сума чеків за поточними датами, пошуком, типом і фільтром зв’язків цієї таблиці. Повернення враховуються з тим знаком, який показано в колонці «Сума»." />
+                                <TextBlock x:Name="OrdersReceiptsReturnAmountSummary" Text="{Binding OrdersReceiptsTab.ReturnAmountSummary}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,3,0,0"
+                                           ToolTip="Окрема сума чеків типу «Повернення» серед рядків за поточними фільтрами цієї таблиці. Входить до загальної суми вище." />
+                                </StackPanel>
                             </Border>
                             <ScrollViewer x:Name="OrdersReceiptsPrintToolbarScroll" HorizontalScrollBarVisibility="Auto"
                                           VerticalScrollBarVisibility="Disabled" Margin="0,0,0,3">
