@@ -46,6 +46,7 @@ internal static partial class MarketplaceViewModelTests
     {
         _xamlCheckpoint = "combined receipt date and early preview columns";
         var fixture = new Fixture();
+        fixture.Source.Orders = [Order() with { Total = 123456789.12m }];
         fixture.ReceiptSource.Rows = [new ReceiptRecord
         {
             Id = ReceiptOne, Serial = 1, Type = ReceiptTypes.Sell, Status = "DONE", TotalSumMinor = 12345,
@@ -76,8 +77,19 @@ internal static partial class MarketplaceViewModelTests
                 {
                     var summary = (TextBlock)window.FindName(name);
                     Equal(expected, summary.Text);
-                    True(summary.ActualWidth > 0 && summary.ActualHeight > 0 && summary.ActualWidth <= table.ActualWidth,
-                        $"{name} must remain visible within its own table's width.");
+                    Equal(TextWrapping.NoWrap, summary.TextWrapping);
+                    True(summary.ActualWidth > 0 && summary.ActualHeight > 0);
+                    var scrollName = table.Name switch
+                    {
+                        "MarketplaceOrdersGrid" => "OrdersTotalsScroll",
+                        "OrdersReceiptsGrid" => "OrdersReceiptsTotalsScroll",
+                        _ => "AllReceiptsTotalsScroll"
+                    };
+                    var scroll = (ScrollViewer)window.FindName(scrollName);
+                    True(scroll.ActualWidth > 0 && scroll.ActualWidth <= table.ActualWidth,
+                        $"{name} must remain inside a scrollable footer constrained to its table's width.");
+                    Equal(ScrollBarVisibility.Auto, scroll.HorizontalScrollBarVisibility);
+                    Equal(ScrollBarVisibility.Disabled, scroll.VerticalScrollBarVisibility);
                     var content = (FrameworkElement)window.Content;
                     True(summary.TranslatePoint(new Point(), content).Y >=
                         table.TranslatePoint(new Point(0, table.ActualHeight), content).Y,
@@ -87,6 +99,12 @@ internal static partial class MarketplaceViewModelTests
                     main.ActiveTab.AmountSummary, grid);
                 AssertAmountSummary(tabIndex == 0 ? "AllReceiptsReturnAmountSummary" : "OrdersReceiptsReturnAmountSummary",
                     main.ActiveTab.ReturnAmountSummary, grid);
+                var receiptSummary = (TextBlock)window.FindName(tabIndex == 0 ? "AllReceiptsAmountSummary" : "OrdersReceiptsAmountSummary");
+                var returnSummary = (TextBlock)window.FindName(tabIndex == 0 ? "AllReceiptsReturnAmountSummary" : "OrdersReceiptsReturnAmountSummary");
+                var rootContent = (FrameworkElement)window.Content;
+                True(Math.Abs(receiptSummary.TranslatePoint(new Point(), rootContent).Y -
+                    returnSummary.TranslatePoint(new Point(), rootContent).Y) < 0.5,
+                    "Receipt total and return subtotal must occupy one line.");
                 if (tabIndex == 1)
                 {
                     var orderGrid = (DataGrid)window.FindName("MarketplaceOrdersGrid");
@@ -94,6 +112,24 @@ internal static partial class MarketplaceViewModelTests
                         orderGrid);
                     AssertAmountSummary("CombinedOrdersAmountSummary", workspace.CombinedOrderAmountSummary, orderGrid);
                     AssertAmountSummary("CanceledOrdersAmountSummary", workspace.CanceledOrderAmountSummary, orderGrid);
+                    var first = (TextBlock)window.FindName("OrdersAmountSummary");
+                    var combined = (TextBlock)window.FindName("CombinedOrdersAmountSummary");
+                    var canceled = (TextBlock)window.FindName("CanceledOrdersAmountSummary");
+                    var lineY = first.TranslatePoint(new Point(), rootContent).Y;
+                    True(new[] { combined, canceled, receiptSummary, returnSummary }.All(summary =>
+                        Math.Abs(summary.TranslatePoint(new Point(), rootContent).Y - lineY) < 0.5),
+                        "Both order and receipt footers must align their totals on one horizontal line.");
+                    var totalsScroll = (ScrollViewer)window.FindName("OrdersTotalsScroll");
+                    True(totalsScroll.ScrollableWidth > 0, "Long real bound amounts must be available through horizontal scrolling.");
+                    totalsScroll.ScrollToRightEnd();
+                    await DrainDispatcherAsync();
+                    LayoutContent(window);
+                    True(canceled.TranslatePoint(new Point(), totalsScroll).X >= -0.5 &&
+                        canceled.TranslatePoint(new Point(canceled.ActualWidth, 0), totalsScroll).X <= totalsScroll.ActualWidth + 0.5,
+                        "The final canceled subtotal must be fully reachable when scrolling long totals.");
+                    totalsScroll.ScrollToLeftEnd();
+                    await DrainDispatcherAsync();
+                    LayoutContent(window);
                 }
                 async Task<FrameworkElement> RealizeCell(DataGridColumn column)
                 {
