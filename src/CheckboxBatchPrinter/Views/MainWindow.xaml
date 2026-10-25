@@ -361,6 +361,10 @@
         <TabControl x:Name="ReceiptTabs" SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}" Margin="10,8,10,2">
             <TabItem Header="Усі чеки">
                 <DockPanel x:Name="AllReceiptsDashboard" Margin="6">
+                    <Border DockPanel.Dock="Bottom" Background="#EDF6FF" Padding="8,6" Margin="0,4,0,0">
+                        <TextBlock x:Name="AllReceiptsAmountSummary" Text="{Binding AllReceiptsTab.AmountSummary}" FontWeight="SemiBold" TextWrapping="Wrap"
+                                   ToolTip="Сума всіх рядків за поточними датами, пошуком і типом чека. Повернення враховуються з тим знаком, який показано в колонці «Сума»." />
+                    </Border>
                     <ScrollViewer x:Name="AllReceiptsPrintToolbarScroll" DockPanel.Dock="Top" HorizontalScrollBarVisibility="Auto"
                                   VerticalScrollBarVisibility="Disabled" Margin="0,0,0,3">
                         <StackPanel x:Name="AllReceiptsPrintToolbar" Orientation="Horizontal">
@@ -496,7 +500,12 @@
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
+                            <Border Grid.Row="2" Background="#EDF6FF" Padding="8,6" Margin="0,4,0,0">
+                                <TextBlock x:Name="OrdersAmountSummary" Text="{Binding Marketplace.OrderAmountSummary}" FontWeight="SemiBold" TextWrapping="Wrap"
+                                           ToolTip="Сума замовлень за поточними датами, пошуком та фільтром цієї таблиці. Різні валюти підсумовуються окремо; рядки без розпізнаної суми пораховано окремо." />
+                            </Border>
                             <ScrollViewer x:Name="OrderToolbarScroll" HorizontalScrollBarVisibility="Auto"
                                           VerticalScrollBarVisibility="Disabled" Margin="0,0,0,3">
                             <StackPanel x:Name="OrderToolbar" Orientation="Horizontal">
@@ -635,7 +644,11 @@
                                       ToolTip="Перетягніть ліворуч або праворуч, щоб змінити ширину таблиць" />
 
                         <Grid x:Name="CheckboxReceiptsPane" Grid.Column="2">
-                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                            <Border Grid.Row="2" Background="#EDF6FF" Padding="8,6" Margin="0,4,0,0">
+                                <TextBlock x:Name="OrdersReceiptsAmountSummary" Text="{Binding OrdersReceiptsTab.AmountSummary}" FontWeight="SemiBold" TextWrapping="Wrap"
+                                           ToolTip="Сума чеків за поточними датами, пошуком, типом і фільтром зв’язків цієї таблиці. Повернення враховуються з тим знаком, який показано в колонці «Сума»." />
+                            </Border>
                             <ScrollViewer x:Name="OrdersReceiptsPrintToolbarScroll" HorizontalScrollBarVisibility="Auto"
                                           VerticalScrollBarVisibility="Disabled" Margin="0,0,0,3">
                                 <StackPanel x:Name="OrdersReceiptsPrintToolbar" Orientation="Horizontal">

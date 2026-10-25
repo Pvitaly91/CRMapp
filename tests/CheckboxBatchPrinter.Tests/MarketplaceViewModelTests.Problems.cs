@@ -16,6 +16,8 @@ internal static partial class MarketplaceViewModelTests
     {
         var fixture = new Fixture();
         var now = DateTimeOffset.UtcNow;
+        var arrivalDate = DateRangeBuilder.KyivDate(now).AddDays(-5);
+        var arrived = DateRangeBuilder.ForLocalDates(arrivalDate, arrivalDate).From;
         fixture.Source.Orders =
         [
             Order() with { Key = Order().Key with { OrderId = "missing" }, Number = "missing", Status = "Прийнято", CreatedAt = now.AddDays(-3), Shipments = [], ReceiptIds = [] },
@@ -24,7 +26,7 @@ internal static partial class MarketplaceViewModelTests
         ];
         var tracking = new DashboardTrackingSource { Read = (orders, _) => Task.FromResult(new ShipmentTrackingFetchResult(
             orders.SelectMany(o => o.Shipments.Select(s => new ShipmentTrackingStatus(ShippingCarrier.NovaPoshta, s.TrackingNumber,
-                "Прибув у відділення", "Нова пошта", now) { StatusCode = "7", ArrivedAt = now.AddDays(-5), PaidStorageStartsOn = DateRangeBuilder.KyivDate(now).AddDays(1) })).ToArray(), [])) };
+                "Прибув у відділення", "Нова пошта", now) { StatusCode = "7", ArrivedAt = arrived, PaidStorageStartsOn = DateRangeBuilder.KyivDate(now).AddDays(1) })).ToArray(), [])) };
         var (main, workspace) = CreateTrackingDashboard(fixture, tracking);
         try
         {
@@ -61,6 +63,8 @@ internal static partial class MarketplaceViewModelTests
         _xamlCheckpoint = "problem orders tab archive filter receipt action and layout";
         var fixture = new Fixture();
         var now = DateTimeOffset.UtcNow;
+        var arrivalDate = DateRangeBuilder.KyivDate(now).AddDays(-5);
+        var arrived = DateRangeBuilder.ForLocalDates(arrivalDate, arrivalDate).From;
         fixture.Source.Orders =
         [
             Order() with { Key = Order().Key with { OrderId = "missing-ui" }, Number = "433169320", CreatedAt = now.AddDays(-7), Shipments = [], ReceiptIds = [],
@@ -81,7 +85,7 @@ internal static partial class MarketplaceViewModelTests
             storage.UpdateTrackingStatuses(storage.Model.Shipments.Select(shipment => new OrderShipmentTrackingStatus(
                 shipment, "Прибув у відділення", "Тестовий перевізник", now)
                 { Details = new(ShippingCarrierNames.FromDocumentedDeliveryField(shipment.Carrier), shipment.TrackingNumber.Trim(),
-                    "Прибув у відділення", "Тестовий перевізник", now) { StatusCode = "7", ArrivedAt = now.AddDays(-5) } }));
+                    "Прибув у відділення", "Тестовий перевізник", now) { StatusCode = "7", ArrivedAt = arrived } }));
             workspace.RefreshProblems(now);
             window.UpdateLayout();
             var grid = (DataGrid)window.FindName("ProblemOrdersGrid");

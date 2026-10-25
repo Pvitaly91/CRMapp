@@ -72,6 +72,22 @@ internal static partial class MarketplaceViewModelTests
                 await DrainDispatcherAsync();
                 LayoutContent(window);
                 var grid = (DataGrid)window.FindName(gridName);
+                void AssertAmountSummary(string name, string expected, DataGrid table)
+                {
+                    var summary = (TextBlock)window.FindName(name);
+                    Equal(expected, summary.Text);
+                    True(summary.ActualWidth > 0 && summary.ActualHeight > 0 && summary.ActualWidth <= table.ActualWidth,
+                        $"{name} must remain visible within its own table's width.");
+                    var content = (FrameworkElement)window.Content;
+                    True(summary.TranslatePoint(new Point(), content).Y >=
+                        table.TranslatePoint(new Point(0, table.ActualHeight), content).Y,
+                        $"{name} must remain below the table outside its scrolling content.");
+                }
+                AssertAmountSummary(tabIndex == 0 ? "AllReceiptsAmountSummary" : "OrdersReceiptsAmountSummary",
+                    main.ActiveTab.AmountSummary, grid);
+                if (tabIndex == 1)
+                    AssertAmountSummary("OrdersAmountSummary", workspace.OrderAmountSummary,
+                        (DataGrid)window.FindName("MarketplaceOrdersGrid"));
                 async Task<FrameworkElement> RealizeCell(DataGridColumn column)
                 {
                     True(grid.Items.Contains(receipt), $"{gridName} does not contain the expected receipt.");

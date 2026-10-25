@@ -53,6 +53,7 @@ public sealed class ReceiptTabViewModel : ObservableObject, IDisposable
 
     public bool UsesOrders { get; }
     public ICollectionView View { get; }
+    public string AmountSummary => DashboardTotals.Receipts(View.Cast<ReceiptRowViewModel>());
     public ICommand ToggleHeaderSelectionCommand { get; }
     public ICommand SelectPrintCandidatesCommand { get; }
     public bool IsHeaderSelectionBusy
@@ -160,12 +161,19 @@ public sealed class ReceiptTabViewModel : ObservableObject, IDisposable
     private void RowSelectionChanged(object? sender, EventArgs e) => UpdateHeaderSelection();
     private void RowPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (string.IsNullOrEmpty(e.PropertyName) || e.PropertyName is nameof(ReceiptRowViewModel.Total)
+            or nameof(ReceiptRowViewModel.Model))
+            OnPropertyChanged(nameof(AmountSummary));
         if (string.IsNullOrEmpty(e.PropertyName) || e.PropertyName is nameof(ReceiptRowViewModel.PrintStatus)
             or nameof(ReceiptRowViewModel.OrderMatch) or nameof(ReceiptRowViewModel.Model)
             or nameof(ReceiptRowViewModel.Status))
             UpdateHeaderSelection();
     }
-    private void ViewChanged(object? sender, NotifyCollectionChangedEventArgs e) => UpdateHeaderSelection();
+    private void ViewChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        OnPropertyChanged(nameof(AmountSummary));
+        UpdateHeaderSelection();
+    }
     private void UpdateHeaderSelection()
     {
         if (_changingHeaderSelection) return;

@@ -27,6 +27,10 @@ internal static partial class MarketplaceViewModelTests
 
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
+        ("STA receipt totals follow independent date search type and marketplace filters", () => StaAsync(ReceiptFilteredAmountTotalsAsync)),
+        ("STA receipt totals follow same-row known and unknown amounts without counting hidden selections", () => StaAsync(ReceiptAmountTotalsUpdatesAsync)),
+        ("STA order totals respect filters and keep currencies and unknown amounts separate", () => StaAsync(OrderFilteredAmountTotalsAsync)),
+        ("STA order totals refresh retained rows after updated marketplace amounts", () => StaAsync(OrderAmountTotalsRefreshAsync)),
         ("STA all receipt print routes submit seven or eight frozen receipts as one receipt per Windows job", () => StaAsync(ReceiptSequenceOnePerJobAsync)),
         ("STA all receipt print routes preserve an accepted prefix and stop at the first uncertain job without replay", () => StaAsync(ReceiptSequencePartialFailureAsync)),
         ("STA all receipt print routes finish separate jobs despite history and diagnostic failures", () => StaAsync(ReceiptSequencePersistenceFailureAsync)),

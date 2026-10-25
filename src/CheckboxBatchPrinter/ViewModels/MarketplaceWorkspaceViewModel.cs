@@ -77,7 +77,11 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
         Orders = new ListCollectionView(_orderRows) { Filter = MatchesOrderFilter };
         Orders.SortDescriptions.Add(new(nameof(MarketplaceOrderRowViewModel.CreatedAt), ListSortDirection.Descending));
         InitializeProblems();
-        Orders.CollectionChanged += (_, _) => UpdateDisplayedOrderNumbers();
+        Orders.CollectionChanged += (_, _) =>
+        {
+            UpdateDisplayedOrderNumbers();
+            if (!_updatingOrderRows) OnPropertyChanged(nameof(OrderAmountSummary));
+        };
         SyncCommand = new AsyncRelayCommand(_ => SyncAsync(), _ => !IsBusy && !IsWorkspaceRefreshing && (_account.Length > 0 || _orderDatesValid));
         ExpandCommand = new AsyncRelayCommand(async _ => { _extraHistory = Math.Min(_extraHistory + 30, 3650); await SyncAsync(); }, _ => !IsBusy && !IsWorkspaceRefreshing && (_account.Length > 0 || _orderDatesValid));
         CancelCommand = new RelayCommand(_ => _cancel?.Cancel(), _ => IsBusy);
@@ -101,6 +105,7 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
     }
     public event EventHandler? MatchesChanged;
     public ICollectionView Orders { get; }
+    public string OrderAmountSummary => DashboardTotals.Orders(Orders.Cast<MarketplaceOrderRowViewModel>());
     public IReadOnlyList<MarketplaceOrderRowViewModel> AllOrderRows => _orderRows;
     public ShippingLabelsViewModel? Labels { get => _labels; set => SetProperty(ref _labels, value); }
     public IReadOnlyList<string> OrderFilters { get; } = ["Усі", "Prom", "Rozetka", "Без чека", "Є чек", "Ймовірний зв’язок"];
