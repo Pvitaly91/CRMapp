@@ -17,6 +17,8 @@ internal static partial class MarketplaceViewModelTests
         await main.RefreshAsync();
         await OpenOrdersAsync(main, workspace);
         main.CoordinatorManaged = true;
+        await main.RefreshAllAsync();
+        main.BackgroundStatus = "Checkbox: Оновлено | Маркетплейси: Оновлено | Накладні: Оновлено";
         var window = new MainWindow { DataContext = main };
         var failures = new BindingErrorListener();
         var priorTraceLevel = PresentationTraceSources.DataBindingSource.Switch.Level;
@@ -58,6 +60,22 @@ internal static partial class MarketplaceViewModelTests
                 True(scroll.ActualHeight > 0 && grid.ActualHeight > 0,
                     "Active receipt toolbar and grid must both receive layout space.");
                 var content = (FrameworkElement)window.Content;
+                var preview = (Button)window.FindName("ReceiptFooterPreviewButton");
+                var statusPanel = (StackPanel)window.FindName("ReceiptFooterStatusPanel");
+                var background = (TextBlock)window.FindName("ReceiptFooterBackgroundStatus");
+                var loaded = (TextBlock)window.FindName("ReceiptFooterStatusText");
+                var refresh = (TextBlock)window.FindName("ReceiptFooterRefreshStatus");
+                True(VisualChildren<StackPanel>(footer).Contains(statusPanel), "Refresh information must belong to the bottom receipt footer.");
+                Equal(main.BackgroundStatus, background.Text);
+                Equal(main.StatusText, loaded.Text);
+                Equal(main.RefreshAllStatus, refresh.Text);
+                True(statusPanel.ActualWidth > 0 && background.ActualHeight > 0 && loaded.ActualHeight > 0 && refresh.ActualHeight > 0);
+                True(statusPanel.TranslatePoint(new Point(), content).X >= preview.TranslatePoint(new Point(preview.ActualWidth, 0), content).X,
+                    "Refresh information must appear beside Preview, not in a separate band above the footer.");
+                True(statusPanel.TranslatePoint(new Point(statusPanel.ActualWidth, 0), content).X <=
+                    footer.TranslatePoint(new Point(footer.ActualWidth, 0), content).X,
+                    "Refresh information must fit inside the footer.");
+                Equal(Visibility.Collapsed, ((TextBlock)window.FindName("OtherTabsRefreshStatus")).Visibility);
                 True(scroll.TranslatePoint(new Point(0, scroll.ActualHeight), content).Y <=
                     grid.TranslatePoint(new Point(), content).Y + 0.5,
                     "Receipt print actions must be placed above their dashboard.");
@@ -78,6 +96,24 @@ internal static partial class MarketplaceViewModelTests
                 }
                 else RenderSyntheticContent(window, "receipt-print-toolbar-all.png");
             }
+            var normalBackground = main.BackgroundStatus;
+            main.BackgroundStatus = string.Join(" | ", Enumerable.Repeat(normalBackground, 6));
+            await DrainDispatcherAsync();
+            var narrowContent = (FrameworkElement)window.Content;
+            narrowContent.Measure(new Size(1000, 720));
+            narrowContent.Arrange(new Rect(0, 0, 1000, 720));
+            narrowContent.UpdateLayout();
+            var wrappedStatus = (TextBlock)window.FindName("ReceiptFooterBackgroundStatus");
+            True(wrappedStatus.ActualHeight > wrappedStatus.FontSize * 2,
+                "Long service updates must wrap within the space beside Preview.");
+            main.BackgroundStatus = normalBackground;
+            main.SelectedTabIndex = 3;
+            await DrainDispatcherAsync();
+            LayoutContent(window);
+            var otherStatus = (TextBlock)window.FindName("OtherTabsRefreshStatus");
+            Equal(main.RefreshAllStatus, otherStatus.Text);
+            Equal(Visibility.Visible, otherStatus.Visibility);
+            True(otherStatus.ActualHeight > 0, "Problem orders must retain general refresh feedback when the receipt footer is hidden.");
             await ReceiptPrintRepeatAcknowledgementAsync();
             Equal(0, fixture.Printer.Calls);
             True(failures.Messages.Count == 0, "Receipt print toolbar binding errors: " + string.Join("\n", failures.Messages));

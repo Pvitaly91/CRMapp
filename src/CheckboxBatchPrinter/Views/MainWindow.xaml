@@ -6,6 +6,14 @@
         Icon="/CheckboxBatchPrinter;component/Resources/app-icon.ico"
         WindowStartupLocation="CenterScreen" Background="#F5F7FA" PreviewKeyDown="Window_PreviewKeyDown">
     <Window.Resources>
+        <Style x:Key="FooterStatusTextStyle" TargetType="TextBlock">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="#48566A" />
+            <Setter Property="Margin" Value="0,1" />
+            <Style.Triggers>
+                <Trigger Property="Text" Value=""><Setter Property="Visibility" Value="Collapsed" /></Trigger>
+            </Style.Triggers>
+        </Style>
         <Style x:Key="LinkReceiptButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Background" Value="#176BAA" />
             <Setter Property="Foreground" Value="White" />
@@ -318,12 +326,17 @@
                 Visibility="{Binding IsReceiptTab, Converter={StaticResource BoolToVisibility}}">
             <Grid>
                 <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                <WrapPanel Grid.ColumnSpan="2">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                <WrapPanel VerticalAlignment="Center">
                     <TextBlock Text="{Binding SelectionText}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="12,0" />
-                    <Button Content="Перегляд" Command="{Binding PreviewCommand}" />
+                    <Button x:Name="ReceiptFooterPreviewButton" Content="Перегляд" Command="{Binding PreviewCommand}" />
                 </WrapPanel>
-                <StackPanel Grid.Row="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel x:Name="ReceiptFooterStatusPanel" Grid.Column="1" Margin="12,0,2,0" VerticalAlignment="Center">
+                    <TextBlock x:Name="ReceiptFooterBackgroundStatus" Text="{Binding BackgroundStatus}" Foreground="#667085" Style="{StaticResource FooterStatusTextStyle}" />
+                    <TextBlock x:Name="ReceiptFooterStatusText" Text="{Binding StatusText}" Style="{StaticResource FooterStatusTextStyle}" />
+                    <TextBlock x:Name="ReceiptFooterRefreshStatus" Text="{Binding RefreshAllStatus}" Style="{StaticResource FooterStatusTextStyle}" />
+                </StackPanel>
+                <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
                     <ProgressBar Width="110" Height="14" IsIndeterminate="True" Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}" />
                     <TextBlock Text="{Binding ProgressText}" Margin="10,0" VerticalAlignment="Center" />
                 </StackPanel>
@@ -352,11 +365,15 @@
             </Grid>
         </Border>
 
-        <TextBlock DockPanel.Dock="Bottom" Text="{Binding RefreshAllStatus}" Margin="14,3" Foreground="#48566A" TextWrapping="Wrap" />
-        <TextBlock DockPanel.Dock="Bottom" Text="{Binding StatusText}" Margin="14,4,14,8" Foreground="#48566A"
-                   Visibility="{Binding IsReceiptTab, Converter={StaticResource BoolToVisibility}}" />
-        <TextBlock DockPanel.Dock="Bottom" Text="{Binding BackgroundStatus}" Margin="14,3" Foreground="#667085"
-                   Visibility="{Binding IsReceiptTab, Converter={StaticResource BoolToVisibility}}" />
+        <TextBlock x:Name="OtherTabsRefreshStatus" DockPanel.Dock="Bottom" Text="{Binding RefreshAllStatus}" Margin="14,3">
+            <TextBlock.Style>
+                <Style TargetType="TextBlock" BasedOn="{StaticResource FooterStatusTextStyle}">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsReceiptTab}" Value="True"><Setter Property="Visibility" Value="Collapsed" /></DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBlock.Style>
+        </TextBlock>
 
         <TabControl x:Name="ReceiptTabs" SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}" Margin="10,8,10,2">
             <TabItem Header="Усі чеки">
