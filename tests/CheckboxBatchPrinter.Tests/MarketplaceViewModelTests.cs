@@ -27,6 +27,7 @@ internal static partial class MarketplaceViewModelTests
 
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
+        ("STA return receipt totals use Kyiv fiscal dates across the autumn clock change", () => StaAsync(ReturnCalendarDateTotalsAsync)),
         ("STA combined Prom and Rozetka totals merge hryvnia only for display and preserve explicit currencies", () => StaAsync(ExpandedOrderCurrencyTotalsAsync)),
         ("STA canceled totals include hidden rows within date search marketplace and link filters", () => StaAsync(CanceledOrderScopeTotalsAsync)),
         ("STA receipt return subtotals respect independent filters signed amounts and live row updates", () => StaAsync(ReturnReceiptSubtotalsAsync)),

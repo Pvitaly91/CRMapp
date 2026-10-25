@@ -39,7 +39,7 @@ internal static class DashboardTotals
 
     public static string CombinedOrders(IEnumerable<MarketplaceOrderRowViewModel> rows)
     {
-        var (_, unknown, amount) = OrderAmounts(rows, combineRozetkaHryvnia: true);
+        var (_, unknown, amount) = OrderAmounts(rows.Where(row => !row.Model.IsCanceled), combineRozetkaHryvnia: true);
         return $"Prom + Rozetka: {amount}" + Unknown(unknown);
     }
 

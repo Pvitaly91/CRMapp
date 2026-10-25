@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using CheckboxBatchPrinter.Core.Models;
 using CheckboxBatchPrinter.Core.Services;
 using CheckboxBatchPrinter.ViewModels;
@@ -86,6 +87,17 @@ internal static partial class MarketplaceViewModelTests
         True(!workspace.ShowCanceledOrders);
         Equal($"Prom + Rozetka: {100m:N2} грн", workspace.CombinedOrderAmountSummary);
         Equal(ExpandedOrderSum("Скасовані (4): ", $"{290m:N2} грн", 1), workspace.CanceledOrderAmountSummary);
+        Equal(OrderTotalsText(1, $"{100m:N2} UAH"), workspace.OrderAmountSummary);
+        var combinedWithoutCanceled = workspace.CombinedOrderAmountSummary;
+        workspace.ShowCanceledOrders = true;
+        Equal(combinedWithoutCanceled, workspace.CombinedOrderAmountSummary);
+        Equal(ExpandedOrderSum("Скасовані (4): ", $"{290m:N2} грн", 1), workspace.CanceledOrderAmountSummary);
+        Equal(OrderTotalsText(5, $"{350m:N2} UAH; {40m:N2} (валюта не надана)", 1), workspace.OrderAmountSummary);
+        True(!workspace.CombinedOrderAmountSummary.Contains("Без суми", StringComparison.Ordinal),
+            "A visible canceled order with no amount must not inflate the active combined total's missing amount count.");
+        workspace.ShowCanceledOrders = false;
+        Equal(combinedWithoutCanceled, workspace.CombinedOrderAmountSummary);
+        Equal(OrderTotalsText(1, $"{100m:N2} UAH"), workspace.OrderAmountSummary);
         var calls = fixture.Source.FetchCalls + fixture.Rozetka.FetchCalls;
 
         workspace.OrderFilter = "Prom";
@@ -94,7 +106,8 @@ internal static partial class MarketplaceViewModelTests
         Equal($"Скасовані (1): {50m:N2} грн", workspace.CanceledOrderAmountSummary);
         Equal($"Prom + Rozetka: {0m:N2} грн", workspace.CombinedOrderAmountSummary);
         workspace.ShowCanceledOrders = true;
-        Equal($"Prom + Rozetka: {50m:N2} грн", workspace.CombinedOrderAmountSummary);
+        Equal($"Prom + Rozetka: {0m:N2} грн", workspace.CombinedOrderAmountSummary);
+        Equal(OrderTotalsText(1, $"{50m:N2} UAH"), workspace.OrderAmountSummary);
         Equal($"Скасовані (1): {50m:N2} грн", workspace.CanceledOrderAmountSummary);
         workspace.ShowCanceledOrders = false;
         workspace.OrderFilter = "Без чека";
@@ -176,5 +189,44 @@ internal static partial class MarketplaceViewModelTests
         Equal(ReturnTotalsText(0, 0m), main.OrdersReceiptsTab.ReturnAmountSummary);
         Equal(0, fixture.Source.FetchCalls);
         Equal(0, fixture.Printer.Calls);
+    }
+
+    private static Task ReturnCalendarDateTotalsAsync()
+    {
+        var previousDay = new ReceiptRowViewModel(new ReceiptRecord
+        {
+            Id = "synthetic-return-5216", Serial = 5216, Type = ReceiptTypes.Return, Status = "DONE", TotalSumMinor = 37000,
+            FiscalDate = new DateTimeOffset(2026, 10, 24, 18, 52, 8, TimeSpan.Zero)
+        });
+        var rows = new ObservableCollection<ReceiptRowViewModel> { previousDay };
+        using var all = new ReceiptTabViewModel(rows, new("", "Усі типи"));
+        using var orders = new ReceiptTabViewModel(rows, new("", "Усі типи"), usesOrders: true);
+        Equal<DateTime?>(new(2026, 10, 24, 21, 52, 8), previousDay.LocalDateTime);
+        Equal(new DateOnly(2026, 10, 24), DateRangeBuilder.KyivDate(previousDay.Model.FiscalDate!.Value));
+        all.SetDisplayDates(new(2026, 10, 24), new(2026, 10, 24));
+        orders.SetDisplayDates(new(2026, 10, 24), new(2026, 10, 24));
+        Equal(ReturnTotalsText(1, 370m), all.ReturnAmountSummary);
+        Equal(ReturnTotalsText(1, 370m), orders.ReturnAmountSummary);
+        all.SetDisplayDates(new(2026, 10, 25), new(2026, 10, 25));
+        Equal(ReturnTotalsText(0, 0m), all.ReturnAmountSummary);
+        Equal(ReturnTotalsText(1, 370m), orders.ReturnAmountSummary);
+
+        // After the DST change, 21:30 UTC still belongs to Oct25 in Kyiv (+02).
+        // A fixed summer offset would incorrectly move this valid return to Oct26.
+        var nextDay = new ReceiptRowViewModel(new ReceiptRecord
+        {
+            Id = "synthetic-return-next-day", Type = ReceiptTypes.Return, Status = "DONE", TotalSumMinor = 9000,
+            FiscalDate = new DateTimeOffset(2026, 10, 25, 21, 30, 0, TimeSpan.Zero)
+        });
+        rows.Add(nextDay);
+        Equal<DateTime?>(new(2026, 10, 25, 23, 30, 0), nextDay.LocalDateTime);
+        Equal(new DateOnly(2026, 10, 25), DateRangeBuilder.KyivDate(nextDay.Model.FiscalDate!.Value));
+        Equal(ReturnTotalsText(1, 90m), all.ReturnAmountSummary);
+        Equal(ReturnTotalsText(1, 370m), orders.ReturnAmountSummary);
+        orders.SetDisplayDates(new(2026, 10, 25), new(2026, 10, 25));
+        Equal(ReturnTotalsText(1, 90m), orders.ReturnAmountSummary);
+        all.SetDisplayDates(new(2026, 10, 24), new(2026, 10, 24));
+        Equal(ReturnTotalsText(1, 370m), all.ReturnAmountSummary);
+        return Task.CompletedTask;
     }
 }

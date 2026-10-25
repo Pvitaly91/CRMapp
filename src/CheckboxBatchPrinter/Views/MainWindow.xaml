@@ -511,7 +511,7 @@
                                 <TextBlock x:Name="OrdersAmountSummary" Text="{Binding Marketplace.OrderAmountSummary}" FontWeight="SemiBold" TextWrapping="Wrap"
                                            ToolTip="Сума замовлень за поточними датами, пошуком та фільтром цієї таблиці. Різні валюти підсумовуються окремо; рядки без розпізнаної суми пораховано окремо." />
                                 <TextBlock x:Name="CombinedOrdersAmountSummary" Text="{Binding Marketplace.CombinedOrderAmountSummary}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,3,0,0"
-                                           ToolTip="Об’єднана сума видимих замовлень Prom і Rozetka за поточними фільтрами. Суми Rozetka без коду валюти враховуються у гривнях. Інші явно вказані валюти показано окремо." />
+                                           ToolTip="Об’єднана сума нескасованих замовлень Prom і Rozetka за поточними фільтрами. Скасовані виключені навіть при ввімкненому показі їхніх рядків. Суми Rozetka без коду валюти враховуються у гривнях. Інші явно вказані валюти показано окремо." />
                                 <TextBlock x:Name="CanceledOrdersAmountSummary" Text="{Binding Marketplace.CanceledOrderAmountSummary}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,3,0,0"
                                            ToolTip="Сума скасованих замовлень за поточними датами, пошуком і фільтром, навіть якщо їхні рядки приховані. Суми Rozetka без коду валюти враховуються у гривнях." />
                                 </StackPanel>
