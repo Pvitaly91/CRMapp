@@ -12,17 +12,42 @@ public sealed partial class MarketplaceWorkspaceViewModel
     public ICommand CopyShipmentTrackingCommand { get; private set; } = null!;
     private string _problemSearch = "", _problemFilter = "Усі";
     private string _problemPeriod = "Останні 14 днів";
+    private DateTime? _problemDateFrom = DateRangeBuilder.TodayKyiv.AddDays(-13), _problemDateTo = DateRangeBuilder.TodayKyiv;
     private DateTimeOffset _problemNow = DateTimeOffset.UtcNow;
     public event EventHandler? ProblemScopeChanged;
-    public IReadOnlyList<string> ProblemPeriods { get; } = ["Останні 14 днів", "За весь час"];
+    public IReadOnlyList<string> ProblemPeriods { get; } = ["Останні 14 днів", "За весь час", "За календарем"];
     public string ProblemPeriod
     {
         get => _problemPeriod;
         set
         {
             if (!ProblemPeriods.Contains(value) || !SetProperty(ref _problemPeriod, value)) return;
-            RefreshProblemView();
-            ProblemScopeChanged?.Invoke(this, EventArgs.Empty);
+            RefreshProblemScope();
+        }
+    }
+    public bool IsProblemCustomPeriod => ProblemPeriod == "За календарем";
+    public DateTime? ProblemDateFrom
+    {
+        get => _problemDateFrom;
+        set { if (SetProperty(ref _problemDateFrom, value?.Date)) RefreshProblemScope(); }
+    }
+    public DateTime? ProblemDateTo
+    {
+        get => _problemDateTo;
+        set { if (SetProperty(ref _problemDateTo, value?.Date)) RefreshProblemScope(); }
+    }
+    public bool HasValidProblemDateRange => !IsProblemCustomPeriod ||
+        ProblemDateFrom is { } from && ProblemDateTo is { } to && from <= to;
+    public string ProblemDateRangeHint => HasValidProblemDateRange ? "" :
+        ProblemDateFrom is null || ProblemDateTo is null ? "Оберіть обидві дати періоду." : "Дата «до» не може бути раніше дати «від».";
+    public (DateOnly From, DateOnly To) ProblemRefreshRange
+    {
+        get
+        {
+            if (!HasValidProblemDateRange) throw new InvalidOperationException(ProblemDateRangeHint);
+            if (IsProblemCustomPeriod) return (DateOnly.FromDateTime(ProblemDateFrom!.Value), DateOnly.FromDateTime(ProblemDateTo!.Value));
+            var to = DateOnly.FromDateTime(DateRangeBuilder.TodayKyiv);
+            return (to.AddDays(-13), to);
         }
     }
     public IEnumerable<MarketplaceOrderRowViewModel> ProblemScopeRows => _orderRows.Where(InProblemPeriod);
@@ -31,13 +56,29 @@ public sealed partial class MarketplaceWorkspaceViewModel
     public string ProblemFilter { get => _problemFilter; set { if (SetProperty(ref _problemFilter, value)) RefreshProblemView(); } }
     public string ProblemSummary => $"Проблемних замовлень: {ProblemOrders.Cast<object>().Count()}. " +
         (ProblemPeriod == "За весь час" ? "За весь час у збереженому архіві. " :
+            IsProblemCustomPeriod ? HasValidProblemDateRange ? $"Період: {ProblemDateFrom:dd.MM.yyyy} — {ProblemDateTo:dd.MM.yyyy}. " : ProblemDateRangeHint + " " :
             $"Період: {DateRangeBuilder.KyivDate(_problemNow).AddDays(-13):dd.MM.yyyy} — {DateRangeBuilder.KyivDate(_problemNow):dd.MM.yyyy}. ") +
         $"Без актуального статусу доставки: {ProblemScopeRows.Count(row => row.ProblemTrackingPending)}. " +
-        "Автооновлення — раз на 30 хв. Старі замовлення зберігаються в кеші; календар угорі не змінює цей список.";
+        "Автооновлення ТТН — раз на 30 хв. Старі замовлення зберігаються в кеші; власний інтервал — «За календарем».";
 
-    private bool InProblemPeriod(MarketplaceOrderRowViewModel row) => ProblemPeriod == "За весь час" ||
-        row.Model.CreatedAt is { } created && DateRangeBuilder.KyivDate(created) >= DateRangeBuilder.KyivDate(_problemNow).AddDays(-13) &&
-        DateRangeBuilder.KyivDate(created) <= DateRangeBuilder.KyivDate(_problemNow);
+    private bool InProblemPeriod(MarketplaceOrderRowViewModel row)
+    {
+        if (ProblemPeriod == "За весь час") return true;
+        if (!HasValidProblemDateRange || row.Model.CreatedAt is not { } created) return false;
+        var from = IsProblemCustomPeriod ? DateOnly.FromDateTime(ProblemDateFrom!.Value) : DateRangeBuilder.KyivDate(_problemNow).AddDays(-13);
+        var to = IsProblemCustomPeriod ? DateOnly.FromDateTime(ProblemDateTo!.Value) : DateRangeBuilder.KyivDate(_problemNow);
+        var date = DateRangeBuilder.KyivDate(created);
+        return date >= from && date <= to;
+    }
+
+    private void RefreshProblemScope()
+    {
+        OnPropertyChanged(nameof(IsProblemCustomPeriod));
+        OnPropertyChanged(nameof(HasValidProblemDateRange));
+        OnPropertyChanged(nameof(ProblemDateRangeHint));
+        RefreshProblemView();
+        ProblemScopeChanged?.Invoke(this, EventArgs.Empty);
+    }
 
     private void InitializeProblems()
     {

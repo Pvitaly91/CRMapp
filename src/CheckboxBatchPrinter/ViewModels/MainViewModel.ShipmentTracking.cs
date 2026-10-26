@@ -16,7 +16,6 @@ public sealed partial class MainViewModel
     private long _trackingGeneration;
     private static readonly TimeSpan TrackingCacheAge = TimeSpan.FromMinutes(30);
     public static readonly TimeSpan ProblemRefreshInterval = TimeSpan.FromMinutes(30);
-    private DateTimeOffset? _trackingAutomaticAttemptAt;
 
     public void QueueShipmentTrackingRefresh(bool force = false)
     {
@@ -30,18 +29,13 @@ public sealed partial class MainViewModel
         if (_trackingCacheStore is not null && !_trackingCacheReady)
             return RestoreCacheAndRefreshTrackingAsync(force, cancellationToken);
         var now = _trackingClock.GetUtcNow();
-        if (IsProblemOrdersTab && !force && _trackingAutomaticAttemptAt is { } last && now >= last && now - last < ProblemRefreshInterval)
-        {
-            PublishShipmentTrackingStatuses();
-            return _trackingTask is { IsCompleted: false } ? _trackingTask : Task.CompletedTask;
-        }
         var cacheAge = IsProblemOrdersTab ? ProblemRefreshInterval : TrackingCacheAge;
-        var visible = (IsProblemOrdersTab ? Marketplace.ProblemScopeRows.Where(row => !row.Model.IsCanceled &&
-                !ProblemOrderRules.IsCompletedOrder(row.Model)) : Marketplace.Orders.Cast<MarketplaceOrderRowViewModel>())
+        var visible = (IsProblemOrdersTab ? Marketplace.ProblemScopeRows.Where(row => !row.Model.IsCanceled) : Marketplace.Orders.Cast<MarketplaceOrderRowViewModel>())
             .Select(row => row.Model).ToArray();
         var requested = visible.Select(order => order with { Shipments = order.Shipments.Where(shipment =>
         {
             var status = ResolveTracking(order.Key, shipment);
+            if (IsProblemOrdersTab && !force && status is not null && ProblemOrderRules.IsTerminal(status)) return false;
             var identity = (ShippingCarrierNames.FromDocumentedDeliveryField(shipment.Carrier), shipment.TrackingNumber.Trim(), order.Key, shipment.ShipmentId);
             return !string.IsNullOrWhiteSpace(shipment.TrackingNumber) &&
                 (force || (status is null || now - status.CheckedAtUtc >= cacheAge || status.CheckedAtUtc > now ||
@@ -73,7 +67,6 @@ public sealed partial class MainViewModel
         try
         {
             await Task.Delay(200, cancellation.Token); // Coalesce source/view changes, never fetch from a cell getter.
-            _trackingAutomaticAttemptAt = _trackingClock.GetUtcNow();
             foreach (var order in requested)
                 foreach (var shipment in order.Shipments)
                     _trackingAttempts[(ShippingCarrierNames.FromDocumentedDeliveryField(shipment.Carrier), shipment.TrackingNumber.Trim(),
@@ -214,7 +207,7 @@ public sealed partial class MainViewModel
         ++_trackingGeneration;
         _trackingCancellation?.Cancel();
         _trackingCacheLoadCancellation?.Cancel();
-        _trackingCacheReady = false; _trackingCacheContext = ""; _trackingStartupTask = null; _trackingAutomaticAttemptAt = null;
+        _trackingCacheReady = false; _trackingCacheContext = ""; _trackingStartupTask = null;
         _trackingCancellation = null; _trackingTask = null; _trackingScope = "";
         _liveTracking.Clear(); _waybillTracking.Clear(); _trackingFailures.Clear(); _trackingAttempts.Clear();
         if (Marketplace is not null) foreach (var row in Marketplace.AllOrderRows) row.ClearCabinetPrintStatuses();

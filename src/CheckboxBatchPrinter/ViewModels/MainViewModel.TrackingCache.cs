@@ -50,7 +50,6 @@ public sealed partial class MainViewModel
             }
             foreach (var attempt in cache.Attempts.Where(a => a.AttemptedAtUtc <= now))
                 _trackingAttempts[(attempt.Carrier, attempt.TrackingNumber, attempt.Order, attempt.ShipmentId)] = attempt.AttemptedAtUtc;
-            _trackingAutomaticAttemptAt = _trackingAttempts.Values.Where(time => time <= now).Select(time => (DateTimeOffset?)time).Max();
             _trackingCacheReady = true;
             PublishShipmentTrackingStatuses();
             await SaveTrackingCacheAsync(generation);

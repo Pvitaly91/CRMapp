@@ -849,12 +849,22 @@
                     <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,5">
                         <TextBlock Text="Період:" VerticalAlignment="Center" Margin="4" />
                         <ComboBox x:Name="ProblemPeriodFilter" Width="150" ItemsSource="{Binding Marketplace.ProblemPeriods}" SelectedItem="{Binding Marketplace.ProblemPeriod}" />
+                        <StackPanel Orientation="Horizontal" Visibility="{Binding Marketplace.IsProblemCustomPeriod, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="Дата від" VerticalAlignment="Center" Margin="5,0,2,0" />
+                            <DatePicker x:Name="ProblemDateFromInput" Width="135" SelectedDate="{Binding Marketplace.ProblemDateFrom, UpdateSourceTrigger=PropertyChanged}"
+                                        ToolTip="Початок власного періоду проблемних замовлень (Київ)." />
+                            <TextBlock Text="Дата до" VerticalAlignment="Center" Margin="5,0,2,0" />
+                            <DatePicker x:Name="ProblemDateToInput" Width="135" SelectedDate="{Binding Marketplace.ProblemDateTo, UpdateSourceTrigger=PropertyChanged}"
+                                        ToolTip="Кінець періоду включно. «Оновити все» завантажить дані за цим інтервалом." />
+                        </StackPanel>
                         <TextBlock Text="Показувати:" VerticalAlignment="Center" Margin="4" />
                         <ComboBox Width="235" ItemsSource="{Binding Marketplace.ProblemFilters}" SelectedItem="{Binding Marketplace.ProblemFilter}" />
                         <Button Content="Оновити все" Command="{Binding RefreshAllCommand}" />
                         <Button Content="Завантажити ще 30 днів" Command="{Binding Marketplace.ExpandCommand}"
                                 ToolTip="Розширити завантажену історію замовлень на 30 днів перед вибраною датою. Старі замовлення з’являться тут після завантаження." />
                     </WrapPanel>
+                    <TextBlock x:Name="ProblemDateRangeHint" DockPanel.Dock="Top" Text="{Binding Marketplace.ProblemDateRangeHint}"
+                               Foreground="#A61B1B" Margin="4,0" Style="{StaticResource FooterStatusTextStyle}" />
                     <TextBlock DockPanel.Dock="Top" Text="{Binding Marketplace.ProblemSummary}" TextWrapping="Wrap" Margin="4,2,4,5" />
                     <TextBlock DockPanel.Dock="Bottom" Text="{Binding Marketplace.Status}" TextWrapping="Wrap" Margin="4" Foreground="#667085" />
                     <TextBlock DockPanel.Dock="Bottom" TextWrapping="Wrap" Margin="4,6" Foreground="#667085"

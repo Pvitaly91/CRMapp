@@ -26,7 +26,8 @@ public sealed partial class MainViewModel
     }
     public string RefreshAllButtonText => IsRefreshingAll ? "Оновлення…" : "Оновити все";
     public string RefreshAllStatus { get => _refreshAllStatus; private set => SetProperty(ref _refreshAllStatus, value); }
-    private bool CanRefreshAll => !IsBusy && Marketplace?.Labels?.IsBusy != true && Waybills?.IsPrintingBusy != true;
+    private bool CanRefreshAll => !IsBusy && Marketplace?.Labels?.IsBusy != true && Waybills?.IsPrintingBusy != true &&
+        (!IsProblemOrdersTab || Marketplace?.HasValidProblemDateRange != false);
 
     private void NotifyBusyChanged()
     {
@@ -74,6 +75,7 @@ public sealed partial class MainViewModel
         }
         var to = IsProblemOrdersTab ? DateOnly.FromDateTime(CheckboxBatchPrinter.Core.Services.DateRangeBuilder.TodayKyiv) : DateOnly.FromDateTime(DateTo!.Value);
         var from = IsProblemOrdersTab ? to.AddDays(-13) : DateOnly.FromDateTime(DateFrom!.Value);
+        if (IsProblemOrdersTab && Marketplace is not null) (from, to) = Marketplace.ProblemRefreshRange;
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _refreshAllTask = completion.Task;
         _ = RunRefreshAllAsync(from, to, completion, IsProblemOrdersTab);
@@ -126,6 +128,12 @@ public sealed partial class MainViewModel
             token.ThrowIfCancellationRequested();
             if (Waybills is not null) await UpdateWaybillOrderAssociationsAsync();
             token.ThrowIfCancellationRequested();
+            if (problemScope)
+            {
+                RefreshAllStatus = "Оновлюю статуси ТТН проблемних замовлень…";
+                await RefreshShipmentTrackingAsync(force: true, cancellationToken: token).WaitAsync(token);
+                token.ThrowIfCancellationRequested();
+            }
             RefreshAllStatus = "Оновлення завершено. Стан кожної служби — у підказці «Оновити все».";
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -145,7 +153,7 @@ public sealed partial class MainViewModel
             if (Waybills is not null) Waybills.IsWorkspaceRefreshing = false;
             _refreshAllCancellation = null;
             IsRefreshingAll = false;
-            if (!token.IsCancellationRequested) QueueShipmentTrackingRefresh(force: true);
+            if (!token.IsCancellationRequested && !problemScope) QueueShipmentTrackingRefresh(force: true);
             completion.TrySetResult();
             if (ReferenceEquals(_refreshAllTask, completion.Task)) _refreshAllTask = null;
         }

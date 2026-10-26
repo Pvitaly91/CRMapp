@@ -76,17 +76,18 @@ internal static partial class MarketplaceViewModelTests
             Equal(1, tracking.Calls); Equal("recent", tracking.Requests.Single().Single().Number);
             workspace.ProblemPeriod = "За весь час";
             await main.RefreshShipmentTrackingAsync();
-            Equal(1, tracking.Calls);
+            Equal(2, tracking.Calls);
+            Equal("old", tracking.Requests.Last().Single().Number);
             clock.Now = clock.Now.AddMinutes(29).AddSeconds(59);
-            await main.RefreshShipmentTrackingAsync(); Equal(1, tracking.Calls);
-            clock.Now = clock.Now.AddSeconds(1);
             await main.RefreshShipmentTrackingAsync(); Equal(2, tracking.Calls);
+            clock.Now = clock.Now.AddSeconds(1);
+            await main.RefreshShipmentTrackingAsync(); Equal(3, tracking.Calls);
             True(tracking.Requests.Last().Select(o => o.Number).ToHashSet().SetEquals(["recent", "old"]));
             tracking.Read = (_, _) => Task.FromResult(new ShipmentTrackingFetchResult([], ["offline"]));
-            await main.RefreshShipmentTrackingAsync(force: true); Equal(3, tracking.Calls);
-            clock.Now = clock.Now.AddMinutes(29);
-            await main.RefreshShipmentTrackingAsync(); Equal(3, tracking.Calls);
             await main.RefreshShipmentTrackingAsync(force: true); Equal(4, tracking.Calls);
+            clock.Now = clock.Now.AddMinutes(29);
+            await main.RefreshShipmentTrackingAsync(); Equal(4, tracking.Calls);
+            await main.RefreshShipmentTrackingAsync(force: true); Equal(5, tracking.Calls);
             Equal(0, fixture.Source.FetchCalls);
         }
         finally { main.CancelPendingOperations(); }

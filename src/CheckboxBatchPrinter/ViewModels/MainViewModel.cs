@@ -101,7 +101,12 @@ public sealed partial class MainViewModel : ObservableObject
         };
         if (Marketplace is not null) Marketplace.ProblemScopeChanged += (_, _) =>
         {
-            if (IsProblemOrdersTab) QueueShipmentTrackingRefresh();
+            if (IsProblemOrdersTab)
+            {
+                CancelGlobalRefreshForDateChange();
+                QueueShipmentTrackingRefresh();
+                RaiseCommands();
+            }
         };
         if (Marketplace is not null) ((System.Collections.Specialized.INotifyCollectionChanged)Marketplace.Orders).CollectionChanged += (_, _) =>
         {

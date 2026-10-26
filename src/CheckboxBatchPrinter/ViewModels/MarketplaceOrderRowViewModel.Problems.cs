@@ -7,20 +7,21 @@ public sealed partial class MarketplaceOrderRowViewModel
 {
     private string _problemReason = "", _problemTracking = "", _problemChecked = "";
     private int _problemPriority = int.MaxValue;
+    private DateTimeOffset _problemStatusNow = DateTimeOffset.UtcNow;
     public string ProblemReason { get => _problemReason; private set => SetProperty(ref _problemReason, value); }
     public string ProblemTracking { get => _problemTracking; private set => SetProperty(ref _problemTracking, value); }
     public string ProblemChecked { get => _problemChecked; private set => SetProperty(ref _problemChecked, value); }
     public int ProblemPriority { get => _problemPriority; private set => SetProperty(ref _problemPriority, value); }
-    public bool ProblemTrackingPending => !Model.IsCanceled && !ProblemOrderRules.IsCompletedOrder(Model) &&
-        ShipmentLinks.Any(link => TrackingStatusFor(link.Shipment) is not { } status || status.IsStale ||
-            status.Status == "Статус недоступний" || status.CheckedAtUtc is null || DateTimeOffset.UtcNow - status.CheckedAtUtc >= TimeSpan.FromMinutes(30));
+    public bool ProblemTrackingPending => !Model.IsCanceled &&
+        ShipmentLinks.Any(link => TrackingStatusFor(link.Shipment) is not { } status ||
+            !ProblemOrderRules.IsTerminal(ProblemStatus(status)) && (status.IsStale || status.Status == "Статус недоступний" ||
+                status.CheckedAtUtc is null || _problemStatusNow - status.CheckedAtUtc >= TimeSpan.FromMinutes(30)));
 
     internal void UpdateProblems(DateTimeOffset now, bool savedReceiptEvidence)
     {
+        _problemStatusNow = now;
         var tracking = ShipmentLinks.Select(link => TrackingStatusFor(link.Shipment)).OfType<OrderShipmentTrackingStatus>().ToArray();
-        var statuses = tracking.Select(s => s.Details ?? new ShipmentTrackingStatus(
-            ShippingCarrierNames.FromDocumentedDeliveryField(s.Shipment.Carrier), s.Shipment.TrackingNumber.Trim(),
-            s.Status, s.Source, s.CheckedAtUtc ?? DateTimeOffset.MinValue)).ToArray();
+        var statuses = tracking.Select(ProblemStatus).ToArray();
         var hasReceipt = !HasNoReceiptLink || savedReceiptEvidence || Model.ReceiptIds.Any(s => !string.IsNullOrWhiteSpace(s)) ||
             Model.FiscalReferences.Count > 0 || Model.FiscalReceiptNumbers.Any(s => !string.IsNullOrWhiteSpace(s)) ||
             Model.FiscalReceiptUrls.Any(s => !string.IsNullOrWhiteSpace(s));
@@ -32,4 +33,8 @@ public sealed partial class MarketplaceOrderRowViewModel
             ? string.Join("\n", ShipmentLinks.Select(s => s.TrackingStatusToolTip)) : "ТТН ще немає";
         ProblemChecked += $"\nЗамовлення перевірено: {TimeZoneInfo.ConvertTime(Model.RetrievedAtUtc, DateRangeBuilder.KyivZone):dd.MM.yyyy HH:mm}";
     }
+
+    private static ShipmentTrackingStatus ProblemStatus(OrderShipmentTrackingStatus status) => status.Details ?? new(
+        ShippingCarrierNames.FromDocumentedDeliveryField(status.Shipment.Carrier), status.Shipment.TrackingNumber.Trim(),
+        status.Status, status.Source, status.CheckedAtUtc ?? DateTimeOffset.MinValue);
 }

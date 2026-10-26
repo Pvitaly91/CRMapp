@@ -27,6 +27,10 @@ internal static partial class MarketplaceViewModelTests
 
     public static IReadOnlyList<(string Name, Func<Task> Test)> All =>
     [
+        ("STA completed marketplace orders refresh stale TTNs and delivered parcels stay resolved after restart", () => StaAsync(ProblemCompletedShipmentRecoveryAsync)),
+        ("STA manual problem refresh awaits carrier tracking and clears delivered rows before completion", () => StaAsync(ProblemManualTrackingCompletionAsync)),
+        ("STA problem calendar filters inclusive Kyiv dates and blocks invalid ranges without API reads", () => StaAsync(ProblemCalendarFilterAsync)),
+        ("STA problem calendar refresh loads its chosen interval without changing other tabs or scanning waybills", () => StaAsync(ProblemCalendarRefreshRangeAsync)),
         ("STA return receipt totals use Kyiv fiscal dates across the autumn clock change", () => StaAsync(ReturnCalendarDateTotalsAsync)),
         ("STA combined Prom and Rozetka totals merge hryvnia only for display and preserve explicit currencies", () => StaAsync(ExpandedOrderCurrencyTotalsAsync)),
         ("STA canceled totals include hidden rows within date search marketplace and link filters", () => StaAsync(CanceledOrderScopeTotalsAsync)),
