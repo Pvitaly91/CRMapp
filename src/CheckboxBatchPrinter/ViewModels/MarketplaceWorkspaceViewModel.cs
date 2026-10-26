@@ -484,11 +484,12 @@ public sealed partial class MarketplaceWorkspaceViewModel : ObservableObject
             Status += _cacheNotice;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-        catch (Exception)
+        catch (Exception exception)
         {
             if (generation != _generation) return;
             _canApply = false;
-            Status = "Не вдалося прочитати локальні дані маркетплейсів. Друк чеків доступний.";
+            Status = exception is LocalCacheException ? exception.Message :
+                "Не вдалося прочитати локальні дані маркетплейсів. Друк чеків доступний.";
         }
         finally
         {

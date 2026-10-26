@@ -159,6 +159,7 @@ internal static class Program
         Tests.AddRange(WaybillLabelPreparationTests.All);
         Tests.AddRange(WaybillPrintingViewModelTests.All);
         Tests.AddRange(LabelJobIsolationTests.All);
+        Tests.AddRange(ProtectedCacheRecoveryTests.All);
         Tests.AddRange(WaybillOrderAssociationTests.All);
         Tests.AddRange(DashboardTextControlTests.All);
         Tests.AddRange(NovaPoshtaDirectTests.All);

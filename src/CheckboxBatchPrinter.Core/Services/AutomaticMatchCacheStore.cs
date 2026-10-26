@@ -52,15 +52,14 @@ public sealed class DpapiAutomaticMatchCacheStore(string path, TimeProvider? tim
         // must not produce a file that our own guarded reader will subsequently reject.
         if (JsonSerializer.SerializeToUtf8Bytes(caches, MarketplaceStoreFiles.JsonOptions).LongLength > MaxFileBytes / 2)
             throw new InvalidDataException("Кеш автозв’язків завеликий; поточні результати доступні без його збереження.");
-        await MarketplaceStoreFiles.WriteProtectedAsync(_path, caches, cancellationToken).ConfigureAwait(false);
+        await ProtectedCacheFile.WriteAsync(_path, caches, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<List<AutomaticMatchCache>> ReadAsync(CancellationToken token)
     {
         try
         {
-            if (File.Exists(_path) && new FileInfo(_path).Length > MaxFileBytes) return [];
-            var caches = await MarketplaceStoreFiles.ReadProtectedAsync<List<AutomaticMatchCache>>(_path, token).ConfigureAwait(false) ?? [];
+            var caches = await ProtectedCacheFile.ReadAsync<List<AutomaticMatchCache>>(_path, token, MaxFileBytes).ConfigureAwait(false) ?? [];
             if (caches.Any(c => c is null || string.IsNullOrWhiteSpace(c.AccountContext) || c.Details is null || c.Snapshots is null ||
                     c.Links is null || c.LinkSchema is < 0 or > 1 || c.Links.Any(p => string.IsNullOrWhiteSpace(p.Key) ||
                         p.Value?.Match is null || p.Value.Match.State != ReceiptLinkState.Suggested ||

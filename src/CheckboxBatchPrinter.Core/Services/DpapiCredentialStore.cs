@@ -16,9 +16,25 @@ public sealed class DpapiCredentialStore(string credentialPath) : ISecureCredent
         ArgumentException.ThrowIfNullOrWhiteSpace(password);
         var protectedBytes = Protect(Encoding.UTF8.GetBytes(password));
         Directory.CreateDirectory(Path.GetDirectoryName(credentialPath)!);
-        var temporaryPath = credentialPath + ".tmp";
-        await File.WriteAllBytesAsync(temporaryPath, protectedBytes, cancellationToken).ConfigureAwait(false);
-        File.Move(temporaryPath, credentialPath, true);
+        var temporaryPath = credentialPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            await using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                await stream.WriteAsync(protectedBytes, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                stream.Flush(flushToDisk: true);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            File.Move(temporaryPath, credentialPath, true);
+        }
+        finally
+        {
+            Array.Clear(protectedBytes);
+            try { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 
     public async Task<string?> LoadPasswordAsync(CancellationToken cancellationToken = default)

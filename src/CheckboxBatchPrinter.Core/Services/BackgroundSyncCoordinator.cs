@@ -215,7 +215,8 @@ public sealed class BackgroundSyncCoordinator : IAsyncDisposable
             var delay = TimeSpan.FromMinutes(Math.Min(30, 1 << count));
             if (ex is ApiException { StatusCode: (System.Net.HttpStatusCode)429, RetryAfter: { } retry } && retry > delay)
                 delay = retry;
-            SetState(key, authFailure ? "Потрібна авторизація" : "Немає мережі / перевірка неповна",
+            SetState(key, ex is LocalCacheException ? "Локальний кеш пошкоджений; потрібне відновлення" :
+                authFailure ? "Потрібна авторизація" : "Немає мережі / перевірка неповна",
                 current.LastSuccessUtc, authFailure ? DateTimeOffset.MaxValue : _clock.GetUtcNow() + delay,
                 authFailure ? BackgroundCooldownReason.Authorization :
                     rateLimited ? BackgroundCooldownReason.RateLimited : BackgroundCooldownReason.Transient);

@@ -110,6 +110,8 @@ internal static partial class MarketplaceSyncTests
                 { RetrievedAtUtc = Now.AddDays(-100) }).ToArray();
             var cache = new DpapiMarketplaceCacheStore(path, clock, preserveExpiredOrders: true);
             await cache.SaveAsync(new(history, []));
+            // Reproduce a power-loss snapshot: the primary exists at its real size but contains only zeros.
+            await File.WriteAllBytesAsync(path, new byte[new FileInfo(path).Length]);
             var current = Order("current", "new");
             var client = new FakeClient(MarketplaceKind.Prom)
             { Fetch = (_, _) => Task.FromResult(new OrdersFetchResult([current], true)) };

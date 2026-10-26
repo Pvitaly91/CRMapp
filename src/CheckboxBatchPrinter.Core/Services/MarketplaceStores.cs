@@ -81,7 +81,7 @@ public sealed class DpapiMarketplaceCacheStore(string path, TimeProvider? timePr
     {
         if (retentionDays is < 1 or > 90) throw new ArgumentOutOfRangeException(nameof(retentionDays));
         using var lease = await MarketplaceStoreFiles.LockAsync(_path, cancellationToken).ConfigureAwait(false);
-        var snapshot = await MarketplaceStoreFiles.ReadProtectedAsync<MarketplaceSnapshot>(_path, cancellationToken)
+        var snapshot = await ProtectedCacheFile.ReadAsync<MarketplaceSnapshot>(_path, cancellationToken)
             .ConfigureAwait(false) ?? new([], []);
         Validate(snapshot);
         var cutoff = _clock.GetUtcNow().AddDays(-retentionDays);
@@ -101,7 +101,7 @@ public sealed class DpapiMarketplaceCacheStore(string path, TimeProvider? timePr
                 : state).ToArray();
         var retained = new MarketplaceSnapshot(orders, states);
         if (orders.Length != snapshot.Orders.Count || states.Length != snapshot.States.Count)
-            await MarketplaceStoreFiles.WriteProtectedAsync(_path, retained, cancellationToken).ConfigureAwait(false);
+            await ProtectedCacheFile.WriteAsync(_path, retained, cancellationToken).ConfigureAwait(false);
         return retained;
     }
 
@@ -112,7 +112,7 @@ public sealed class DpapiMarketplaceCacheStore(string path, TimeProvider? timePr
         var archivedOrders = Array.Empty<MarketplaceOrder>();
         if (preserveExpiredOrders)
         {
-            var previous = await MarketplaceStoreFiles.ReadProtectedAsync<MarketplaceSnapshot>(_path, cancellationToken)
+            var previous = await ProtectedCacheFile.ReadAsync<MarketplaceSnapshot>(_path, cancellationToken)
                 .ConfigureAwait(false);
             if (previous is not null) { Validate(previous); archivedOrders = previous.Orders.ToArray(); }
         }
@@ -122,7 +122,7 @@ public sealed class DpapiMarketplaceCacheStore(string path, TimeProvider? timePr
             .Select(group => group.MaxBy(order => order.RetrievedAtUtc)!).ToArray(),
             snapshot.States.GroupBy(state => state.ConnectionId)
                 .Select(group => group.MaxBy(state => state.AttemptedAtUtc)!).ToArray());
-        await MarketplaceStoreFiles.WriteProtectedAsync(_path, deduplicated, cancellationToken).ConfigureAwait(false);
+        await ProtectedCacheFile.WriteAsync(_path, deduplicated, cancellationToken).ConfigureAwait(false);
     }
 
     private static void Validate(MarketplaceSnapshot snapshot)

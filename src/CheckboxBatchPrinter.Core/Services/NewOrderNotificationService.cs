@@ -13,9 +13,7 @@ public sealed class DpapiOrderNotificationStore(string path) : IOrderNotificatio
     public async Task<OrderNotificationState> LoadAsync(CancellationToken token = default)
     {
         using var lease = await MarketplaceStoreFiles.LockAsync(path, token).ConfigureAwait(false);
-        if (File.Exists(path) && new FileInfo(path).Length > 16 * 1024 * 1024)
-            throw new InvalidDataException("Журнал сповіщень завеликий.");
-        var state = await MarketplaceStoreFiles.ReadProtectedAsync<OrderNotificationState>(path, token)
+        var state = await ProtectedCacheFile.ReadAsync<OrderNotificationState>(path, token, 16 * 1024 * 1024)
             .ConfigureAwait(false) ?? new();
         if (state.Seen is null || state.Baselines is null || state.Seen.Count > NewOrderNotificationService.MaximumOrders ||
             state.Baselines.Count > NewOrderNotificationService.MaximumSources ||
@@ -28,7 +26,7 @@ public sealed class DpapiOrderNotificationStore(string path) : IOrderNotificatio
     public async Task SaveAsync(OrderNotificationState state, CancellationToken token = default)
     {
         using var lease = await MarketplaceStoreFiles.LockAsync(path, token).ConfigureAwait(false);
-        await MarketplaceStoreFiles.WriteProtectedAsync(path, state, token).ConfigureAwait(false);
+        await ProtectedCacheFile.WriteAsync(path, state, token).ConfigureAwait(false);
     }
 }
 
