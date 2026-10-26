@@ -30,8 +30,8 @@ internal static class ShippingLabelsTests
         ("mixed label preparation preserves order, seats and deduplicates identical pages", MixedPreparation),
         ("missing label credentials skip only unconfigured shipments and keep ready pages", () => Sta(MissingCredentialsPreparation)),
         ("invalid or unavailable label blocks complete batch; no partial print", BrokenBatch),
-        ("STA real label backend produces one job and separate pages", () => Sta(Backend)),
-        ("STA backend registration-then-exception persists whole batch Unknown", () => Sta(Unknown)),
+        ("STA real label backend produces one Windows job per physical label", () => Sta(Backend)),
+        ("STA backend registration-then-exception marks only its single label Unknown", () => Sta(Unknown)),
         ("STA preparation failure remains NotSubmitted and cancellation never starts job", () => Sta(NotSubmitted)),
         ("DPAPI label attempts survive restart independently from receipt history and secrets", Persistence),
         ("STA bundled PDFium renders100/101.5mm203/300dpi rotation full edges and barcode ink", () => Sta(Render))
@@ -319,13 +319,14 @@ internal static class ShippingLabelsTests
     {
         var history = new History(); var device = new Device { History = history }; var batch = await Batch();
         var result = await new LabelPrintCoordinator(history, new WindowsLabelPrinter(_ => device)).SubmitAsync(batch);
-        Check(device.Begins == 1 && device.Pages == 4 && device.Ends == 1 && result.WindowsJobId == 101 && result.State == LabelSubmissionState.Submitted, "Not one job with four pages.");
+        Check(device.Begins == 4 && device.Pages == 4 && device.Ends == 4 && result.Count == 4 &&
+            result.All(a => a.WindowsJobId == 101 && a.State == LabelSubmissionState.Submitted && a.Pages.Count == 1), "Not four single-label jobs.");
     }
     private static async Task Unknown()
     {
         var history = new History(); var device = new Device { History = history, ThrowAfterRegister = true };
         try { await new LabelPrintCoordinator(history, new WindowsLabelPrinter(_ => device)).SubmitAsync(await Batch()); throw new Exception("Registration failure hidden."); }
-        catch (LabelTransmissionException ex) { Check(ex.Attempt.State == LabelSubmissionState.SubmissionUnknown && ex.Attempt.WindowsJobId is null && ex.Attempt.Pages.Count == 4, "Unknown lost whole packet."); }
+        catch (LabelTransmissionException ex) { Check(ex.Attempt.State == LabelSubmissionState.SubmissionUnknown && ex.Attempt.WindowsJobId is null && ex.Attempt.Pages.Count == 1 && ex.Attempts.Count == 1, "Unknown affected unsubmitted labels."); }
         Check(device.Begins == 1 && history.Attempts.Single().State == LabelSubmissionState.SubmissionUnknown, "Automatic retry happened.");
     }
     private static async Task NotSubmitted()

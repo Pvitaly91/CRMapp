@@ -61,10 +61,10 @@ internal static partial class MarketplaceViewModelTests
             RenderSyntheticContent(preview, "independent-waybill-preview.png");
             preview.Close();
             await ExecuteAsync(main.PrintSelectedCommand);
-            Equal(1, printer.Calls); Equal(2, printer.Batch!.Pages.Count);
-            True(printer.Batch.Pages.All(p => p.Shipment.Order is null && p.ConnectionId == row.ConnectionId));
+            Equal(2, printer.Calls); True(printer.Batches.All(b => b.Pages.Count == 1));
+            True(printer.Batches.SelectMany(b => b.Pages).All(p => p.Shipment.Order is null && p.ConnectionId == row.ConnectionId));
             True(row.HasPrintedLabel && !row.IsSelected);
-            Equal(LabelSubmissionState.Submitted, history.Attempts.Single().State);
+            True(history.Attempts.Count == 2 && history.Attempts.All(a => a.State == LabelSubmissionState.Submitted));
             Equal(0, fixture.Printer.Calls);
             var deleted = waybills.Rows.Single(r => r.IsDeleted);
             grid.ScrollIntoView(deleted, first); LayoutContent(window); await DrainDispatcherAsync();
@@ -111,6 +111,7 @@ internal static partial class MarketplaceViewModelTests
     }
     private sealed class DashboardWaybillPrinter : ILabelPrinter
     {
+        public List<LabelPrintBatch> Batches { get; } = [];
         public int Calls; public LabelPrintBatch? Batch;
         public LabelPrinterGeometry Geometry { get; } = new(100, 100, 0, 0, 100, 100, 203, 203);
         public IReadOnlyList<string> Printers() => ["Synthetic printer"];
@@ -118,7 +119,7 @@ internal static partial class MarketplaceViewModelTests
         public LabelPrinterGeometry Inspect(LabelPrintSettings settings) => Geometry;
         public async Task<int?> SubmitAsync(LabelPrintBatch batch, string jobName, Func<Task> beforeTransfer,
             Func<int, Task> jobCreated, CancellationToken cancellationToken = default)
-        { Calls++; Batch = batch; await beforeTransfer(); await jobCreated(42); return 42; }
+        { Calls++; Batch = batch; Batches.Add(batch); await beforeTransfer(); await jobCreated(42); return 42; }
     }
     private sealed class DashboardWaybillDialogs : ILabelDialogs
     {

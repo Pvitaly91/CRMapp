@@ -160,8 +160,8 @@ public sealed partial class MarketplaceOrderRowViewModel(MarketplaceOrder model)
         var attempts = history.Where(a => a.Pages.Any(p => shipments.Any(s => p.Matches(s, normalizeOrder)))).ToArray();
         _localHasLabelSubmission = attempts.Any(a => a.State is LabelSubmissionState.Submitted or LabelSubmissionState.SubmissionUnknown);
         _locallyPrintedShipments.Clear();
-        foreach (var shipment in shipments.Where(s => attempts.Any(a => a.State == LabelSubmissionState.Submitted &&
-            a.Pages.Any(p => p.Matches(s, normalizeOrder)))))
+        foreach (var shipment in shipments.Where(s => LabelPrintHistory.HasCompleteDocument(attempts,
+            p => p.Matches(s, normalizeOrder), s.ExpectedPlaces)))
             _locallyPrintedShipments.Add((shipment.Carrier, shipment.TrackingNumber, shipment.ShipmentId));
         var localComplete = shipments.Count > 0 && shipments.All(s =>
             _locallyPrintedShipments.Contains((s.Carrier, s.TrackingNumber, s.ShipmentId)));

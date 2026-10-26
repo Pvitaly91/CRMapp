@@ -108,7 +108,7 @@ public sealed partial class ShippingLabelsViewModel
                 throw new InvalidOperationException("Параметри драйвера наклейок змінилися. Підготуйте пакет заново.");
         }
 
-        internal async Task<LabelPrintAttempt> SubmitAsync()
+        internal async Task<IReadOnlyList<LabelPrintAttempt>> SubmitAsync()
         {
             EnsureActive();
             if (!_confirmed || _submitStarted) throw new InvalidOperationException("Підтвердьте підготовлений пакет наклейок і чеків перед друком.");
@@ -117,17 +117,15 @@ public sealed partial class ShippingLabelsViewModel
             try
             {
                 var result = await new LabelPrintCoordinator(_owner._history, _owner._printer).SubmitAsync(Batch, Token);
-                foreach (var row in CurrentRows()) row.ApplyLabelHistory(_history.Append(result), _owner._workspace.NormalizeOrderKey);
-                _owner.Status = "Пакет наклейок передано Windows у порядку вибраних замовлень.";
+                foreach (var row in CurrentRows()) row.ApplyLabelHistory(_history.Concat(result), _owner._workspace.NormalizeOrderKey);
+                _owner.Status = $"Наклейки передано Windows: {result.Count}, кожна окремим завданням у порядку вибраних замовлень.";
                 return result;
             }
             catch (LabelTransmissionException ex)
             {
                 foreach (var row in CurrentRows())
                 {
-                    row.ApplyLabelHistory(_history.Append(ex.Attempt), _owner._workspace.NormalizeOrderKey);
-                    row.LabelPrintStatus = ex.Attempt.State == LabelSubmissionState.NotSubmitted
-                        ? "Не передано" : "Можливий дубль: передавання почалося";
+                    row.ApplyLabelHistory(_history.Concat(ex.Attempts), _owner._workspace.NormalizeOrderKey);
                 }
                 _owner.Status = ex.Message;
                 throw;

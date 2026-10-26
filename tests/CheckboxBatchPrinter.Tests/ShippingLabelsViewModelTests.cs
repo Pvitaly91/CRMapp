@@ -16,16 +16,21 @@ internal static partial class MarketplaceViewModelTests
         ("STA multi-shipment row previews the chosen document without selecting or printing receipts", () => StaAsync(LabelChooseDocumentAsync)),
         ("STA clickable TTN previews exactly its shipment without a chooser or print job", () => StaAsync(LabelTrackingLinkAsync)),
         ("STA changed TTN blocks stale preview and restarted Unknown requires repeat warning", () => StaAsync(LabelChangedAndRestartAsync)),
-        ("STA printed label highlight survives restart, refresh and failed retry but follows current TTN", () => StaAsync(LabelPrintedHighlightAsync))
+        ("STA printed label highlight survives restart, refresh and failed retry but follows current TTN", () => StaAsync(LabelPrintedHighlightAsync)),
+        ("STA failed second label retains accepted order and leaves remaining places unprinted", () => StaAsync(LabelPartialJobFailureAsync))
     ];
     private sealed class LabelPrinter : ILabelPrinter
     {
         public int Calls; public LabelPrintBatch? Batch;
+        public int FailAtCall;
+        public List<LabelPrintBatch> Batches { get; } = [];
         public IReadOnlyList<string> Printers() => [ShippingLabelsTests.Settings.PrinterName];
         public IReadOnlyList<LabelDriverFormat> Formats(string printer) => [new("synthetic",101.5,101.5)];
         public LabelPrinterGeometry Inspect(LabelPrintSettings settings) => ShippingLabelsTests.Geometry;
         public async Task<int?> SubmitAsync(LabelPrintBatch batch, string name, Func<Task> before, Func<int, Task> created, CancellationToken ct)
-        { ct.ThrowIfCancellationRequested(); await before(); Calls++; Batch = batch; await created(42); return 42; }
+        { ct.ThrowIfCancellationRequested(); await before(); Calls++; Batch = batch; Batches.Add(batch);
+            if (Calls == FailAtCall) throw new InvalidOperationException("Synthetic power loss");
+            await created(42); return 42; }
     }
     private sealed class LabelDialogs : ILabelDialogs
     {
@@ -195,7 +200,7 @@ internal static partial class MarketplaceViewModelTests
         var (w,_) = await LabelWorkspace(); var h = new ShippingLabelsTests.History(); var p = new LabelPrinter();
         var vm = Labels(w,h,new(),p,new()); vm.SelectVisibleCommand.Execute(null);
         await vm.RunAsync(null,true);
-        Equal(1,p.Calls); True(w.AllOrderRows.All(r => r.HasPrintedLabel)); // NP and Rozetka Delivery.
+        Equal(3,p.Calls); True(w.AllOrderRows.All(r => r.HasPrintedLabel)); // NP and two-place Rozetka Delivery.
 
         var (reopened,fixture) = await LabelWorkspace();
         var restored = Labels(reopened,h,new(),p,new()); reopened.Labels = restored;
@@ -204,7 +209,7 @@ internal static partial class MarketplaceViewModelTests
         True(reopened.AllOrderRows.All(r => r.HasPrintedLabel));
 
         // A failed repeat does not erase an earlier successful submission of the same TTN.
-        var old = h.Attempts.Single();
+        var old = h.Attempts.First();
         await h.SaveAsync(old with { AttemptId = "failed-repeat", TimeUtc = old.TimeUtc.AddMinutes(1), State = LabelSubmissionState.NotSubmitted });
         await restored.RestoreHistoryAsync(); True(reopened.AllOrderRows.All(r => r.HasPrintedLabel));
         var row = reopened.AllOrderRows.First(); var changes = 0;
@@ -220,5 +225,23 @@ internal static partial class MarketplaceViewModelTests
             LabelSubmissionState.SubmissionUnknown,[new(shipment.Carrier,"synthetic",shipment.TrackingNumber,"doc",1,"hash")]));
         await restored.RestoreHistoryAsync(); True(!row.HasPrintedLabel);
         True(row.LabelPrintStatus.Contains("невідоме"));
+    }
+
+    private static async Task LabelPartialJobFailureAsync()
+    {
+        var (workspace, _) = await LabelWorkspace();
+        var history = new ShippingLabelsTests.History(); var printer = new LabelPrinter { FailAtCall = 2 };
+        var dialogs = new LabelDialogs();
+        var labels = Labels(workspace, history, new(), printer, dialogs);
+        labels.SelectVisibleCommand.Execute(null);
+        await labels.RunAsync(null, true);
+        Equal(2, printer.Calls); Equal(2, history.Attempts.Count);
+        var accepted = workspace.AllOrderRows.Single(r => r.Model.Number == printer.Batches[0].Pages.Single().Shipment.OrderNumber);
+        var failed = workspace.AllOrderRows.Single(r => r != accepted);
+        True(accepted.HasPrintedLabel && !accepted.IsSelectedForLabels);
+        True(failed.HasLabelSubmission && !failed.HasPrintedLabel && failed.IsSelectedForLabels);
+        Equal(1, dialogs.Errors.Count);
+        await labels.RestoreHistoryAsync();
+        True(accepted.HasPrintedLabel && !failed.HasPrintedLabel);
     }
 }

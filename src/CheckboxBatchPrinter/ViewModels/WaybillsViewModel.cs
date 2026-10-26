@@ -487,6 +487,7 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(5));
         _printCancellation = cancellation;
         IsPrintingBusy = true;
+        IReadOnlyList<LabelPrintAttempt> historyForPrint = [];
         try
         {
             PrintStatus = "Готую та перевіряю накладні…";
@@ -499,6 +500,7 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
             CheckCurrent();
             var batch = prepared.Batch;
             var history = await _history!.LoadAsync(cancellation.Token);
+            historyForPrint = history;
             CheckCurrent();
             foreach (var row in rows) row.ApplyHistory(history);
             var cabinetPrinted = Rows.Where(row => row.HasCabinetPrintedLabel &&
@@ -529,14 +531,14 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
                 PrintStatus = "Передаю пакет Windows…";
                 ((RelayCommand)CancelPrintCommand).RaiseCanExecuteChanged();
             });
-            var attempt = await new LabelPrintCoordinator(_history, backend).SubmitAsync(batch, cancellation.Token);
-            ApplyAttempt(attempt);
-            if (attempt.State == LabelSubmissionState.Submitted)
+            var attempts = await new LabelPrintCoordinator(_history, backend).SubmitAsync(batch, cancellation.Token);
+            ApplyAttempts(attempts);
+            if (attempts.All(attempt => attempt.State == LabelSubmissionState.Submitted))
             {
                 foreach (var row in Rows.Where(r => requests.Any(request => SameIdentity(r.Model, request.Waybill)) &&
                     batch.Pages.Any(p => Matches(r.Model, p)) &&
                     !batch.SkippedShipments.Any(s => Matches(r.Model, s.Shipment)))) row.IsSelected = false;
-                PrintStatus = "Пакет передано Windows. Це не підтвердження фізичного виходу накладних.";
+                PrintStatus = $"Наклейки передано Windows: {attempts.Count}, кожна окремим завданням. Це не підтвердження фізичного виходу накладних.";
             }
             else PrintStatus = "Передавання не підтверджено. Перевірте принтер перед повтором, щоб уникнути дубля.";
             PrintCompleted?.Invoke(this, EventArgs.Empty);
@@ -545,7 +547,7 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
         { PrintStatus = _transmitting ? "Передавання почалося; перевірте принтер та історію перед повтором." : "Підготовку скасовано. Нового друку не запущено."; }
         catch (LabelTransmissionException exception)
         {
-            ApplyAttempt(exception.Attempt);
+            ApplyAttempts(exception.Attempts);
             PrintStatus = exception.Message;
             _dialogs!.Error(exception.Message);
             PrintCompleted?.Invoke(this, EventArgs.Empty);
@@ -573,9 +575,14 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
                 !Rows.Any(row => SameIdentity(row.Model, request.Waybill))))
                 throw new InvalidOperationException("Накладні оновлено або підключення змінено. Підготуйте й підтвердьте актуальний пакет заново.");
         }
-        void ApplyAttempt(LabelPrintAttempt attempt)
+        void ApplyAttempts(IReadOnlyList<LabelPrintAttempt> attempts)
         {
-            foreach (var row in Rows.Where(row => requests.Any(request => SameIdentity(row.Model, request.Waybill)))) row.ApplyAttempt(attempt);
+            foreach (var row in Rows.Where(row => requests.Any(request => SameIdentity(row.Model, request.Waybill))))
+            {
+                row.ApplyHistory(historyForPrint.Concat(attempts));
+                if (row.HasPrintedLabel) row.IsSelected = false;
+                else if (!attempts.Any(attempt => attempt.Pages.Any(row.MatchesHistoryPage))) row.MarkFailed();
+            }
         }
     }
     private static bool Matches(WaybillRecord document, ShippingLabelPage page) =>
@@ -586,6 +593,7 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
 
     private sealed class GuardedBackend(ILabelBatchBackend inner, Action checkCurrent, Action startTransfer) : ILabelBatchBackend
     {
+        public void ValidateBatch(LabelPrintBatch batch) { checkCurrent(); inner.ValidateBatch(batch); }
         public Task<int?> SubmitAsync(LabelPrintBatch batch, string jobName, Func<Task> beforeTransfer,
             Func<int, Task> jobCreated, CancellationToken cancellationToken = default)
         {
@@ -717,8 +725,7 @@ public sealed class WaybillRowViewModel(WaybillRecord model) : ObservableObject
         // A failed repeat cannot erase an earlier crossing of the Windows boundary.
         var submitted = latest?.State == LabelSubmissionState.NotSubmitted
             ? attempts.LastOrDefault(a => a.State != LabelSubmissionState.NotSubmitted) : latest;
-        _localHasPrintedLabel = attempts.Any(a => a.State == LabelSubmissionState.Submitted &&
-            a.Pages.Where(MatchesHistoryPage).Select(p => p.PageNumber).Distinct().Count() >= Math.Max(1, Model.Places ?? 1));
+        _localHasPrintedLabel = LabelPrintHistory.HasCompleteDocument(attempts, MatchesHistoryPage, Model.Places ?? 1);
         PrintStatus = submitted?.State ?? LabelSubmissionState.NotSubmitted;
         _failed = latest?.State == LabelSubmissionState.NotSubmitted && PrintStatus == LabelSubmissionState.NotSubmitted;
         _localPrintStatusText = PrintStatus switch
@@ -726,23 +733,6 @@ public sealed class WaybillRowViewModel(WaybillRecord model) : ObservableObject
             LabelSubmissionState.Submitted => _localHasPrintedLabel ? $"Передано Windows, job {submitted?.WindowsJobId}" : "Частину накладної передано Windows",
             LabelSubmissionState.SubmissionUnknown => "Передавання невідоме; можливий дубль",
             _ => _failed ? "Не передано; можна повторити" : "Не передано"
-        };
-        ApplyPrintEvidence();
-    }
-    internal void ApplyAttempt(LabelPrintAttempt attempt)
-    {
-        if (!attempt.Pages.Any(MatchesHistoryPage)) return;
-        if (attempt.State == LabelSubmissionState.Submitted &&
-            attempt.Pages.Where(MatchesHistoryPage).Select(p => p.PageNumber).Distinct().Count() >= Math.Max(1, Model.Places ?? 1)) _localHasPrintedLabel = true;
-        if (attempt.State == LabelSubmissionState.NotSubmitted && PrintStatus != LabelSubmissionState.NotSubmitted)
-        { _failed = false; ApplyPrintEvidence(); return; }
-        PrintStatus = attempt.State;
-        _failed = attempt.State == LabelSubmissionState.NotSubmitted && PrintStatus == LabelSubmissionState.NotSubmitted && !_localHasPrintedLabel;
-        _localPrintStatusText = PrintStatus switch
-        {
-            LabelSubmissionState.Submitted => _localHasPrintedLabel ? $"Передано Windows, job {attempt.WindowsJobId}" : "Частину накладної передано Windows",
-            LabelSubmissionState.SubmissionUnknown => "Передавання невідоме; можливий дубль",
-            _ => "Не передано; можна повторити"
         };
         ApplyPrintEvidence();
     }

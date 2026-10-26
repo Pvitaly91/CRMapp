@@ -70,10 +70,10 @@ internal static class WaybillPrintingViewModelTests
         fixture.Model.PrintCompleted += (_, _) => completed++;
         await fixture.Model.RunAsync(null, true);
         Check(fixture.Preparation.Requests.Select(r => r.Waybill.TrackingNumber).SequenceEqual(new[] { "NP-A", "NP-B" }), "Live filter or marks changed the frozen sorted batch.");
-        Check(fixture.Printer.Batch!.Pages.Count == 4 && fixture.Printer.Batch.Pages.All(p => p.Shipment.Order is null), "Unlinked document or additional place was lost.");
+        Check(fixture.Printer.Batches.Count == 4 && fixture.Printer.Batches.All(b => b.Pages.Count == 1 && b.Settings.Copies == 1 && b.Pages.Single().Shipment.Order is null), "Unlinked document or additional place was lost.");
         Check(fixture.Model.Rows.Single(r => r.TrackingNumber == "RD-HIDDEN").IsSelected &&
             fixture.Model.Rows.Where(r => r.Carrier == ShippingCarrier.NovaPoshta).All(r => !r.IsSelected && r.HasPrintedLabel), "Submitted visible documents were not cleared or hidden document was cleared.");
-        Check(completed == 1 && fixture.History.Attempts.Single().Pages.Count == 4 && fixture.Preparation.ValidationCalls == 1,
+        Check(completed == 1 && fixture.History.Attempts.Count == 4 && fixture.History.Attempts.All(a => a.Pages.Count == 1) && fixture.Preparation.ValidationCalls == 1,
             "Submission was not journaled/validated exactly once.");
     }
 
@@ -235,7 +235,7 @@ internal static class WaybillPrintingViewModelTests
         fixture.Printer.Failure = "";
         fixture.Dialogs.Confirm = true;
         await fixture.Model.RunAsync(null, true);
-        Check(fixture.Printer.Calls == 3 && row.HasPrintedLabel && !row.IsSelected, "Confirmed explicit repeat could not submit the independent document.");
+        Check(fixture.Printer.Calls == 4 && row.HasPrintedLabel && !row.IsSelected, "Confirmed explicit repeat could not submit the independent document.");
     }
 
     private static async Task HistoryAliases()
@@ -325,7 +325,7 @@ internal static class WaybillPrintingViewModelTests
     private static async Task RefreshDuringTransfer()
     {
         using var fixture = new Fixture();
-        var document = Document("NP-ONE");
+        var document = Document("NP-ONE", places: 1);
         await fixture.Load(document);
         fixture.Model.SelectVisibleCommand.Execute(null);
         var oldRow = fixture.Model.Rows.Single();
@@ -398,6 +398,7 @@ internal static class WaybillPrintingViewModelTests
     private sealed class Printer : ILabelPrinter
     {
         public int Calls { get; private set; }
+        public List<LabelPrintBatch> Batches { get; } = [];
         public LabelPrintBatch? Batch { get; private set; }
         public string Failure { get; set; } = "";
         public Action? AfterBoundary { get; set; }
@@ -409,7 +410,7 @@ internal static class WaybillPrintingViewModelTests
         public async Task<int?> SubmitAsync(LabelPrintBatch batch, string jobName, Func<Task> beforeTransfer,
             Func<int, Task> jobCreated, CancellationToken cancellationToken = default)
         {
-            Calls++; Batch = batch;
+            Calls++; Batch = batch; Batches.Add(batch);
             if (Failure == "safe") throw new InvalidOperationException("Synthetic failure before transfer");
             await beforeTransfer();
             AfterBoundary?.Invoke();

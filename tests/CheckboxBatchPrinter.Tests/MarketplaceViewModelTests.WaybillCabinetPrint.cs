@@ -28,7 +28,7 @@ internal static partial class MarketplaceViewModelTests
         Equal(LabelSubmissionState.NotSubmitted, cabinet.PrintStatus);
         Equal("НП: позначено надрукованою", cabinet.PrintStatusText);
         cabinet.ApplyHistory([]);
-        cabinet.ApplyAttempt(CabinetLocalAttempt(document, LabelSubmissionState.NotSubmitted));
+        cabinet.ApplyHistory([CabinetLocalAttempt(document, LabelSubmissionState.NotSubmitted)]);
         cabinet.MarkFailed();
         True(cabinet.HasPrintedLabel && !cabinet.CanRetry && cabinet.PrintStatus == LabelSubmissionState.NotSubmitted,
             "Positive cabinet evidence must not become a fabricated local Windows submission or a safe retry.");
@@ -111,10 +111,10 @@ internal static partial class MarketplaceViewModelTests
         fixture.Model.View.SortDescriptions.Add(new(nameof(WaybillRowViewModel.TrackingNumber), ListSortDirection.Descending));
         fixture.Dialogs.Confirm = true;
         await fixture.Model.RunAsync(null, true);
-        Equal(1, fixture.Printer.Calls); Equal(1, fixture.History.Attempts.Count);
-        Equal(LabelSubmissionState.Submitted, fixture.History.Attempts.Single().State);
+        Equal(3, fixture.Printer.Calls); Equal(3, fixture.History.Attempts.Count);
+        True(fixture.History.Attempts.All(a => a.State == LabelSubmissionState.Submitted && a.Pages.Count == 1));
         Equal(1, fixture.Dialogs.Batch!.CabinetPrintedLabels.Count);
-        True(fixture.Printer.Batch!.Pages.Select(p => p.Shipment.TrackingNumber).SequenceEqual([
+        True(fixture.Printer.Batches.SelectMany(b => b.Pages).Select(p => p.Shipment.TrackingNumber).SequenceEqual([
             ordinary.TrackingNumber, external.TrackingNumber, external.TrackingNumber]), "Cabinet warning reordered the selected pages.");
         True(fixture.Model.Rows.Where(r => r.TrackingNumber != hidden.TrackingNumber).All(r => !r.IsSelected && r.HasPrintedLabel));
     }
@@ -133,7 +133,7 @@ internal static partial class MarketplaceViewModelTests
         True(!fixture.Model.Rows.Single(r => r.TrackingNumber == external.TrackingNumber).CanRetry);
         True(fixture.Model.Rows.Single(r => r.TrackingNumber == ordinary.TrackingNumber).CanRetry);
         await fixture.Model.RunAsync(null, true, retryFailed: true);
-        Equal(1, fixture.Printer.Calls);
+        Equal(2, fixture.Printer.Calls);
         True(fixture.Printer.Batch!.Pages.All(p => p.Shipment.TrackingNumber == ordinary.TrackingNumber),
             "Automatic retry included an externally printed document.");
         Equal(0, fixture.Dialogs.Batch!.CabinetPrintedLabels.Count);

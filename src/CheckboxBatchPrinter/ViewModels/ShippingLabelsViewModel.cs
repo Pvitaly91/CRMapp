@@ -221,6 +221,7 @@ public sealed partial class ShippingLabelsViewModel : ObservableObject, IDisposa
         _cancel = new();
         _cancel.CancelAfter(TimeSpan.FromMinutes(5));
         var printableOrders = new HashSet<OrderKey>();
+        IReadOnlyList<LabelPrintAttempt> history = [];
         try
         {
             Status = "Готую та перевіряю етикетки…";
@@ -240,7 +241,7 @@ public sealed partial class ShippingLabelsViewModel : ObservableObject, IDisposa
                 Status = $"Немає доступних наклейок для друку. Пропущено без підключення: {batch.SkippedShipments.Count} відправлень.";
                 return;
             }
-            var history = await _history.LoadAsync(_cancel.Token);
+            history = await _history.LoadAsync(_cancel.Token);
             foreach (var row in rows) row.ApplyLabelHistory(history, _workspace.NormalizeOrderKey);
             batch = AddCabinetPrintEvidence(batch, rows);
             var previous = history.Where(a => a.State != LabelSubmissionState.NotSubmitted && a.Pages.Any(old => batch.Pages.Any(p =>
@@ -261,17 +262,22 @@ public sealed partial class ShippingLabelsViewModel : ObservableObject, IDisposa
             var omittedOrders = batch.SkippedShipments.Select(s => s.Shipment.Order).ToHashSet();
             foreach (var row in rows)
             {
-                row.ApplyLabelHistory(history.Append(result), _workspace.NormalizeOrderKey);
+                row.ApplyLabelHistory(history.Concat(result), _workspace.NormalizeOrderKey);
                 if (printableOrders.Contains(row.Key) && !omittedOrders.Contains(row.Key)) row.IsSelectedForLabels = false;
             }
-            Status = "Пакет передано Windows. " + (batch.SkippedShipments.Count > 0
+            Status = $"Наклейки передано Windows: {result.Count}, кожна окремим завданням. " + (batch.SkippedShipments.Count > 0
                 ? $"Пропущено без підключення: {batch.SkippedShipments.Count} відправлень. " : "") +
                 "Це не підтвердження фізичного виходу наклейок.";
         }
         catch (OperationCanceledException) { Status = "Скасовано. Нового друку не запущено."; }
         catch (LabelTransmissionException ex)
         {
-            foreach (var row in rows.Where(r => printableOrders.Contains(r.Key))) row.LabelPrintStatus = ex.Attempt.State == LabelSubmissionState.NotSubmitted ? "Не передано" : "Можливий дубль: передавання почалося";
+            // Preserve the accepted prefix even if the next job or its journal write fails.
+            foreach (var row in rows)
+            {
+                row.ApplyLabelHistory(history.Concat(ex.Attempts), _workspace.NormalizeOrderKey);
+                if (row.HasPrintedLabel) row.IsSelectedForLabels = false;
+            }
             Status = ex.Message; _dialogs.Error(ex.Message);
         }
         catch (Exception ex) { Status = "Пакет не передано; перевірте етикетки / підключення."; _dialogs.Error(ex is ShippingLabelException or InvalidOperationException ? ex.Message : "Не вдалося підготувати етикетки. Перевірте локальні налаштування."); }

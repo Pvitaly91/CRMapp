@@ -386,7 +386,7 @@ internal static class SellerRozetkaDeliveryLabelTests
             "Seller label discarded an extra official PDF page or changed account history identity.");
         var history = new History();
         var attempt = await new LabelPrintCoordinator(history, new Backend()).SubmitAsync(batch);
-        Check(attempt.State == LabelSubmissionState.Submitted && attempt.Pages.Count == 3 && attempt.Pages.All(page => page.ConnectionId == Account && page.DocumentId == Tracking),
+        Check(attempt.Count == 3 && attempt.All(a => a.State == LabelSubmissionState.Submitted && a.Pages.Count == 1 && a.Pages.All(page => page.ConnectionId == Account && page.DocumentId == Tracking)),
             "Seller account or all-place history was lost before a synthetic transmission.");
     }
     private static async Task InvalidBatch()
@@ -411,13 +411,14 @@ internal static class SellerRozetkaDeliveryLabelTests
             Check(fixture.Reads.Count(read => read.Path.EndsWith("ttn-print-batch")) == 1, "Primary and partner aliases downloaded the same PDF twice in one frozen batch.");
             var history = new History();
             var attempt = await new LabelPrintCoordinator(history, new Backend()).SubmitAsync(batch);
-            Check(attempt.Pages.Count == 4 && attempt.Pages.All(page => page.DocumentId == Tracking && page.ConnectionId == Account && page.Order == order.Key) &&
-                attempt.Pages.Count(page => page.TrackingNumber == Tracking) == 2 && attempt.Pages.Count(page => page.TrackingNumber == Partner) == 2,
+            var pages = attempt.SelectMany(a => a.Pages).ToArray();
+            Check(attempt.Count == 2 && pages.Length == 4 && pages.All(page => page.DocumentId == Tracking && page.ConnectionId == Account && page.Order == order.Key) &&
+                pages.Count(page => page.TrackingNumber == Tracking) == 2 && pages.Count(page => page.TrackingNumber == Partner) == 2,
                 "Canonical Seller document did not preserve every verified alias in history.");
             var row = new MarketplaceOrderRowViewModel(order);
             row.ApplyLabelHistory(history.Attempts);
             Check(row.HasPrintedLabel && row.HasLabelSubmission, "Verified partner alias left the successfully printed order eligible for another label batch.");
-            row.ApplyLabelHistory([attempt with { State = LabelSubmissionState.SubmissionUnknown }]);
+            row.ApplyLabelHistory(attempt.Select(a => a with { State = LabelSubmissionState.SubmissionUnknown }));
             Check(row.HasLabelSubmission && !row.HasPrintedLabel, "Unknown transmission was marked fully printed or lost duplicate protection.");
             void RejectForeignHistory(IReadOnlyList<LabelPrintAttempt> records)
             {
@@ -429,10 +430,10 @@ internal static class SellerRozetkaDeliveryLabelTests
                     Check(!foreign.HasPrintedLabel && !foreign.HasLabelSubmission, "Another seller account or order inherited print history from matching primary and partner TTNs.");
                 }
             }
-            RejectForeignHistory([attempt]);
-            RejectForeignHistory([attempt with { State = LabelSubmissionState.SubmissionUnknown }]);
+            RejectForeignHistory(attempt);
+            RejectForeignHistory(attempt.Select(a => a with { State = LabelSubmissionState.SubmissionUnknown }).ToArray());
             var legacy = new MarketplaceOrderRowViewModel(order);
-            legacy.ApplyLabelHistory([attempt with { Pages = attempt.Pages.Select(page => page with { Order = null }).ToArray() }]);
+            legacy.ApplyLabelHistory(attempt.Select(a => a with { Pages = a.Pages.Select(page => page with { Order = null }).ToArray() }));
             Check(legacy.HasPrintedLabel && legacy.HasLabelSubmission, "Existing carrier-only history stopped restoring after Seller order identity was added.");
             const string foreignAccount = "synthetic-foreign-seller";
             fixture.Store.Credentials[OtherAccount] = fixture.Store.Credentials[Account];
@@ -455,16 +456,16 @@ internal static class SellerRozetkaDeliveryLabelTests
                 }
                 Check(records.SelectMany(record => record.Pages).All(page => page.Order == order.Key), "History normalization rewrote original stored Seller identities.");
             }
-            await CheckCanonicalHistory([attempt]);
+            await CheckCanonicalHistory(attempt);
             var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "cbp-seller-delivery-history-" + Guid.NewGuid().ToString("N"));
             System.IO.Directory.CreateDirectory(directory);
             var path = System.IO.Path.Combine(directory, "labels.dpapi");
             try
             {
-                await new DpapiLabelHistoryStore(path).SaveAsync(attempt);
+                foreach (var job in attempt) await new DpapiLabelHistoryStore(path).SaveAsync(job);
                 var restarted = new MarketplaceOrderRowViewModel(order);
                 var restored = await new DpapiLabelHistoryStore(path).LoadAsync();
-                Check(restored.Single().Pages.All(page => page.Order == order.Key), "Protected print history lost the Seller order/account identity.");
+                Check(restored.Count == 2 && restored.SelectMany(a => a.Pages).All(page => page.Order == order.Key), "Protected print history lost the Seller order/account identity.");
                 restarted.ApplyLabelHistory(restored);
                 Check(restarted.HasPrintedLabel && restarted.HasLabelSubmission, "Restart lost the printed Seller partner aliases.");
                 RejectForeignHistory(restored);

@@ -52,7 +52,7 @@ internal static partial class MarketplaceViewModelTests
             Equal(count, fixture.Base.History.Saves);
             True(fixture.Base.History.Records.Keys.SequenceEqual(expected));
             True(fixture.Main.Receipts.All(row => row.PrintStatus == PrintItemStatus.Done));
-            Equal(route == "combined" ? 1 : 0, fixture.LabelPrinter.Calls);
+            Equal(route == "combined" ? expected.Length : 0, fixture.LabelPrinter.Calls);
             Equal(0, fixture.Base.Dialogs.Errors.Count);
             True(!fixture.Main.IsBusy && !fixture.Main.IsPrinting);
             var submissions = fixture.PrintLogger.Entries.Where(entry => entry.Operation == "receipt.job.submit").ToArray();
@@ -114,7 +114,7 @@ internal static partial class MarketplaceViewModelTests
                     : fixture.Base.Dialogs.Confirmation!.PreviouslyPrintedCount);
             }
             Equal(2, fixture.ReceiptPrinter.Calls);
-            Equal(route == "combined" ? 1 : 0, fixture.LabelPrinter.Calls);
+            Equal(route == "combined" ? expected.Length : 0, fixture.LabelPrinter.Calls);
             Equal(PrintItemStatus.Done, rows[0].PrintStatus);
             True(!fixture.Main.IsBusy && !fixture.Main.IsPrinting);
         }
@@ -135,7 +135,7 @@ internal static partial class MarketplaceViewModelTests
             True(fixture.ReceiptPrinter.Documents.Select(document => document.ReceiptId).SequenceEqual(expected));
             Equal(0, fixture.Base.History.Saves);
             True(fixture.Main.Receipts.All(row => row.PrintStatus == PrintItemStatus.Done && row.PrintError.Contains("історію")));
-            Equal(route == "combined" ? 1 : 0, fixture.LabelPrinter.Calls);
+            Equal(route == "combined" ? expected.Length : 0, fixture.LabelPrinter.Calls);
             True(fixture.Main.StatusText.Contains("історію") || fixture.Base.Dialogs.Errors.Count > 0);
             // No timer or callback retries any accepted receipt after a persistence failure.
             await DrainDispatcherAsync();

@@ -56,6 +56,7 @@ public sealed record LabelPrintAttempt(string AttemptId, string JobName, string 
 public sealed record LabelAttemptPage(ShippingCarrier Carrier, string ConnectionId, string TrackingNumber,
     string DocumentId, int PageNumber, string Fingerprint)
 {
+    public int ExpectedPages { get; init; } = 1;
     // Optional for compatibility with existing carrier-only history. Seller labels bind an order/account.
     public OrderKey? Order { get; init; }
     public bool Matches(ShipmentReference shipment, Func<OrderKey, OrderKey>? normalizeOrder = null) =>

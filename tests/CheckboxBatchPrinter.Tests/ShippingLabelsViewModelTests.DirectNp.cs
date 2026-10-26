@@ -14,7 +14,7 @@ internal static partial class MarketplaceViewModelTests
 {
     public static IReadOnlyList<(string Name, Func<Task> Test)> DirectNpShippingScenarios =>
     [
-        ("STA two selected NP TTNs use one bulk GET before one packet confirmation and one job", () => StaAsync(DirectNpSelectionAsync)),
+        ("STA two selected NP TTNs use one bulk GET before one confirmation and separate label jobs", () => StaAsync(DirectNpSelectionAsync)),
         ("STA foreign page in NP bulk PDF blocks both labels with a whole-packet identity error", () => StaAsync(DirectNpInvalidSecondAsync))
     ];
 
@@ -94,13 +94,13 @@ internal static partial class MarketplaceViewModelTests
             Equal(1, dialogs.Previews);
             Equal(0, handler.JsonCalls);
             Equal(1, handler.PdfCalls);
-            Equal(confirm ? 1 : 0, printer.Calls);
-            Equal(confirm ? 1 : 0, history.Attempts.Count);
+            Equal(confirm ? 2 : 0, printer.Calls);
+            Equal(confirm ? 2 : 0, history.Attempts.Count);
             if (confirm)
             {
-                True(printer.Batch!.Pages.Select(p => p.Shipment.TrackingNumber).SequenceEqual(new[] { BatchTtnOne, BatchTtnTwo }));
-                Equal(2, printer.Batch.SelectedOrderCount);
-                Equal(2, history.Attempts.Single().Pages.Count);
+                True(printer.Batches.SelectMany(b => b.Pages).Select(p => p.Shipment.TrackingNumber).SequenceEqual(new[] { BatchTtnOne, BatchTtnTwo }));
+                Equal(2, dialogs.PreviewedBatch!.SelectedOrderCount);
+                True(history.Attempts.All(a => a.Pages.Count == 1));
                 True(rows.All(r => !r.IsSelectedForLabels));
             }
             else True(rows.All(r => r.IsSelectedForLabels));

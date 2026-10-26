@@ -33,7 +33,7 @@ internal static partial class MarketplaceViewModelTests
         True(fixture.Workspace.AllOrderRows.All(r => !r.IsSelectedForLabels && r.HasPrintedLabel));
         True(fixture.Main.Receipts.All(r => r.PrintStatus == PrintItemStatus.Done));
         Equal(3, fixture.Base.History.Saves); Equal(3, fixture.Base.History.Records.Count);
-        Equal(LabelSubmissionState.Submitted, fixture.LabelHistory.Attempts.Single().State);
+        True(fixture.LabelHistory.Attempts.Count == 3 && fixture.LabelHistory.Attempts.All(a => a.State == LabelSubmissionState.Submitted && a.Pages.Count == 1));
         Equal(0, fixture.Base.Dialogs.Errors.Count); Equal(0, fixture.Dialogs.StandalonePreviews);
         var logs = fixture.PrintLogger.Entries.Where(entry => entry.Operation.StartsWith("combined.print.", StringComparison.Ordinal)).ToArray();
         var selected = logs.Single(entry => entry.Operation == "combined.print.selected");
@@ -57,7 +57,7 @@ internal static partial class MarketplaceViewModelTests
         logFailure.MarkOrders();
         logFailure.PrintLogger.FailWrites = true;
         await logFailure.Main.PrintOrdersWithReceiptsAsync();
-        Equal(3, logFailure.ReceiptPrinter.Calls); Equal(1, logFailure.LabelPrinter.Calls);
+        Equal(3, logFailure.ReceiptPrinter.Calls); Equal(3, logFailure.LabelPrinter.Calls);
         True(logFailure.Main.Receipts.All(row => row.PrintStatus == PrintItemStatus.Done));
         True(logFailure.Workspace.AllOrderRows.All(row => !row.IsSelectedForLabels));
         Equal(3, logFailure.Base.History.Saves);
@@ -80,10 +80,10 @@ internal static partial class MarketplaceViewModelTests
         True(fixture.ReceiptPrinter.Documents.Select(r => r.ReceiptId).SequenceEqual(new[] { ReceiptThree, later, ReceiptOne, ReceiptTwo }),
             "Multiple receipts must remain with their order, sorted by fiscal date then numeric serial.");
         True(fixture.ReceiptPrinter.Documents.Select(r => r.OrderNumber).SequenceEqual(new[] { "ORDER-B", "ORDER-B", "ORDER-A", "ORDER-A" }));
-        True(fixture.LabelPrinter.Batch!.Pages.Select(p => p.Shipment.OrderNumber).SequenceEqual(new[] { "ORDER-B", "ORDER-A" }));
+        True(fixture.LabelPrinter.Batches.SelectMany(batch => batch.Pages).Select(p => p.Shipment.OrderNumber).SequenceEqual(new[] { "ORDER-B", "ORDER-A" }));
         Equal(4, fixture.Dialogs.Confirmation!.Receipts.Count);
         True(fixture.Dialogs.Confirmation.Receipts.Items.Select(i => i.Position).SequenceEqual(new[] { 1, 2, 3, 4 }));
-        Equal(4, fixture.ReceiptPrinter.Calls); Equal(1, fixture.LabelPrinter.Calls);
+        Equal(4, fixture.ReceiptPrinter.Calls); Equal(2, fixture.LabelPrinter.Calls);
     }
 
     private static async Task CombinedPrintFrozenViewAsync()
@@ -161,7 +161,7 @@ internal static partial class MarketplaceViewModelTests
         await print;
         True(!fixture.Main.IsBusy && !fixture.Main.IsPrinting && !fixture.Labels.IsBusy && !fixture.Labels.IsPrintOperationActive);
         True(!fixture.Waybills!.IsWorkspaceRefreshing && fixture.Waybills.PrintSelectedCommand.CanExecute(null));
-        Equal(3, fixture.ReceiptPrinter.Calls); Equal(1, fixture.LabelPrinter.Calls);
+        Equal(3, fixture.ReceiptPrinter.Calls); Equal(3, fixture.LabelPrinter.Calls);
         await CombinedPrintSamePrinterAsync();
         await CombinedPrintWaitForWaybillAsync();
     }
@@ -183,7 +183,7 @@ internal static partial class MarketplaceViewModelTests
             fixture.LabelPrinter.Gate.TrySetResult(true);
             await fixture.ReceiptPrinter.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             CombinedAssertBusy(fixture);
-            Equal(LabelSubmissionState.Submitted, fixture.LabelHistory.Attempts.Single().State);
+            True(fixture.LabelHistory.Attempts.Count == 3 && fixture.LabelHistory.Attempts.All(a => a.State == LabelSubmissionState.Submitted && a.Pages.Count == 1));
         }
         finally
         {
@@ -191,7 +191,7 @@ internal static partial class MarketplaceViewModelTests
             fixture.ReceiptPrinter.Gate.TrySetResult(true);
         }
         await print;
-        Equal(1, fixture.LabelPrinter.Calls); Equal(3, fixture.ReceiptPrinter.Calls);
+        Equal(3, fixture.LabelPrinter.Calls); Equal(3, fixture.ReceiptPrinter.Calls);
     }
 
     private static async Task CombinedPrintWaitForWaybillAsync()
@@ -280,19 +280,25 @@ internal static partial class MarketplaceViewModelTests
 
     private static async Task CombinedPrintLabelFailureAsync()
     {
-        using var fixture = await CombinedFixture.CreateAsync();
-        fixture.MarkOrders();
-        fixture.LabelPrinter.FailAfterBoundary = true;
+        foreach (var failOnCall in new[] { 1, 2 })
+        {
+            using var fixture = await CombinedFixture.CreateAsync();
+            fixture.MarkOrders();
+            fixture.LabelPrinter.FailAfterBoundary = true;
+            fixture.LabelPrinter.FailOnCall = failOnCall;
 
-        await fixture.Main.PrintOrdersWithReceiptsAsync();
+            await fixture.Main.PrintOrdersWithReceiptsAsync();
 
-        Equal(1, fixture.LabelPrinter.Calls); Equal(3, fixture.ReceiptPrinter.Calls);
-        Equal(LabelSubmissionState.SubmissionUnknown, fixture.LabelHistory.Attempts.Single().State);
-        Equal(3, fixture.Base.History.Saves); Equal(3, fixture.Base.History.Records.Count);
-        True(fixture.Main.Receipts.All(r => r.PrintStatus == PrintItemStatus.Done));
-        True(fixture.Workspace.AllOrderRows.All(r => r.IsSelectedForLabels && r.HasLabelSubmission && !r.HasPrintedLabel),
-            "A label transfer of unknown outcome must retain paired marks and its duplicate-risk history.");
-        True(!fixture.Main.IsBusy && !fixture.Labels.IsBusy);
+            Equal(failOnCall, fixture.LabelPrinter.Calls); Equal(3, fixture.ReceiptPrinter.Calls);
+            Equal(failOnCall - 1, fixture.LabelHistory.Attempts.Count(a => a.State == LabelSubmissionState.Submitted));
+            Equal(1, fixture.LabelHistory.Attempts.Count(a => a.State == LabelSubmissionState.SubmissionUnknown));
+            Equal(3, fixture.Base.History.Saves); Equal(3, fixture.Base.History.Records.Count);
+            True(fixture.Main.Receipts.All(r => r.PrintStatus == PrintItemStatus.Done));
+            True(fixture.Workspace.AllOrderRows.All(r => r.IsSelectedForLabels) && fixture.Workspace.AllOrderRows.Count(r => r.HasPrintedLabel) == failOnCall - 1 &&
+                fixture.Workspace.AllOrderRows.Count(r => r.HasLabelSubmission) == failOnCall,
+                "A label transfer of unknown outcome must retain paired marks and its duplicate-risk history.");
+            True(!fixture.Main.IsBusy && !fixture.Labels.IsBusy);
+        }
     }
 
     private static async Task CombinedPrintReceiptFailureAsync()
@@ -306,8 +312,8 @@ internal static partial class MarketplaceViewModelTests
 
             await fixture.Main.PrintOrdersWithReceiptsAsync();
 
-            Equal(1, fixture.LabelPrinter.Calls); Equal(historyFailure ? 3 : 1, fixture.ReceiptPrinter.Calls);
-            Equal(LabelSubmissionState.Submitted, fixture.LabelHistory.Attempts.Single().State);
+            Equal(3, fixture.LabelPrinter.Calls); Equal(historyFailure ? 3 : 1, fixture.ReceiptPrinter.Calls);
+            True(fixture.LabelHistory.Attempts.Count == 3 && fixture.LabelHistory.Attempts.All(a => a.State == LabelSubmissionState.Submitted && a.Pages.Count == 1));
             True(fixture.Workspace.AllOrderRows.All(r => r.HasPrintedLabel));
             Equal(0, fixture.Base.History.Saves);
             True(fixture.Workspace.AllOrderRows.All(r => r.IsSelectedForLabels == !historyFailure),
@@ -327,7 +333,7 @@ internal static partial class MarketplaceViewModelTests
                 fixture.Dialogs.Accept = false;
                 await fixture.Main.PrintOrdersWithReceiptsAsync();
                 Equal(1, fixture.Dialogs.Confirmation!.PreviouslyPrintedReceipts);
-                Equal(1, fixture.ReceiptPrinter.Calls); Equal(1, fixture.LabelPrinter.Calls);
+                Equal(1, fixture.ReceiptPrinter.Calls); Equal(3, fixture.LabelPrinter.Calls);
                 Equal(0, fixture.Base.History.Saves);
                 True(fixture.Workspace.AllOrderRows.All(r => r.IsSelectedForLabels));
             }
@@ -353,8 +359,8 @@ internal static partial class MarketplaceViewModelTests
 
     private static void CombinedAssertOrder(CombinedFixture fixture, string[] expectedOrders, string[] expectedReceipts)
     {
-        Equal(1, fixture.LabelPrinter.Calls); Equal(expectedReceipts.Length, fixture.ReceiptPrinter.Calls);
-        True(fixture.LabelPrinter.Batch!.Pages.Select(p => p.Shipment.OrderNumber).SequenceEqual(expectedOrders));
+        Equal(expectedOrders.Length, fixture.LabelPrinter.Calls); Equal(expectedReceipts.Length, fixture.ReceiptPrinter.Calls);
+        True(fixture.LabelPrinter.Batches.SelectMany(batch => batch.Pages).Select(p => p.Shipment.OrderNumber).SequenceEqual(expectedOrders));
         True(fixture.ReceiptPrinter.Documents.Select(p => p.OrderNumber).SequenceEqual(expectedOrders));
         True(fixture.ReceiptPrinter.Documents.Select(p => p.ReceiptId).SequenceEqual(expectedReceipts));
         True(fixture.ReceiptPrinter.Documents.Select(p => p.TrackingText).SequenceEqual(expectedOrders.Select(n => "НП: TTN-" + n[^1])));
@@ -497,8 +503,10 @@ internal static partial class MarketplaceViewModelTests
     private sealed class CombinedLabelPrinter : ILabelPrinter
     {
         public bool FailAfterBoundary;
+        public int FailOnCall = 1;
         public int Calls;
         public LabelPrintBatch? Batch;
+        public List<LabelPrintBatch> Batches { get; } = [];
         public TaskCompletionSource<bool>? Gate;
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -509,9 +517,9 @@ internal static partial class MarketplaceViewModelTests
             Func<int, Task> jobCreated, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await beforeTransfer(); Calls++; Batch = batch; Entered.TrySetResult();
+            await beforeTransfer(); Calls++; Batch = batch; Batches.Add(batch); Entered.TrySetResult();
             if (Gate is not null) await Gate.Task.WaitAsync(cancellationToken);
-            if (FailAfterBoundary) throw new InvalidOperationException("Synthetic combined label backend failure after StartDoc boundary.");
+            if (FailAfterBoundary && Calls == FailOnCall) throw new InvalidOperationException("Synthetic combined label backend failure after StartDoc boundary.");
             await jobCreated(84); Completed.TrySetResult(); return 84;
         }
     }

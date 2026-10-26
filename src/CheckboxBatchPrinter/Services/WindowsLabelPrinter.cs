@@ -66,13 +66,27 @@ public sealed class WindowsLabelPrinter : ILabelPrinter
         using var device = _deviceFactory(settings);
         return device.Geometry;
     }
+    public void ValidateBatch(LabelPrintBatch batch)
+    {
+        using var device = _deviceFactory(batch.Settings);
+        ValidateDpi(batch, device.Geometry);
+        long decodedBytes = 0;
+        foreach (var page in batch.Pages) _ = Prepare(page, batch.Settings, device.Geometry, ref decodedBytes);
+    }
+    private static void ValidateDpi(LabelPrintBatch batch, LabelPrinterGeometry geometry)
+    {
+        if (batch.RasterDpiX > 0 && (batch.RasterDpiX != geometry.DpiX || batch.RasterDpiY != geometry.DpiY))
+            throw new ShippingLabelException(LabelFailureKind.UnsupportedFormat,"DPI драйвера змінився після підготовки. Підготуйте пакет заново.");
+    }
     public async Task<int?> SubmitAsync(LabelPrintBatch batch, string jobName, Func<Task> beforeTransfer,
         Func<int, Task> jobCreated, CancellationToken cancellationToken = default)
     {
+        batch.Settings.Validate();
+        if (batch.Pages.Count != 1 || batch.Settings.Copies != 1)
+            throw new InvalidOperationException("Одне завдання Windows повинно містити рівно одну наклейку в одному примірнику.");
         // UI calls this on STA. Prepare driver and pixel buffers completely before crossing the boundary.
         using var device = _deviceFactory(batch.Settings);
-        if (batch.RasterDpiX > 0 && (batch.RasterDpiX != device.Geometry.DpiX || batch.RasterDpiY != device.Geometry.DpiY))
-            throw new ShippingLabelException(LabelFailureKind.UnsupportedFormat,"DPI драйвера змінився після підготовки. Підготуйте пакет заново.");
+        ValidateDpi(batch, device.Geometry);
         long decodedBytes = 0;
         var prepared = batch.Pages.Select(page => Prepare(page, batch.Settings, device.Geometry, ref decodedBytes)).ToArray();
         cancellationToken.ThrowIfCancellationRequested();

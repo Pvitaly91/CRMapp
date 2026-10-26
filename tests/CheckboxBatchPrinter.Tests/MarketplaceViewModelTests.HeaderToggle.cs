@@ -290,7 +290,7 @@ internal static partial class MarketplaceViewModelTests
         await labels.RunAsync(null, true);
         Equal<bool?>(false, labels.HeaderSelectionState);
         True(labels.CanToggleHeaderSelection && workspace.AllOrderRows.All(r => !r.IsSelectedForLabels));
-        Equal(1, printer.Calls); Equal(0, fixture.Printer.Calls);
+        Equal(3, printer.Calls); Equal(0, fixture.Printer.Calls);
     }
 
     private static readonly DateOnly HeaderWaybillDay = new(2026, 10, 9);
@@ -418,7 +418,7 @@ internal static partial class MarketplaceViewModelTests
             Equal(0, printer.Calls);
         };
         await waybills.RunAsync(null, true);
-        Equal(1, printer.Calls);
+        Equal(2, printer.Calls);
         True(waybills.Rows.Single(r => r.TrackingNumber == "NP-ONE").HasPrintedLabel);
         True(!waybills.Rows.Single(r => r.TrackingNumber == "NP-ONE").IsSelected);
         True(waybills.Rows.Single(r => r.TrackingNumber == "RD-TWO").IsSelected);

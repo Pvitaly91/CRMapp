@@ -27,8 +27,8 @@ public sealed class LabelPreviewWindow : Window
         header.Children.Add(new TextBlock { Text = $"{count} · ТТН: {batch.Pages.Select(p => (p.Shipment.Carrier, p.ConnectionId, p.Shipment.TrackingNumber)).Distinct().Count()} · етикеток: {batch.Pages.Count} · сторінок з копіями: {batch.Pages.Count * batch.Settings.Copies}" +
             (combined is null ? "" : $" · чеків: {combined.Receipts.Count}"), FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
         header.Children.Add(new TextBlock { Text = combined is null
-            ? "Одна етикетка — одна сторінка. Один Windows job. Фізичний вихід не гарантується статусом черги."
-            : "Наклейки й чеки друкуються в порядку вибраних замовлень. Кожен чек передається окремим завданням. Це копії існуючих чеків, без повторної фіскалізації.",
+            ? "Одна наклейка — одне завдання Windows, включно з кожною копією. Статус черги не підтверджує фізичного виходу."
+            : "Наклейки й чеки друкуються в порядку вибраних замовлень. Кожна наклейка та кожен чек передаються окремим завданням. Це копії існуючих чеків, без повторної фіскалізації.",
             TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 8) });
         if (combined is not null)
         {

@@ -440,7 +440,7 @@ internal static class NovaPoshtaDirectTests
                 batch.Pages[0].DocumentId == "ttn:" + Ttn && batch.Pages[2].DocumentId == "ttn:" + OtherTtn,
                 "Mixed adapter sequence/typed TTN identity wrong.");
             await new LabelPrintCoordinator(history,new WindowsLabelPrinter(_=>device)).SubmitAsync(batch);
-            Check(device.Begins == 1 && device.Pages == 3 && device.Ends == 1,"Not one native backend job.");
+            Check(device.Begins == 3 && device.Pages == 3 && device.Ends == 3,"Labels did not get separate native backend jobs.");
         }
         catch (ShippingLabelException) when (broken) { Check(device.Begins == 0 && history.Attempts.Count == 0,"Partial print/history created."); }
         Check(npGets == 1 && stores.Market.Connections.Count == 0,"Mixed printing rescanned NP or required Seller.");

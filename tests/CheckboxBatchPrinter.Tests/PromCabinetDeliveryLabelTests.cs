@@ -212,7 +212,7 @@ internal static class PromCabinetDeliveryLabelTests
             { ConnectionId = ConnectionId, Source = document.Source };
         var history = new MemoryHistory(); var backend = new MemoryBackend();
         var result = await new LabelPrintCoordinator(history, backend).SubmitAsync(new("synthetic-prom-batch", [page], Settings));
-        Check(result.Pages.Single().Order == Shipment().Order && result.Pages.Single().ConnectionId == ConnectionId,
+        Check(result.Single().Pages.Single().Order == Shipment().Order && result.Single().Pages.Single().ConnectionId == ConnectionId,
             "Prom cabinet print lost order/account history.");
     }
     private sealed class MemoryHistory : ILabelHistoryStore
