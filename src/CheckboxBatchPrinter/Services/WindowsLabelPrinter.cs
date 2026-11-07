@@ -31,8 +31,15 @@ internal interface ILabelPageDevice : IDisposable
 public sealed class WindowsLabelPrinter : ILabelPrinter
 {
     private readonly Func<LabelPrintSettings, ILabelPageDevice> _deviceFactory;
-    public WindowsLabelPrinter() { _deviceFactory = Open; }
-    internal WindowsLabelPrinter(Func<LabelPrintSettings, ILabelPageDevice> deviceFactory) { _deviceFactory = deviceFactory; }
+    private readonly Func<string, CancellationToken, Task>? _preparePrinter;
+    public WindowsLabelPrinter() : this(Open) { }
+    internal WindowsLabelPrinter(LabelPrinterDiscovery discovery) : this(Open, discovery.PrepareAsync) { }
+    internal WindowsLabelPrinter(Func<LabelPrintSettings, ILabelPageDevice> deviceFactory,
+        Func<string, CancellationToken, Task>? preparePrinter = null)
+    {
+        _deviceFactory = deviceFactory;
+        _preparePrinter = preparePrinter;
+    }
     public IReadOnlyList<string> Printers() => new WindowsPrintService().GetInstalledPrinters();
     public IReadOnlyList<LabelDriverFormat> Formats(string printer)
     {
@@ -73,6 +80,8 @@ public sealed class WindowsLabelPrinter : ILabelPrinter
         long decodedBytes = 0;
         foreach (var page in batch.Pages) _ = Prepare(page, batch.Settings, device.Geometry, ref decodedBytes);
     }
+    public Task PreparePrinterAsync(LabelPrintBatch batch, CancellationToken cancellationToken) =>
+        _preparePrinter?.Invoke(batch.Settings.PrinterName, cancellationToken) ?? Task.CompletedTask;
     private static void ValidateDpi(LabelPrintBatch batch, LabelPrinterGeometry geometry)
     {
         if (batch.RasterDpiX > 0 && (batch.RasterDpiX != geometry.DpiX || batch.RasterDpiY != geometry.DpiY))

@@ -91,7 +91,8 @@ public partial class App : Application
             var shippingSettings = new DpapiShippingSettingsStore(Path.Combine(shippingData, "settings.dpapi"));
             var labelHistory = new DpapiLabelHistoryStore(Path.Combine(shippingData, "attempts.dpapi"));
             _shippingHttpClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(60) };
-            var labelPrinter = new WindowsLabelPrinter();
+            var labelPrinter = new WindowsLabelPrinter(new LabelPrinterDiscovery(
+                Path.Combine(shippingData, LabelPrinterDiscovery.BindingFileName)));
             var shippingTransport = new ShippingLabelHttp(_shippingHttpClient);
             var npClient = new NovaPoshtaReadOnlyClient(shippingTransport);
             var pdfInspector = new WindowsLabelPdfInspector();

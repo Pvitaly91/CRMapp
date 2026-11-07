@@ -22,6 +22,8 @@ public interface ILabelBatchBackend
 {
     // Validate the complete packet before its first job; this must never transmit to Windows.
     void ValidateBatch(LabelPrintBatch batch) { }
+    // Resolve the destination once per confirmed packet, before registering any new job.
+    Task PreparePrinterAsync(LabelPrintBatch batch, CancellationToken cancellationToken) => Task.CompletedTask;
     // beforeTransfer must be persisted immediately before the first Windows transmission operation.
     Task<int?> SubmitAsync(LabelPrintBatch batch, string jobName, Func<Task> beforeTransfer,
         Func<int, Task> jobCreated, CancellationToken cancellationToken = default);
@@ -49,7 +51,12 @@ public sealed class LabelPrintCoordinator(ILabelHistoryStore history, ILabelBatc
                 {
                     await history.SaveAsync(attempt, cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (completed.Count == 0) backend.ValidateBatch(batch);
+                    if (completed.Count == 0)
+                    {
+                        backend.ValidateBatch(batch);
+                        await backend.PreparePrinterAsync(batch, cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
                     var jobId = await backend.SubmitAsync(single, attempt.JobName, async () =>
                     {
                         cancellationToken.ThrowIfCancellationRequested();
@@ -99,7 +106,8 @@ public sealed class LabelTransmissionException(LabelPrintAttempt attempt, Except
         (attempt.State == LabelSubmissionState.NotSubmitted ? "Наступну наклейку не передано."
             : attempt.State == LabelSubmissionState.Submitted ? "Поточну наклейку передано Windows; не вдалося записати остаточний стан історії."
             : "Передавання поточної наклейки почалося; перевірте її перед повтором, щоб уникнути дубля.") +
-        " Решту пакета зупинено; автоматичний повтор не виконувався.", inner)
+        " Решту пакета зупинено; автоматичний повтор не виконувався." +
+        (attempt.State == LabelSubmissionState.NotSubmitted && inner is ShippingLabelException ? " " + inner.Message : ""), inner)
 {
     public LabelPrintAttempt Attempt { get; } = attempt;
     public IReadOnlyList<LabelPrintAttempt> Attempts { get; } = Array.AsReadOnly((completed ?? []).Append(attempt).ToArray());

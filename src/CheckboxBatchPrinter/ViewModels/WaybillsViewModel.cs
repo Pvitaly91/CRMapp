@@ -594,6 +594,12 @@ public sealed class WaybillsViewModel : ObservableObject, IDisposable
     private sealed class GuardedBackend(ILabelBatchBackend inner, Action checkCurrent, Action startTransfer) : ILabelBatchBackend
     {
         public void ValidateBatch(LabelPrintBatch batch) { checkCurrent(); inner.ValidateBatch(batch); }
+        public async Task PreparePrinterAsync(LabelPrintBatch batch, CancellationToken cancellationToken)
+        {
+            checkCurrent();
+            await inner.PreparePrinterAsync(batch, cancellationToken);
+            checkCurrent();
+        }
         public Task<int?> SubmitAsync(LabelPrintBatch batch, string jobName, Func<Task> beforeTransfer,
             Func<int, Task> jobCreated, CancellationToken cancellationToken = default)
         {

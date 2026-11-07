@@ -16,6 +16,8 @@ internal static class LabelJobIsolationTests
         ("STA label journal failures stop transmission without replaying accepted jobs", () => Sta(JournalFailure)),
         ("STA cancellation between label jobs preserves prefix and never starts the next job", () => Sta(CancelBetweenJobs)),
         ("STA invalid final label raster blocks the entire packet before any Windows job", () => Sta(Preflight)),
+        ("STA unavailable network printer blocks the label packet before the first Windows job", () => Sta(DiscoveryFailure)),
+        ("STA network printer discovery runs once before each packet of independent jobs", () => Sta(DiscoveryOncePerBatch)),
         ("STA native label backend rejects multiple labels or driver copies in one job", () => Sta(BackendGuard)),
         ("label history combines separate places but never duplicate copies or different PDF versions", HistoryCoverage)
     ];
@@ -197,6 +199,57 @@ internal static class LabelJobIsolationTests
             catch (InvalidOperationException) { }
         }
         Check(native.Devices.Count == 0, "Invalid native job opened a printer.");
+    }
+    private static async Task DiscoveryFailure()
+    {
+        var batch = await ShippingLabelsTests.Batch();
+        var native = new Native();
+        var history = new History();
+        var failure = new ShippingLabelException(LabelFailureKind.ConnectionRequired, "Synthetic printer unavailable.");
+        var searches = 0;
+        var printer = new WindowsLabelPrinter(native.Open, (queue, _) =>
+        {
+            Check(queue == batch.Settings.PrinterName, "Discovery received a different printer queue.");
+            searches++;
+            return Task.FromException(failure);
+        });
+
+        try
+        {
+            await new LabelPrintCoordinator(history, printer).SubmitAsync(batch);
+            throw new Exception("The packet was accepted while its printer was unavailable.");
+        }
+        catch (LabelTransmissionException ex)
+        {
+            Check(ReferenceEquals(ex.InnerException, failure) && ex.Message.Contains(failure.Message) &&
+                ex.Attempt.State == LabelSubmissionState.NotSubmitted && ex.Attempt.WindowsJobId is null,
+                "Discovery failure lost its reason or crossed the transfer boundary.");
+        }
+
+        Check(searches == 1 && native.Jobs == 0 && history.Attempts.Count == 1 &&
+            history.Attempts[0].State == LabelSubmissionState.NotSubmitted,
+            "Discovery failure started a job or recorded uncertain transfer.");
+    }
+    private static async Task DiscoveryOncePerBatch()
+    {
+        var batch = await ShippingLabelsTests.Batch();
+        var native = new Native();
+        var jobsBeforeDiscovery = new List<int>();
+        var printer = new WindowsLabelPrinter(native.Open, (queue, _) =>
+        {
+            Check(queue == batch.Settings.PrinterName, "Discovery received a different printer queue.");
+            jobsBeforeDiscovery.Add(native.Jobs);
+            return Task.CompletedTask;
+        });
+        var coordinator = new LabelPrintCoordinator(new History(), printer);
+
+        var first = await coordinator.SubmitAsync(batch);
+        var second = await coordinator.SubmitAsync(batch);
+
+        Check(jobsBeforeDiscovery.SequenceEqual([0, batch.Pages.Count]),
+            "Discovery ran for individual labels, after transfer started, or skipped a later packet.");
+        Check(first.Count == batch.Pages.Count && second.Count == batch.Pages.Count &&
+            native.Jobs == 2 * batch.Pages.Count, "Discovery changed the independent Windows jobs.");
     }
     private static Task HistoryCoverage()
     {
