@@ -413,13 +413,15 @@ internal static class BackgroundSyncTests
         Directory.CreateDirectory(root);
         try
         {
-            var store = new DpapiReceiptSnapshotStore(Path.Combine(root, "receipts.dpapi"));
+            var path = Path.Combine(root, "receipts.dpapi");
+            var clock = new ManualClock();
+            var store = new DpapiReceiptSnapshotStore(path, clock);
             var day = new DateOnly(2026, 9, 28);
             ReceiptRecord[] rows = [new() { Id = "synthetic-receipt", Status = "DONE", Type = "SELL",
                 FiscalDate = new DateTimeOffset(2026, 9, 28, 12, 0, 0, TimeSpan.FromHours(3)), TotalSumMinor = 10000 }];
-            await store.SaveAsync(new("account-a", day, day, DateTimeOffset.UtcNow, true, rows,
+            await store.SaveAsync(new("account-a", day, day, clock.GetUtcNow(), true, rows,
                 DpapiReceiptSnapshotStore.FingerprintsFor(rows)));
-            var restored = await new DpapiReceiptSnapshotStore(Path.Combine(root, "receipts.dpapi")).LoadAsync("account-a");
+            var restored = await new DpapiReceiptSnapshotStore(path, clock).LoadAsync("account-a");
             if (restored?.Receipts.Single().Id != rows[0].Id || restored.Fingerprints.Count != 1 ||
                 await store.LoadAsync("account-b") is not null) throw new Exception("DPAPI receipt cache crossed account scope.");
         }

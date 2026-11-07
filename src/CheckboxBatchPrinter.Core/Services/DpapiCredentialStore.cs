@@ -8,6 +8,7 @@ public sealed class DpapiCredentialStore(string credentialPath) : ISecureCredent
 {
     private const int CryptProtectUiForbidden = 0x1;
     private const int CryptProtectAudit = 0x10;
+    private static readonly object PublishGate = new();
 
     public bool HasPassword => File.Exists(credentialPath) && new FileInfo(credentialPath).Length > 0;
 
@@ -25,8 +26,13 @@ public sealed class DpapiCredentialStore(string credentialPath) : ISecureCredent
                 await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
                 stream.Flush(flushToDisk: true);
             }
-            cancellationToken.ThrowIfCancellationRequested();
-            File.Move(temporaryPath, credentialPath, true);
+            // Windows can reject simultaneous replacements of the same destination.
+            // Keep encryption and disk flushing outside this short publication lock.
+            lock (PublishGate)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                File.Move(temporaryPath, credentialPath, true);
+            }
         }
         finally
         {
