@@ -264,6 +264,7 @@ public sealed class NovaPoshtaVerifiedSession
 public sealed class NovaPoshtaDirectLabelSource(IShippingSettingsStore settings, NovaPoshtaReadOnlyClient client,
     ILabelPdfInspector inspector) : IShippingLabelBatchSource
 {
+    private readonly NovaPoshtaBulkLabels _labels = new(client, inspector);
     private IReadOnlyList<ShipmentReference> _selectedShipments = [];
     private Dictionary<(string Account, string Key, string Numbers), IReadOnlyDictionary<string, ShippingLabelDocument>>? _batchDocuments;
     public IShippingLabelSource CreateBatchSource(IReadOnlyList<ShipmentReference>? shipments = null) =>
@@ -289,8 +290,7 @@ public sealed class NovaPoshtaDirectLabelSource(IShippingSettingsStore settings,
         {
             try
             {
-                var pdf = await client.ReadMarkingsAsync(connection, group, cancellationToken);
-                documents = NovaPoshtaBulkLabels.Map(connection.Id, group, pdf, await inspector.InspectAsync(pdf, cancellationToken));
+                documents = await _labels.ReadAsync(connection, group, cancellationToken);
             }
             catch (ShippingLabelException ex) when (group.Select(s => s.TrackingNumber).Distinct(StringComparer.Ordinal).Skip(1).Any())
             {

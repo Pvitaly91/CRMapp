@@ -56,6 +56,7 @@ public sealed class WaybillLabelPreparation(IShippingSettingsStore settingsStore
             .Any(group => group.Select(r => r.Waybill.DocumentId).Distinct(StringComparer.Ordinal).Skip(1).Any()))
             throw Invalid("Один номер накладної має різні ідентифікатори в цьому акаунті. Оновіть список.");
         var fetched = new Dictionary<(ShippingCarrier, string, string), ShippingLabelDocument>();
+        var npLabels = new NovaPoshtaBulkLabels(novaPoshta, inspector);
         foreach (var group in selected.GroupBy(r => (r.Waybill.Carrier, r.Waybill.ConnectionId)))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -63,9 +64,7 @@ public sealed class WaybillLabelPreparation(IShippingSettingsStore settingsStore
             {
                 var connection = config.NovaPoshtaConnections.Single(c => c.Id == group.Key.ConnectionId);
                 var shipments = group.Select(Shipment).ToArray();
-                var pdf = await novaPoshta.ReadMarkingsAsync(connection, shipments, cancellationToken).ConfigureAwait(false);
-                var inspection = await inspector.InspectAsync(pdf, cancellationToken).ConfigureAwait(false);
-                var mapped = NovaPoshtaBulkLabels.Map(connection.Id, shipments, pdf, inspection);
+                var mapped = await npLabels.ReadAsync(connection, shipments, cancellationToken).ConfigureAwait(false);
                 foreach (var request in group)
                 {
                     var shipment = Shipment(request);

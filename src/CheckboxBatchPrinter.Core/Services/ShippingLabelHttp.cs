@@ -89,7 +89,7 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
                     throw novaPoshtaRequest.Limit(RetryDelay(response, _novaPoshtaPolicy.UtcNow));
                 if ((int)response.StatusCode >= 500 || (int)response.StatusCode == 429)
                 {
-                    // A direct NP operation is one request; a failed bulk marking must not fan out or retry.
+                    // A carrier HTTP failure must not retry or start individual NP requests.
                     if (novaPoshtaRequest is not null || attempt >= 2) throw new ShippingLabelException(LabelFailureKind.Temporary, "API доставки тимчасово недоступне.");
                     var wait = response.Headers.RetryAfter?.Delta ??
                         (response.Headers.RetryAfter?.Date is { } retryAt ? retryAt - DateTimeOffset.UtcNow : TimeSpan.FromSeconds(attempt + 1));
@@ -105,6 +105,18 @@ public sealed class ShippingLabelHttp(HttpClient client, Func<TimeSpan, Cancella
                 var sellerBinaryPdf = expectedType == "application/pdf" && actualType == "application/octet-stream" &&
                     request.Method == HttpMethod.Post && request.RequestUri!.Host == "api-seller.rozetka.com.ua" &&
                     request.RequestUri.AbsolutePath == RozetkaSellerDeliveryReadOnlyContract.PrintPath && request.RequestUri.Query.Length == 0;
+                if (expectedType == "application/pdf" && response.StatusCode == HttpStatusCode.OK &&
+                    actualType == "text/html" && response.Content.Headers.ContentLength is null or 0 &&
+                    !response.Headers.Contains("Retry-After") && request.RequestUri!.Host == "my.novaposhta.ua" &&
+                    request.RequestUri.AbsolutePath.StartsWith("/orders/printMarking100x100/orders/", StringComparison.Ordinal))
+                {
+                    // This exact bulk response has no document. Check EOF even for a chunked response.
+                    await using var body = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+                    if (await body.ReadAsync(new byte[1], timeout.Token).ConfigureAwait(false) == 0)
+                        throw new ShippingLabelException(LabelFailureKind.InvalidDocument,
+                            "Нова пошта повернула порожню відповідь для пакета наклейок.")
+                        { EmptyNovaPoshtaBulkResponse = true };
+                }
                 if (actualType != expectedType && !sellerBinaryPdf && !(novaPoshtaRequest is not null && actualType == "application/json"))
                     throw new ShippingLabelException(LabelFailureKind.InvalidDocument, "API повернуло не очікуваний PDF/JSON. Документ не друкуватиметься.");
                 if (response.Content.Headers.ContentLength > MaximumBytes) throw TooLarge();

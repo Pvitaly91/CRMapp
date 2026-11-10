@@ -9,6 +9,7 @@ public sealed class ShippingLabelException(LabelFailureKind kind, string message
     public DateTimeOffset? RetryAtUtc { get; init; }
     public bool AppliesToBatch { get; init; }
     public bool MissingCredentials { get; init; }
+    internal bool EmptyNovaPoshtaBulkResponse { get; init; }
 }
 
 // None of these identities is an order/receipt ID inferred by basket matching.

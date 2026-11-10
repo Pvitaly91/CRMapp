@@ -19,6 +19,7 @@ internal static class WaybillLabelPreparationTests
         ("independent waybill print keeps mixed carrier documents, all places and actual order captions", Mixed),
         ("independent NP waybill print uses exact accounts and does not deduplicate pages across accounts", Accounts),
         ("independent waybill print deduplicates one document and preserves original bulk PDF page mapping", Deduplication),
+        ("independent NP waybill print recovers an empty bulk response and verifies all individual pages", EmptyBulkFallback),
         ("independent waybill source proof rejects old, switched, removed or unconfigured accounts before HTTP", StaleSelection),
         ("independent waybill print rechecks credential rotation immediately before transfer", Revalidation),
         ("independent waybill print rejects selected and freshly deleted RD documents without label download", Deleted),
@@ -145,6 +146,35 @@ internal static class WaybillLabelPreparationTests
         await Failure(Service(new(Config), client, inspector, renderer).PrepareAsync(
             [Request(Np()), Request(Np() with { DocumentId = "10000000-0000-0000-0000-000000000001" })], Settings, Geometry), LabelFailureKind.InvalidDocument);
         Check(handler.Calls == 1, "Conflicting carrier document references reached HTTP.");
+    }
+    private static async Task EmptyBulkFallback()
+    {
+        var inspector = new Inspector();
+        var renderer = new Renderer();
+        var first = inspector.Pdf(First, First);
+        var second = inspector.Pdf(Second);
+        var requests = new List<string>();
+        var handler = new Handler((request, _) =>
+        {
+            var parts = Uri.UnescapeDataString(request.RequestUri!.AbsolutePath).Split('/', StringSplitOptions.RemoveEmptyEntries);
+            Check(request.Method == HttpMethod.Get && parts[^1] == Key, "Waybill fallback used another key or operation.");
+            requests.Add(parts[3]);
+            return Task.FromResult(parts[3] switch
+            {
+                First + "," + Second => new HttpResponseMessage(HttpStatusCode.OK)
+                { Content = new StringContent("", Encoding.UTF8, "text/html") },
+                First when parts[2] == "orders[]" => Pdf(first),
+                Second when parts[2] == "orders[]" => Pdf(second),
+                _ => throw new Exception("Unexpected independent waybill fallback request.")
+            });
+        });
+        using var client = new HttpClient(handler);
+        var prepared = await Service(new(Config), client, inspector, renderer).PrepareAsync(
+            [Request(Np(places: 2), "P-001"), Request(Np(Second))], Settings, Geometry);
+        Check(requests.SequenceEqual([First + "," + Second, First, Second]) &&
+            prepared.Batch.Pages.Select(page => page.Shipment.TrackingNumber).SequenceEqual([First, First, Second]) &&
+            prepared.Batch.Pages.Select(page => page.PageNumber).SequenceEqual([1, 2, 1]),
+            "The independent fallback lost its selection or a place.");
     }
     private static async Task StaleSelection()
     {

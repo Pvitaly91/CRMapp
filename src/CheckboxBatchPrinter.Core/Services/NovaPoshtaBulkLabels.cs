@@ -5,8 +5,52 @@ namespace CheckboxBatchPrinter.Core.Services;
 
 // One carrier response can contain several TTNs and several places for one TTN.
 // Associate pages by their printed number, never by the server's page order.
-internal static class NovaPoshtaBulkLabels
+internal sealed class NovaPoshtaBulkLabels(NovaPoshtaReadOnlyClient client, ILabelPdfInspector inspector)
 {
+    // Shared by all NP accounts in one preparation. Use the usual bulk request unless the carrier returned no body.
+    private const int MaximumSingleRequests = 10;
+    private int _remainingSingleRequests = MaximumSingleRequests;
+    private long _remainingSinglePdfBytes = ShippingLabelHttp.MaximumBytes;
+
+    public async Task<IReadOnlyDictionary<string, ShippingLabelDocument>> ReadAsync(NovaPoshtaConnection connection,
+        IReadOnlyList<ShipmentReference> shipments, CancellationToken cancellationToken)
+    {
+        byte[] pdf;
+        try { pdf = await client.ReadMarkingsAsync(connection, shipments, cancellationToken).ConfigureAwait(false); }
+        catch (ShippingLabelException exception) when (exception.EmptyNovaPoshtaBulkResponse)
+        {
+            var byTrackingNumber = shipments.GroupBy(shipment => shipment.TrackingNumber, StringComparer.Ordinal).ToArray();
+            if (byTrackingNumber.Length > _remainingSingleRequests)
+                throw Invalid($"Нова пошта повернула порожню відповідь для пакета наклейок. Виберіть до {MaximumSingleRequests} ТТН Нової пошти за раз.");
+
+            _remainingSingleRequests -= byTrackingNumber.Length;
+            var documents = new Dictionary<string, ShippingLabelDocument>(StringComparer.Ordinal);
+            foreach (var group in byTrackingNumber)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    var selected = group.ToArray();
+                    var singlePdf = await client.ReadMarkingsAsync(connection, selected, cancellationToken).ConfigureAwait(false);
+                    _remainingSinglePdfBytes -= singlePdf.LongLength;
+                    if (_remainingSinglePdfBytes < 0)
+                        throw Invalid("PDF етикеток перевищують 20 МіБ. Виберіть менший пакет.");
+                    var inspection = await inspector.InspectAsync(singlePdf, cancellationToken).ConfigureAwait(false);
+                    documents.Add(group.Key, Map(connection.Id, selected, singlePdf, inspection)[group.Key]);
+                }
+                catch (ShippingLabelException singleError)
+                {
+                    throw new ShippingLabelException(singleError.Kind, $"ТТН {group.Key}: {singleError.Message}")
+                    { RetryAtUtc = singleError.RetryAtUtc };
+                }
+            }
+            return documents;
+        }
+
+        var bulkInspection = await inspector.InspectAsync(pdf, cancellationToken).ConfigureAwait(false);
+        return Map(connection.Id, shipments, pdf, bulkInspection);
+    }
+
     public static IReadOnlyDictionary<string, ShippingLabelDocument> Map(string connectionId,
         IReadOnlyList<ShipmentReference> shipments, byte[] pdf, LabelPdfInspection inspection)
     {

@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -31,6 +33,9 @@ internal static class NovaPoshtaBatchSourceTests
         ("STA direct NP bulk retains unknown places and rejects missing known expected places", () => MarketplaceViewModelTests.StaAsync(ExpectedPlaces)),
         ("STA direct NP cancelled bulk GET stops without list lookup fallback or partial packet", () => MarketplaceViewModelTests.StaAsync(Cancellation)),
         ("STA direct NP bulk HTTP429 and HTTP500 stop once without fallback or retry", () => MarketplaceViewModelTests.StaAsync(TransportFailure)),
+        ("STA direct NP empty HTML bulk response recovers nine selected TTNs through validated single PDFs", () => MarketplaceViewModelTests.StaAsync(EmptyBulkFallback)),
+        ("STA direct NP fallback rejects other empty or nonempty responses and stays within its request budget", () => MarketplaceViewModelTests.StaAsync(FallbackTriggerAndBound)),
+        ("STA direct NP fallback stops on an invalid or rate-limited single without preparing a partial packet", () => MarketplaceViewModelTests.StaAsync(FallbackStops)),
         ("STA direct NP rotated key downloads one fresh PDF without modifying manual evidence", () => MarketplaceViewModelTests.StaAsync(Rotation)),
         ("STA direct NP single read uses one GET typed TTN identity and never claims a verified Ref", () => MarketplaceViewModelTests.StaAsync(BindingAndRef))
     ];
@@ -40,6 +45,18 @@ internal static class NovaPoshtaBatchSourceTests
     private sealed class Handler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> response) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) => response(request, ct);
+    }
+    private sealed class UnknownLengthHtml : HttpContent
+    {
+        private readonly byte[] _bytes;
+        public UnknownLengthHtml(string text)
+        {
+            _bytes = Encoding.UTF8.GetBytes(text);
+            Headers.ContentType = new("text/html");
+        }
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            stream.WriteAsync(_bytes).AsTask();
+        protected override bool TryComputeLength(out long length) { length = 0; return false; }
     }
     private sealed class Store : IShippingSettingsStore
     {
@@ -69,7 +86,9 @@ internal static class NovaPoshtaBatchSourceTests
         public readonly NovaPoshtaReadOnlyClient Client;
         public readonly WindowsLabelPdfInspector Inspector = new();
         public readonly IShippingLabelSource Source;
+        public readonly HashSet<string> AllowedTtns = [FirstTtn, SecondTtn];
         public ResponseKind Result;
+        public Func<string[], HttpResponseMessage?>? OverrideMarking;
         public bool WrongFirstPdf;
         public CancellationTokenSource? CancelOnGet;
         public NovaPoshtaConnection Selected => Store.Config.NovaPoshtaConnections.Single(c => c.Id ==
@@ -118,13 +137,14 @@ internal static class NovaPoshtaBatchSourceTests
             Check(segments.Length == 10 && segments[0] == "orders" && segments[1] == "printMarking100x100" &&
                 segments[2] is "orders" or "orders[]", "Unexpected marking URL shape.");
             var numbers = segments[3].Split(',');
-            Check(numbers.Length > 0 && numbers.All(n => n is FirstTtn or SecondTtn) && numbers.Distinct().Count() == numbers.Length,
+            Check(numbers.Length > 0 && numbers.All(AllowedTtns.Contains) && numbers.Distinct().Count() == numbers.Length,
                 "Marking request contains an unselected or duplicate TTN.");
             Check(segments[2] == (numbers.Length > 1 ? "orders" : "orders[]"), "Single and bulk marking route forms were mixed.");
             var keyValue = segments[^1];
             Check(Store.Config.NovaPoshtaConnections.Any(c => c.ApiKey == keyValue), "PDF used an unconfigured key.");
             Requests.Add(new("GET", keyValue, numbers));
             if (CancelOnGet is not null) { CancelOnGet.Cancel(); ct.ThrowIfCancellationRequested(); }
+            if (OverrideMarking?.Invoke(numbers) is { } overrideResponse) return overrideResponse;
             if (Result == ResponseKind.RateLimited) return new((HttpStatusCode)429);
             if (Result == ResponseKind.ServerError) return new(HttpStatusCode.InternalServerError);
             var texts = _manualDiagnostic ? new[] { FirstTtn }
@@ -134,13 +154,23 @@ internal static class NovaPoshtaBatchSourceTests
                 : Result == ResponseKind.MissingSecond ? new[] { FirstTtn }
                 : Result == ResponseKind.MultiplePlaces ? new[] { SecondTtn, FirstTtn, SecondTtn }
                 : numbers.Reverse().ToArray();
-            var pdf = SyntheticShippingPdf.Create(widthMm: Result == ResponseKind.UnsupportedSize ? 110 : 100,
-                pages: texts.Length, pageTexts: texts);
-            return new(HttpStatusCode.OK) { Content = new ByteArrayContent(pdf) { Headers = { ContentType = new("application/pdf") } } };
+            return MarkingPdf(Result == ResponseKind.UnsupportedSize ? 110 : 100, texts);
         }
     }
     private static HttpResponseMessage List(params object[] rows) => new(HttpStatusCode.OK)
     { Content = new StringContent(JsonSerializer.Serialize(new { success = true, data = rows, errors = Array.Empty<string>() }), Encoding.UTF8, "application/json") };
+    private static HttpResponseMessage MarkingPdf(double widthMm, params string[] texts) => new(HttpStatusCode.OK)
+    {
+        Content = new ByteArrayContent(SyntheticShippingPdf.Create(widthMm: widthMm, pages: texts.Length, pageTexts: texts))
+        { Headers = { ContentType = new("application/pdf") } }
+    };
+    private static HttpResponseMessage EmptyBulkResponse() => new(HttpStatusCode.OK) { Content = new UnknownLengthHtml("") };
+    private static MarketplaceOrder[] Orders(int count, Fixture fixture) => Enumerable.Range(1, count).Select(index =>
+    {
+        var ttn = (20400000000000L + index).ToString(CultureInfo.InvariantCulture);
+        fixture.AllowedTtns.Add(ttn);
+        return Order("NP-fallback-" + index, ShippingCarrier.NovaPoshta, ttn);
+    }).ToArray();
     private static void NotApproved(NovaPoshtaVerifiedSession session, NovaPoshtaConnection connection, string ttn)
     {
         try { session.Require(connection, ttn); throw new Exception("Preparation silently recorded manual session approval."); }
@@ -277,6 +307,87 @@ internal static class NovaPoshtaBatchSourceTests
                 OneBulkGet(fixture);
             }
             NotApproved(fixture.Session, Connection, SecondTtn);
+        }
+    }
+    private static async Task EmptyBulkFallback()
+    {
+        using var fixture = new Fixture();
+        var orders = Orders(9, fixture);
+        orders[1] = orders[1] with { Shipments = [orders[1].Shipments[0] with { Places = 2 }] };
+        var duplicate = Order("NP-repeat-fallback", ShippingCarrier.NovaPoshta, FirstTtn);
+        fixture.OverrideMarking = numbers => numbers.Length > 1 ? EmptyBulkResponse()
+            : numbers[0] == SecondTtn ? MarkingPdf(100, SecondTtn, SecondTtn) : null;
+
+        var batch = await fixture.Prepare(default, [.. orders, duplicate]);
+        var expected = orders.Select(order => Shipment(order).TrackingNumber).ToArray();
+        Check(fixture.Requests.Count == 1 + expected.Length && fixture.Requests[0].Ttns.SequenceEqual(expected) &&
+            fixture.Requests.Skip(1).Select(request => request.Ttns.Single()).SequenceEqual(expected) &&
+            fixture.Requests.All(request => request.Method == "GET" && request.Key == Connection.ApiKey),
+            "Empty bulk response must issue each distinct selected TTN exactly once, in order, on the same account.");
+        Check(batch.Pages.Select(page => page.Shipment.TrackingNumber)
+            .SequenceEqual([FirstTtn, SecondTtn, SecondTtn, .. expected.Skip(2)]) &&
+            batch.Pages.Where(page => page.Shipment.TrackingNumber == SecondTtn).Select(page => page.PageNumber).SequenceEqual([1, 2]),
+            "The complete fallback packet lost places or duplicated a label.");
+        Check(fixture.Store.Saves == 0, "Fallback persisted operation-local documents.");
+    }
+    private static async Task FallbackTriggerAndBound()
+    {
+        foreach (var variant in new Func<HttpResponseMessage>[]
+        {
+            () => new(HttpStatusCode.OK) { Content = new UnknownLengthHtml("<html>synthetic failure</html>") },
+            () => new(HttpStatusCode.OK) { Content = new StringContent("", Encoding.UTF8, "application/pdf") },
+            () => new(HttpStatusCode.NoContent) { Content = new UnknownLengthHtml("") },
+            () =>
+            {
+                var response = EmptyBulkResponse();
+                response.Headers.RetryAfter = new(TimeSpan.FromSeconds(60));
+                return response;
+            }
+        })
+        {
+            using var fixture = new Fixture { OverrideMarking = _ => variant() };
+            await Failure(fixture.Prepare());
+            OneBulkGet(fixture);
+        }
+
+        using var emptySingle = new Fixture { OverrideMarking = _ => EmptyBulkResponse() };
+        await Failure(emptySingle.Prepare(default, FirstOrder));
+        Check(emptySingle.Requests.Count == 1 && emptySingle.Requests[0].Ttns.SequenceEqual([FirstTtn]),
+            "An empty single response was retried.");
+
+        using var oversized = new Fixture { OverrideMarking = _ => EmptyBulkResponse() };
+        var orders = Orders(11, oversized);
+        await Failure(oversized.Prepare(default, orders));
+        Check(oversized.Requests.Count == 1 && oversized.Requests[0].Ttns.Length == orders.Length,
+            "An oversized fallback still made single requests.");
+
+        using var twoAccounts = new Fixture { OverrideMarking = numbers => numbers.Length > 1 ? EmptyBulkResponse() : null };
+        var firstShop = Orders(11, twoAccounts);
+        var secondShop = firstShop.Skip(6).Select(order => order with
+        {
+            Key = order.Key with { ConnectionId = "synthetic-other-prom" }
+        });
+        await Failure(twoAccounts.Prepare(default, [.. firstShop.Take(6), .. secondShop]));
+        Check(twoAccounts.Requests.Count(request => request.Ttns.Length == 1) == 6 &&
+            twoAccounts.Requests.All(request => request.Ttns.Length > 1 || request.Key == Connection.ApiKey),
+            "A second account restarted the fallback request budget for the same preparation.");
+    }
+    private static async Task FallbackStops()
+    {
+        foreach (var limited in new[] { false, true })
+        {
+            using var fixture = new Fixture();
+            var orders = Orders(3, fixture);
+            fixture.OverrideMarking = numbers => numbers.Length > 1 ? EmptyBulkResponse()
+                : numbers[0] != SecondTtn ? null : limited
+                    ? new HttpResponseMessage((HttpStatusCode)429) : MarkingPdf(100, FirstTtn);
+            var error = await Failure(fixture.Prepare(default, orders));
+            Check(fixture.Requests.Count == 3 && fixture.Requests[0].Ttns.Length == 3 &&
+                fixture.Requests.Skip(1).Select(request => request.Ttns.Single()).SequenceEqual([FirstTtn, SecondTtn]),
+                "A failed single did not stop the rest of the fallback packet.");
+            Check(limited ? error.Kind == LabelFailureKind.Temporary && error.RetryAtUtc is not null &&
+                fixture.Client.GetRetryDelay(Connection) > TimeSpan.Zero : error.Kind == LabelFailureKind.InvalidDocument,
+                "Fallback failed to validate single identity or retain the shared cooldown.");
         }
     }
     private static async Task Rotation()
